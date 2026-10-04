@@ -49,7 +49,13 @@ output/               # generated letters (gitignored)
 
 ## Workflow for any change
 
-1. State the plan in one or two sentences before editing.
+1. **Propose a plan and wait for approval before changing anything.** This applies to every task, large or small. Read-only investigation (reading code, inspecting data, probing a public API) is fine first, to ground the plan. The plan walks through the reasoning, not just the steps:
+   - **Goal:** what the task is, in your own words, and how we'll know it's done.
+   - **Findings:** what the investigation showed that shapes the approach.
+   - **Approach:** the steps, and why this approach.
+   - **Alternatives:** what else was considered, and why it was rejected.
+   - **Risks and open questions:** anything that could go wrong, or that the owner should decide.
+   - **Scope:** the files expected to change, and what will deliberately *not* change.
 2. Add or update the test.
 3. Implement the smallest change that passes.
 4. `pytest -q`. Then `ruff check .` if available.
