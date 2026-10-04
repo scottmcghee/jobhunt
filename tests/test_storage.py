@@ -49,3 +49,22 @@ def test_miss_ledger_counts_resets_and_persists(tmp_path):
     assert m2.miss("greenhouse:x") == 3
     m2.clear("greenhouse:x")
     assert m2.miss("greenhouse:x") == 1
+
+
+def test_failed_save_leaves_previous_file_intact(tmp_path, monkeypatch):
+    p = tmp_path / "seen.json"
+    s = storage.SeenSet(p)
+    s.add("greenhouse:x:1")
+    s.save()
+    s.add("greenhouse:x:2")
+
+    def interrupted(src, dst):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(storage.os, "replace", interrupted)
+    try:
+        s.save()
+    except KeyboardInterrupt:
+        pass
+    reloaded = storage.SeenSet(p)
+    assert "greenhouse:x:1" in reloaded and len(reloaded) == 1

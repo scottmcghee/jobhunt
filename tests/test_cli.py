@@ -241,3 +241,67 @@ def test_fetch_smartrecruiters_fetches_bodies_for_title_matches_only(tmp_path, f
     assert detail.call_count == 1  # "Senior Software Engineer" and "Director of Sales" fail the title check
     jobs = storage.load_jobs(tmp_path / "data")
     assert [j.key for j in jobs] == ["smartrecruiters:ExampleCorp:744000000001001"]
+
+
+def _two_boards(tmp_path):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - name: Broken\n    ats: greenhouse\n    slug: broken\n\n"
+        "  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n"
+    )
+    return p
+
+
+def _failing_for(slug, error, monkeypatch):
+    real = cli.fetch_company
+
+    def fetch(company, client, **kwargs):
+        if company.slug == slug:
+            raise error
+        return real(company, client, **kwargs)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+
+
+@respx.mock
+def test_fetch_skips_a_board_that_fails_unexpectedly(tmp_path, fixture_json, monkeypatch, caplog):
+    respx.get("https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs").mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    _failing_for("broken", KeyError("externalPath"), monkeypatch)
+
+    assert _fetch(tmp_path, _two_boards(tmp_path)) == 0
+    assert "Broken: skipped, KeyError: 'externalPath'" in caplog.text
+    assert [j.title for j in storage.load_jobs(tmp_path / "data")] == ["Director of Platform Engineering"]
+    assert len(_misses(tmp_path).counts) == 0  # not a 404
+
+
+@respx.mock
+def test_fetch_interrupted_saves_what_it_has(tmp_path, fixture_json, monkeypatch, capsys):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n"
+        "  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n\n"
+        "  - name: Later\n    ats: greenhouse\n    slug: later\n"
+    )
+    respx.get("https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs").mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    _failing_for("later", KeyboardInterrupt(), monkeypatch)
+
+    assert _fetch(tmp_path, companies) == 130
+    assert "interrupted" in capsys.readouterr().err
+    jobs = storage.load_jobs(tmp_path / "data")
+    assert [j.title for j in jobs] == ["Director of Platform Engineering"]
+    assert jobs[0].key in storage.SeenSet(tmp_path / "data" / "seen.json")
+
+
+@respx.mock
+def test_fetch_interrupted_dry_run_writes_nothing(tmp_path, fixture_json, monkeypatch):
+    respx.get("https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs").mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    _failing_for("broken", KeyboardInterrupt(), monkeypatch)
+    assert _fetch(tmp_path, _two_boards(tmp_path), "--dry-run") == 130
+    assert not (tmp_path / "data").exists()

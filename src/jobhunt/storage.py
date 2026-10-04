@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,14 @@ from jobhunt.schema import Job, Letter, ScoredJob
 
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Replace ``path`` in one step: an interrupted save leaves the old file, not half a new one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
 
 
 class SeenSet:
@@ -39,8 +48,7 @@ class SeenSet:
         self._seen.setdefault(key, datetime.now(UTC).isoformat())
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._seen, indent=2, sort_keys=True))
+        _write_atomic(self.path, json.dumps(self._seen, indent=2, sort_keys=True))
 
 
 class MissLedger:
@@ -61,8 +69,7 @@ class MissLedger:
         self.counts.pop(key, None)
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.counts, indent=2, sort_keys=True))
+        _write_atomic(self.path, json.dumps(self.counts, indent=2, sort_keys=True))
 
 
 def append_jsonl(path: Path, record: dict) -> None:
