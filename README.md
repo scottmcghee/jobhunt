@@ -14,18 +14,20 @@ companies.yaml ──► fetch ──► filter ──► score ──► letter
 ```
 
 1. **Fetch.** Pulls open roles from the JSON APIs of five applicant-tracking systems — Greenhouse, Lever, Ashby, SmartRecruiters, and Workday — and normalizes them into one `Job` model. No scraping, no auth, no rate-limit games: Greenhouse, Lever, Ashby, and SmartRecruiters publish these endpoints for exactly this, and Workday's are the ones its own careers pages call. Workday and SmartRecruiters list postings without descriptions, so a description is fetched only for postings whose title passes the filter.
-2. **Filter.** Deterministic rules from `config/preferences.yaml`: title must indicate Director+ scope, body must mention a target domain, location must be Puget Sound or US-remote. Every rejection carries a reason. This stage is pure and fully unit-tested, and it keeps the expensive stage cheap.
+2. **Filter.** Deterministic rules from `config/preferences.yaml`: the title must contain one of your target words and none of your excluded ones, the posting must mention one of your domain keywords, and the location must be one you accept (or remote, if you allow it) and not one you reject. Every rejection carries a reason. This stage is pure and fully unit-tested, and it keeps the expensive stage cheap.
 3. **Score.** Claude reads the posting and `config/profile.md` and returns 1–10 with a rationale, strengths, gaps, and two suggested proof modules. The rubric is explicit, treats the candidate's *known gaps* as facts, and caps the score at 5 when a posting's core requirement is one of them. The rubric is pinned by a golden test.
 4. **Letter.** For roles at or above the threshold, the tool assembles a letter from a **Cover Letter Kit**: a fixed opening, two pre-written proof paragraphs chosen to match the posting, and a fixed closing. The model writes exactly two sentences — one proving the candidate read something specific about the company, one on fit — and nothing else. Structure is enforced in code, not in the prompt.
 
 ### Why the model only writes two sentences
 
-Letting an LLM write a whole cover letter produces fluent, forgettable prose and, worse, drift: a "$500K" quietly becomes "over half a million," a "36-person org" becomes "nearly 40." Every factual claim in a letter from this tool was written by a human, once, in `config/kit/`. The model's job is selection and the two sentences that require reading the posting. That is the part a template can't do and the part that gets letters read.
+Letting an LLM write a whole cover letter produces fluent, forgettable prose and, worse, drift: a "$4M cloud budget" quietly becomes "about $4 million," a "28-person org" becomes "nearly 30." Every factual claim in a letter from this tool was written by a human, once, in `config/kit/`. The model's job is selection and the two sentences that require reading the posting. That is the part a template can't do and the part that gets letters read.
+
+Really, this should just be a starting point for you to get started on a letter. Tune the text to your voice!
 
 ## Install
 
 ```bash
-git clone <this repo> && cd jobhunt
+git clone https://github.com/scottmcghee/jobhunt.git && cd jobhunt
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp -R config.example config      # your own copy; config/ is gitignored
@@ -64,11 +66,21 @@ Everything personal lives in `config/`, which is gitignored and never committed.
 | File | Purpose |
 |---|---|
 | `config/companies.yaml` | Company → ATS type + board slug. Comments explain how to find a slug. |
-| `config/preferences.yaml` | The hard filters and the letter threshold. |
+| `config/preferences.yaml` | The hard filters and the letter threshold. The template's lists are tuned for the fictional candidate; replace every one. |
 | `config/profile.md` | The candidate narrative the scorer reads. Facts here are fixed. |
 | `config/kit/` | Opening, closing, and proof modules with `use_when` keywords. |
 
 To adapt this for yourself: rewrite `profile.md` and the Kit in your own voice, edit the filters, and point `companies.yaml` at the boards you care about. Nothing in `src/` is specific to one candidate.
+
+### Finding boards
+
+The comments in `companies.yaml` show how to read a board slug off a careers page URL. To collect many at once, give the harvester any text file containing board URLs, such as lines grepped from [Common Crawl](https://index.commoncrawl.org/) index files:
+
+```bash
+python -m jobhunt.slugs urls.txt --companies config/companies.yaml --check
+```
+
+It writes the boards it finds to `data/companies.generated.yaml`, ready to review and paste into `companies.yaml`, leaving out any already listed there. `--check` fetches the first page of each new board and drops those with no open postings; without it, the harvester makes no network calls.
 
 ## Develop
 
