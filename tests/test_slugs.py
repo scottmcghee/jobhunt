@@ -27,6 +27,10 @@ from jobhunt.schema import Company
         ("https://jobs.lever.co/Timely/abc-123/apply", ("lever", "timely")),
         ("https://jobs.ashbyhq.com/counterpart/abc-123", ("ashby", "counterpart")),
         ("https://jobs.ashbyhq.com/Some%20Co", ("ashby", "Some Co")),
+        ("https://jobs.smartrecruiters.com/AbbVie/3743990009679496-manager?trid=x", ("smartrecruiters", "AbbVie")),
+        ("https://careers.smartrecruiters.com/AveryDennison", ("smartrecruiters", "AveryDennison")),
+        ("https://careers.smartrecruiters.com/BoydGaming/main-street-station", ("smartrecruiters", "BoydGaming")),
+        ("https://careers.smartrecruiters.com/Evooq?location=Zurich", ("smartrecruiters", "Evooq")),
         # not boards
         ("https://www.greenhouse.io/blog/5-culture-fit-questions", None),
         ("https://app7.greenhouse.io/ai_opt_out_request/job_post/4823689007/ai_opt_out", None),
@@ -36,6 +40,12 @@ from jobhunt.schema import Company
         ("https://job-boards.anz.greenhouse.io/robots.txt", None),
         ("https://boards.greenhouse.io/embed/job_board", None),
         ("https://boards-api.greenhouse.io/v1/boards/", None),
+        ("https://jobs.smartrecruiters.com/", None),
+        ("https://jobs.smartrecruiters.com/robots.txt", None),
+        ("https://jobs.smartrecruiters.com/oneclick-ui/company/X/publication/1", None),
+        ("https://jobs.smartrecruiters.com/my-applications", None),
+        ("https://careers.smartrecruiters.com/external-referrals", None),
+        ("https://www.smartrecruiters.com/blog", None),
         ("http://[bad", None),
     ],
 )
@@ -121,6 +131,11 @@ def test_discover_skips_known_companies():
 def test_discover_dedupes_ashby_case_insensitively():
     urls = ["https://jobs.ashbyhq.com/Acme/1", "https://jobs.ashbyhq.com/acme/2"]
     assert [c.slug for c in slugs.discover(urls)] == ["Acme"]
+
+
+def test_discover_dedupes_smartrecruiters_case_insensitively():
+    urls = ["https://jobs.smartrecruiters.com/ServiceNow/1-a", "https://careers.smartrecruiters.com/servicenow"]
+    assert [c.slug for c in slugs.discover(urls)] == ["ServiceNow"]
 
 
 def test_render_matches_companies_yaml_style():

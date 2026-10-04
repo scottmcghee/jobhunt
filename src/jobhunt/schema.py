@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-ATSName = Literal["greenhouse", "lever", "ashby", "workday"]
+ATSName = Literal["greenhouse", "lever", "ashby", "workday", "smartrecruiters"]
 
 _WORKDAY_DATACENTER = re.compile(r"wd\d+")
 

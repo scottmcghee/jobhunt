@@ -1,0 +1,175 @@
+{
+  "offset": 0,
+  "limit": 100,
+  "totalFound": 3,
+  "content": [
+    {
+      "id": "744000000001001",
+      "name": "Director of Platform Engineering",
+      "uuid": "00000000-0000-0000-0000-000000001001",
+      "jobAdId": "10000000-0000-0000-0000-000000001001",
+      "defaultJobAd": false,
+      "refNumber": "REF1001",
+      "company": {
+        "identifier": "ExampleCorp",
+        "name": "ExampleCorp"
+      },
+      "releasedDate": "2026-10-02T17:04:11.000Z",
+      "location": {
+        "city": "Seattle",
+        "region": "Washington",
+        "country": "us",
+        "remote": true,
+        "hybrid": false,
+        "fullLocation": "Seattle, Washington, United States"
+      },
+      "industry": {
+        "id": "it_and_services",
+        "label": "Information Technology And Services"
+      },
+      "department": {
+        "id": "1",
+        "label": "Engineering"
+      },
+      "function": {
+        "id": "engineering",
+        "label": "Engineering"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "not_applicable",
+        "label": "Not Applicable"
+      },
+      "customField": [
+        {
+          "fieldId": "COUNTRY",
+          "fieldLabel": "Country/Region",
+          "valueId": "us",
+          "valueLabel": "United States"
+        }
+      ],
+      "visibility": "PUBLIC",
+      "ref": "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings/744000000001001",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    },
+    {
+      "id": "744000000001002",
+      "name": "Senior Software Engineer",
+      "uuid": "00000000-0000-0000-0000-000000001002",
+      "jobAdId": "10000000-0000-0000-0000-000000001002",
+      "defaultJobAd": false,
+      "refNumber": "REF1002",
+      "company": {
+        "identifier": "ExampleCorp",
+        "name": "ExampleCorp"
+      },
+      "releasedDate": "2026-10-01T09:30:00.000Z",
+      "location": {
+        "city": "Seattle",
+        "region": "Washington",
+        "country": "us",
+        "remote": false,
+        "hybrid": true,
+        "fullLocation": "Seattle, Washington, United States"
+      },
+      "industry": {
+        "id": "it_and_services",
+        "label": "Information Technology And Services"
+      },
+      "department": {
+        "id": "1",
+        "label": "Engineering"
+      },
+      "function": {
+        "id": "engineering",
+        "label": "Engineering"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "not_applicable",
+        "label": "Not Applicable"
+      },
+      "customField": [
+        {
+          "fieldId": "COUNTRY",
+          "fieldLabel": "Country/Region",
+          "valueId": "us",
+          "valueLabel": "United States"
+        }
+      ],
+      "visibility": "PUBLIC",
+      "ref": "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings/744000000001002",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    },
+    {
+      "id": "744000000001003",
+      "name": "Director of Sales",
+      "uuid": "00000000-0000-0000-0000-000000001003",
+      "jobAdId": "10000000-0000-0000-0000-000000001003",
+      "defaultJobAd": false,
+      "refNumber": "REF1003",
+      "company": {
+        "identifier": "ExampleCorp",
+        "name": "ExampleCorp"
+      },
+      "releasedDate": "2026-09-29T15:12:45.000Z",
+      "location": {
+        "city": "Austin",
+        "region": "Texas",
+        "country": "us",
+        "remote": false,
+        "hybrid": false,
+        "fullLocation": "Austin, Texas, United States"
+      },
+      "industry": {
+        "id": "it_and_services",
+        "label": "Information Technology And Services"
+      },
+      "department": {
+        "id": "1",
+        "label": "Sales"
+      },
+      "function": {
+        "id": "sales",
+        "label": "Sales"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "not_applicable",
+        "label": "Not Applicable"
+      },
+      "customField": [
+        {
+          "fieldId": "COUNTRY",
+          "fieldLabel": "Country/Region",
+          "valueId": "us",
+          "valueLabel": "United States"
+        }
+      ],
+      "visibility": "PUBLIC",
+      "ref": "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings/744000000001003",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    }
+  ]
+}
