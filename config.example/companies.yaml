@@ -13,6 +13,10 @@
 #               slug is tenant/site, plus a datacenter line, e.g. for adobe.wd5.myworkdayjobs.com/external_experienced:
 #                 slug: adobe/external_experienced
 #                 datacenter: wd5
+#   SmartRecruiters: jobs.smartrecruiters.com/<identifier>/...  or  careers.smartrecruiters.com/<identifier>
+#               API: https://api.smartrecruiters.com/v1/companies/<identifier>/postings
+#               An unknown identifier returns no postings rather than a 404, so it is never removed
+#               automatically; fetch warns about any SmartRecruiters board with no postings.
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help` (harvests them from Common Crawl).
 #
@@ -64,4 +68,9 @@ companies:
     ats: workday
     slug: adobe/external_experienced
     datacenter: wd5
+    tags: [saas]
+
+  - name: ServiceNow
+    ats: smartrecruiters
+    slug: ServiceNow
     tags: [saas]

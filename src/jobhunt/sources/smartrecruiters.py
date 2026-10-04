@@ -1,0 +1,108 @@
+"""SmartRecruiters Posting API.
+
+Docs: https://developers.smartrecruiters.com/docs/posting-api
+Endpoints (public, no auth; the company identifier is case-insensitive):
+
+    GET https://api.smartrecruiters.com/v1/companies/{identifier}/postings?limit=100&offset=N
+    GET https://api.smartrecruiters.com/v1/companies/{identifier}/postings/{id}
+
+The listing has no descriptions and pages 100 at a time, so a description costs one request per
+posting. ``fetch`` takes a ``wants_body`` check and pays that cost only for postings that pass it.
+
+An unknown identifier is not a 404: it returns 200 with no postings, the same as a company with no
+open roles. So dead boards here are never pruned automatically; ``fetch`` warns instead.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+
+import httpx
+
+from jobhunt.schema import Company, Job
+from jobhunt.sources._html import to_text
+
+log = logging.getLogger(__name__)
+
+BASE = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+PAGE_SIZE = 100  # the API clamps anything larger
+MAX_POSTINGS = 10000  # runaway guard
+SECTIONS = ("companyDescription", "jobDescription", "qualifications", "additionalInformation")
+
+
+def _is_remote(location: dict) -> bool | None:
+    if location.get("remote"):
+        return True
+    if location.get("hybrid"):
+        return False
+    # remote and hybrid both default to false, so on-site and unset look the same
+    return True if "remote" in (location.get("fullLocation") or "").lower() else None
+
+
+def _body(detail: dict) -> str:
+    sections = (detail.get("jobAd") or {}).get("sections") or {}
+    parts = [to_text((sections.get(name) or {}).get("text")) for name in SECTIONS]
+    return "\n\n".join(p for p in parts if p)
+
+
+def normalize(company: Company, posting: dict, detail: dict | None = None) -> Job:
+    """Build a Job from a listing entry, plus its detail record when we fetched one."""
+    location = posting.get("location") or {}
+    return Job(
+        source="smartrecruiters",
+        company=company.name,
+        company_slug=company.slug,
+        external_id=str(posting["id"]),
+        title=posting.get("name", ""),
+        location=location.get("fullLocation") or "",
+        remote=_is_remote(location),
+        url=f"https://jobs.smartrecruiters.com/{company.slug}/{posting['id']}",
+        body=_body(detail) if detail else "",
+        posted_at=posting.get("releasedDate"),
+    )
+
+
+def _list(company: Company, client: httpx.Client) -> list[dict]:
+    url = BASE.format(slug=company.slug)
+    postings: list[dict] = []
+    offset = 0
+    while True:
+        resp = client.get(url, params={"limit": PAGE_SIZE, "offset": offset})
+        resp.raise_for_status()
+        data = resp.json()
+        page = data.get("content") or []
+        total = min(int(data.get("totalFound") or 0), MAX_POSTINGS)
+        postings += page
+        offset += PAGE_SIZE
+        if not page or offset >= total:
+            return postings
+
+
+def _detail(company: Company, client: httpx.Client, posting_id: str) -> dict | None:
+    try:
+        resp = client.get(f"{BASE.format(slug=company.slug)}/{posting_id}")
+        resp.raise_for_status()
+        return resp.json()
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("smartrecruiters %s: no description for %s (%s)", company.slug, posting_id, e)
+        return None
+
+
+def fetch(
+    company: Company,
+    client: httpx.Client,
+    wants_body: Callable[[Job], bool] = lambda job: True,
+) -> list[Job]:
+    jobs: dict[str, Job] = {}
+    for posting in _list(company, client):
+        job = normalize(company, posting)
+        if job.external_id in jobs:  # postings can shift between pages
+            continue
+        if wants_body(job) and (detail := _detail(company, client, job.external_id)):
+            job = normalize(company, posting, detail)
+        jobs[job.external_id] = job
+    if not jobs:
+        log.warning("smartrecruiters %s: 0 postings — check the identifier", company.slug)
+    log.info("smartrecruiters %s: %d jobs", company.slug, len(jobs))
+    return list(jobs.values())

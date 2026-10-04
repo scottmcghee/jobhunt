@@ -225,3 +225,19 @@ def test_fetch_workday_fetches_bodies_for_title_matches_only(tmp_path, fixture_j
     assert detail.call_count == 1  # "Senior Software Engineer" and "Director of Sales" fail the title check
     jobs = storage.load_jobs(tmp_path / "data")
     assert [j.key for j in jobs] == ["workday:examplecorp/External:Director-of-Platform-Engineering_R1001"]
+
+
+@respx.mock
+def test_fetch_smartrecruiters_fetches_bodies_for_title_matches_only(tmp_path, fixture_json):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: smartrecruiters\n    slug: ExampleCorp\n")
+    base = "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings"
+    respx.get(base).mock(return_value=httpx.Response(200, json=fixture_json("smartrecruiters_postings.json")))
+    detail = respx.get(base + "/744000000001001").mock(
+        return_value=httpx.Response(200, json=fixture_json("smartrecruiters_posting.json"))
+    )
+
+    assert _fetch(tmp_path, companies) == 0
+    assert detail.call_count == 1  # "Senior Software Engineer" and "Director of Sales" fail the title check
+    jobs = storage.load_jobs(tmp_path / "data")
+    assert [j.key for j in jobs] == ["smartrecruiters:ExampleCorp:744000000001001"]

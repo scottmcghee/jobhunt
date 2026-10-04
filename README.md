@@ -13,7 +13,7 @@ companies.yaml ──► fetch ──► filter ──► score ──► letter
                  seen.json  reasons    scores.jsonl  output/*.md
 ```
 
-1. **Fetch.** Pulls open roles from the JSON APIs of four applicant-tracking systems — Greenhouse, Lever, Ashby, and Workday — and normalizes them into one `Job` model. No scraping, no auth, no rate-limit games: Greenhouse, Lever, and Ashby publish these endpoints for exactly this, and Workday's are the ones its own careers pages call. Workday lists postings without descriptions, so a description is fetched only for postings whose title passes the filter.
+1. **Fetch.** Pulls open roles from the JSON APIs of five applicant-tracking systems — Greenhouse, Lever, Ashby, SmartRecruiters, and Workday — and normalizes them into one `Job` model. No scraping, no auth, no rate-limit games: Greenhouse, Lever, Ashby, and SmartRecruiters publish these endpoints for exactly this, and Workday's are the ones its own careers pages call. Workday and SmartRecruiters list postings without descriptions, so a description is fetched only for postings whose title passes the filter.
 2. **Filter.** Deterministic rules from `config/preferences.yaml`: title must indicate Director+ scope, body must mention a target domain, location must be Puget Sound or US-remote. Every rejection carries a reason. This stage is pure and fully unit-tested, and it keeps the expensive stage cheap.
 3. **Score.** Claude reads the posting and `config/profile.md` and returns 1–10 with a rationale, strengths, gaps, and two suggested proof modules. The rubric is explicit, treats the candidate's *known gaps* as facts, and caps the score at 5 when a posting's core requirement is one of them. The rubric is pinned by a golden test.
 4. **Letter.** For roles at or above the threshold, the tool assembles a letter from a **Cover Letter Kit**: a fixed opening, two pre-written proof paragraphs chosen to match the posting, and a fixed closing. The model writes exactly two sentences — one proving the candidate read something specific about the company, one on fit — and nothing else. Structure is enforced in code, not in the prompt.
@@ -55,7 +55,7 @@ jobhunt letter                   # write letters for the shortlist into output/
 jobhunt run                      # all of the above
 ```
 
-Re-running `fetch` is idempotent; `data/seen.json` is the ledger. A board that returns HTTP 404 on three fetches in a row is removed from `config/companies.yaml` (counts live in `data/misses.json`; any successful fetch resets them).
+Re-running `fetch` is idempotent; `data/seen.json` is the ledger. A board that returns HTTP 404 on three fetches in a row is removed from `config/companies.yaml` (counts live in `data/misses.json`; any successful fetch resets them). SmartRecruiters answers an unknown company with an empty list rather than a 404, so those boards are never removed; `fetch` logs a warning for any SmartRecruiters board with no postings instead.
 
 ## Configure
 

@@ -1,0 +1,83 @@
+{
+  "id": "744000000001001",
+  "name": "Director of Platform Engineering",
+  "uuid": "00000000-0000-0000-0000-000000001001",
+  "jobId": "20000000-0000-0000-0000-000000001001",
+  "jobAdId": "10000000-0000-0000-0000-000000001001",
+  "defaultJobAd": false,
+  "refNumber": "REF1001",
+  "company": {
+    "identifier": "ExampleCorp",
+    "name": "ExampleCorp"
+  },
+  "location": {
+    "city": "Seattle",
+    "region": "Washington",
+    "country": "us",
+    "remote": true,
+    "hybrid": false,
+    "fullLocation": "Seattle, Washington, United States"
+  },
+  "customField": [
+    {
+      "fieldId": "COUNTRY",
+      "fieldLabel": "Country/Region",
+      "valueId": "us",
+      "valueLabel": "United States"
+    }
+  ],
+  "releasedDate": "2026-10-02T17:04:11.000Z",
+  "creator": {
+    "name": "Alex Recruiter"
+  },
+  "postingUrl": "https://jobs.smartrecruiters.com/ExampleCorp/744000000001001-director-of-platform-engineering",
+  "applyUrl": "https://jobs.smartrecruiters.com/ExampleCorp/744000000001001-director-of-platform-engineering?oga=true",
+  "referralUrl": "https://jobs.smartrecruiters.com/ExampleCorp/744000000001001-director-of-platform-engineering?trid=x",
+  "jobAd": {
+    "sections": {
+      "companyDescription": {
+        "title": "Company Description",
+        "text": "<p>ExampleCorp builds workflow software for regulated industries.</p>"
+      },
+      "jobDescription": {
+        "title": "Job Description",
+        "text": "<p><b>About the role</b></p><p>Lead our infrastructure &amp; developer experience teams.</p><ul><li>Own AWS cost</li><li>Grow the SRE practice</li></ul>"
+      },
+      "qualifications": {
+        "title": "Qualifications",
+        "text": "<ul><li>10+ years leading platform teams</li></ul>"
+      },
+      "additionalInformation": {
+        "title": "Additional Information",
+        "text": "<p>This role is remote-eligible within the US.</p>"
+      }
+    }
+  },
+  "active": true,
+  "visibility": "PUBLIC",
+  "industry": {
+    "id": "it_and_services",
+    "label": "Information Technology And Services"
+  },
+  "function": {
+    "id": "engineering",
+    "label": "Engineering"
+  },
+  "department": {
+    "id": "1",
+    "label": "Engineering"
+  },
+  "experienceLevel": {
+    "id": "not_applicable",
+    "label": "Not Applicable"
+  },
+  "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+  },
+  "language": {
+    "code": "en",
+    "label": "English",
+    "labelNative": "English (US)"
+  }
+}

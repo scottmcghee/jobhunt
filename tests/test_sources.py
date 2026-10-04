@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from jobhunt.sources import ashby, fetch_company, greenhouse, lever, workday
+from jobhunt.sources import ashby, fetch_company, greenhouse, lever, smartrecruiters, workday
 from jobhunt.sources._html import to_text
 
 
@@ -182,4 +182,93 @@ def test_fetch_company_passes_wants_body_to_workday(workday_company, fixture_jso
         fetch_company(workday_company, client, wants_body=lambda job: False)
         assert detail.call_count == 0
         fetch_company(workday_company, client)  # default: every posting gets its description
+        assert detail.call_count == 3
+
+
+SR = "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings"
+SR_DETAIL = SR + "/744000000001001"
+
+
+@respx.mock
+def test_smartrecruiters_lists_everything_but_fetches_bodies_only_when_wanted(smartrecruiters_company, fixture_json):
+    listing = respx.get(SR).mock(return_value=httpx.Response(200, json=fixture_json("smartrecruiters_postings.json")))
+    detail = respx.get(SR_DETAIL).mock(return_value=httpx.Response(200, json=fixture_json("smartrecruiters_posting.json")))
+    with httpx.Client() as client:
+        jobs = smartrecruiters.fetch(smartrecruiters_company, client, _wants_directors)
+
+    assert [j.title for j in jobs] == ["Director of Platform Engineering", "Senior Software Engineer", "Director of Sales"]
+    assert dict(listing.calls.last.request.url.params) == {"limit": "100", "offset": "0"}
+    assert detail.call_count == 1  # only the wanted posting
+
+    j = jobs[0]
+    assert j.source == "smartrecruiters"
+    assert j.company == "ExampleCorp" and j.company_slug == "ExampleCorp"
+    assert j.external_id == "744000000001001"
+    assert j.key == "smartrecruiters:ExampleCorp:744000000001001"
+    assert j.url == "https://jobs.smartrecruiters.com/ExampleCorp/744000000001001"
+    assert j.location == "Seattle, Washington, United States"
+    assert j.remote is True
+    assert j.posted_at == "2026-10-02T17:04:11.000Z"
+    assert "infrastructure & developer experience" in j.body and "<" not in j.body
+    assert "workflow software for regulated industries" in j.body  # company description kept
+    assert "10+ years leading platform teams" in j.body and "remote-eligible" in j.body
+
+    assert jobs[1].body == "" and jobs[1].remote is False  # hybrid
+    assert jobs[2].remote is None  # neither flag set: on-site and unset look the same
+
+
+def test_smartrecruiters_remote_from_location_text(smartrecruiters_company):
+    posting = {
+        "id": "1",
+        "name": "VP Engineering",
+        "location": {"remote": False, "hybrid": False, "fullLocation": "Remote, United States"},
+    }
+    assert smartrecruiters.normalize(smartrecruiters_company, posting).remote is True
+
+
+@respx.mock
+def test_smartrecruiters_paginates_using_total_found(smartrecruiters_company):
+    def page(request):
+        offset = int(request.url.params["offset"])
+        n = max(0, min(100, 250 - offset))
+        postings = [{"id": str(offset + i), "name": f"Job {offset + i}", "location": {}} for i in range(n)]
+        return httpx.Response(200, json={"offset": offset, "limit": 100, "totalFound": 250, "content": postings})
+
+    listing = respx.get(SR).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = smartrecruiters.fetch(smartrecruiters_company, client, lambda job: False)
+
+    assert len(jobs) == 250 and len({j.external_id for j in jobs}) == 250
+    assert listing.call_count == 3
+
+
+@respx.mock
+def test_smartrecruiters_empty_board_warns(smartrecruiters_company, caplog):
+    # an unknown identifier is a 200 with no postings, not a 404
+    respx.get(SR).mock(return_value=httpx.Response(200, json={"offset": 0, "limit": 100, "totalFound": 0, "content": []}))
+    with httpx.Client() as client:
+        assert smartrecruiters.fetch(smartrecruiters_company, client) == []
+    assert "check the identifier" in caplog.text
+
+
+@respx.mock
+def test_smartrecruiters_failed_detail_keeps_job_without_body(smartrecruiters_company, fixture_json, caplog):
+    respx.get(SR).mock(return_value=httpx.Response(200, json=fixture_json("smartrecruiters_postings.json")))
+    respx.get(SR_DETAIL).mock(return_value=httpx.Response(404))
+    with httpx.Client() as client:
+        jobs = smartrecruiters.fetch(smartrecruiters_company, client, _wants_directors)
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert "744000000001001" in caplog.text
+
+
+@respx.mock
+def test_fetch_company_passes_wants_body_to_smartrecruiters(smartrecruiters_company, fixture_json):
+    respx.get(SR).mock(return_value=httpx.Response(200, json=fixture_json("smartrecruiters_postings.json")))
+    detail = respx.get(url__startswith=SR + "/").mock(
+        return_value=httpx.Response(200, json=fixture_json("smartrecruiters_posting.json"))
+    )
+    with httpx.Client() as client:
+        fetch_company(smartrecruiters_company, client, wants_body=lambda job: False)
+        assert detail.call_count == 0
+        fetch_company(smartrecruiters_company, client)  # default: every posting gets its description
         assert detail.call_count == 3

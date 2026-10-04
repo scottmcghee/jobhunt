@@ -1,9 +1,9 @@
 """Find job postings that fit a candidate profile, and draft cover letters for the best ones.
 
 Pulls open roles from the company job boards in config/companies.yaml (Greenhouse, Lever,
-Ashby, Workday), drops those that fail the hard filters in config/preferences.yaml, has Claude
-score the rest 1-10 against config/profile.md, and assembles cover letters for the top scorers
-from the pre-written modules in config/kit/.
+Ashby, Workday, SmartRecruiters), drops those that fail the hard filters in
+config/preferences.yaml, has Claude score the rest 1-10 against config/profile.md, and assembles
+cover letters for the top scorers from the pre-written modules in config/kit/.
 
     jobhunt fetch   [--company NAME] [--dry-run]     pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude

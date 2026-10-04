@@ -54,6 +54,11 @@ def workday_company() -> Company:
 
 
 @pytest.fixture
+def smartrecruiters_company() -> Company:
+    return Company(name="ExampleCorp", ats="smartrecruiters", slug="ExampleCorp")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

@@ -30,7 +30,13 @@ DEFAULT_OUT = Path("data/companies.generated.yaml")
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
 _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
 _GREENHOUSE_API = "boards-api.greenhouse.io"
-_BOARD_HOSTS: dict[str, ATSName] = {"jobs.lever.co": "lever", "jobs.ashbyhq.com": "ashby"}
+_BOARD_HOSTS: dict[str, ATSName] = {
+    "jobs.lever.co": "lever",
+    "jobs.ashbyhq.com": "ashby",
+    "jobs.smartrecruiters.com": "smartrecruiters",
+    "careers.smartrecruiters.com": "smartrecruiters",
+}
+_KEEPS_CASE: set[ATSName] = {"ashby", "smartrecruiters"}  # the others are case-insensitive
 
 # <tenant>.<datacenter>.myworkdayjobs.com/[<language>/]<site>/...
 _WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com")
@@ -39,6 +45,7 @@ _LANGUAGE = re.compile(r"[a-z]{2}(-[a-z]{2})?", re.I)  # en-US, en-us, es
 _SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]*")
 _NOT_SLUGS = {"embed", "robots.txt", "llms.txt", "favicon.ico", "sitemap.xml"}
 _NOT_WORKDAY_SITES = {"wday", "job", "details", "login"}
+_NOT_SMARTRECRUITERS = {"oneclick-ui", "my-applications", "external-referrals", "xhtmlized"}
 
 
 def _greenhouse_slug(host: str, segments: list[str], query: str) -> str:
@@ -82,9 +89,10 @@ def board_from_url(url: str) -> Company | None:
     else:
         return None
 
-    if ats != "ashby":  # Ashby board names keep their case; the others are case-insensitive
+    if ats not in _KEEPS_CASE:
         slug = slug.lower()
-    if not _SLUG.fullmatch(slug) or slug.lower() in _NOT_SLUGS:
+    not_slugs = _NOT_SLUGS | _NOT_SMARTRECRUITERS if ats == "smartrecruiters" else _NOT_SLUGS
+    if not _SLUG.fullmatch(slug) or slug.lower() in not_slugs:
         return None
     return Company(name=slug, ats=ats, slug=slug)
 

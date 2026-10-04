@@ -72,7 +72,10 @@ Agreed future work, in rough priority order. Each item still follows the workflo
      - A board is `slug: tenant/site` plus `datacenter: wdN`, the only optional `Company` field. Tenant and site together are the board's identity (one tenant often has several sites), so keys, 404 pruning, and duplicate checks work unchanged.
      - The listing has no descriptions, and each description costs one request. `fetch` takes a `wants_body` check; the CLI passes "title passes the title filter", so only those postings pay.
      - `jobhunt.slugs` harvests `<tenant>.<wdN>.myworkdayjobs.com/[<lang>/]<site>` URLs.
-   - **SmartRecruiters** *(next)*. It has a public postings API keyed by company identifier.
+   - **SmartRecruiters** *(done)*. `sources/smartrecruiters.py` uses the public Posting API; a board is `slug: <company identifier>`.
+     - Like Workday, the listing has no descriptions, so `fetch` takes the same `wants_body` check.
+     - An unknown identifier returns 200 with no postings, not a 404, so 404 pruning never fires. `fetch` warns on an empty board instead of guessing that it is dead.
+     - `jobhunt.slugs` harvests `jobs.smartrecruiters.com/<identifier>` and `careers.smartrecruiters.com/<identifier>` URLs.
 3. **Companies with no ATS (e.g., Apple).** These are case-by-case and may need crawling HTML rather than calling an API, so treat this as a separate flow, not another `sources/` adapter.
    - **Investigate first.** For each company, check whether its careers site is backed by a JSON endpoint before writing a crawler.
    - **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.
