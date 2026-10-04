@@ -1,0 +1,40 @@
+{
+  "jobPostingInfo": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "title": "Director of Platform Engineering",
+    "jobDescription": "<p><b>About the role</b></p><p>Lead our infrastructure &amp; developer experience teams.</p><ul><li>Own AWS cost</li><li>Grow the SRE practice</li></ul>",
+    "location": "US-WA-Seattle",
+    "additionalLocations": [
+      "US-OR-Remote Location"
+    ],
+    "postedOn": "Posted Yesterday",
+    "startDate": "2026-10-02",
+    "timeType": "Full time",
+    "jobReqId": "R1001",
+    "jobPostingId": "Director-of-Platform-Engineering_R1001",
+    "jobPostingSiteId": "External",
+    "country": {
+      "descriptor": "United States of America",
+      "id": "bc33aa3152ec42d4995f4791a106ed09"
+    },
+    "canApply": true,
+    "posted": true,
+    "includeResumeParsing": true,
+    "jobRequisitionLocation": {
+      "descriptor": "US-WA-Seattle",
+      "country": {
+        "descriptor": "United States of America",
+        "id": "bc33aa3152ec42d4995f4791a106ed09",
+        "alpha2Code": "US"
+      }
+    },
+    "externalUrl": "https://examplecorp.wd5.myworkdayjobs.com/External/job/Seattle-WA/Director-of-Platform-Engineering_R1001",
+    "questionnaireId": "fedcba9876543210fedcba9876543210"
+  },
+  "hiringOrganization": {
+    "name": "EX00 ExampleCorp Inc",
+    "url": ""
+  },
+  "similarJobs": [],
+  "userAuthenticated": false
+}

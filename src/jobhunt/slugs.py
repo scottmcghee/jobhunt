@@ -32,8 +32,13 @@ _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
 _GREENHOUSE_API = "boards-api.greenhouse.io"
 _BOARD_HOSTS: dict[str, ATSName] = {"jobs.lever.co": "lever", "jobs.ashbyhq.com": "ashby"}
 
+# <tenant>.<datacenter>.myworkdayjobs.com/[<language>/]<site>/...
+_WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com")
+_LANGUAGE = re.compile(r"[a-z]{2}(-[a-z]{2})?", re.I)  # en-US, en-us, es
+
 _SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]*")
-_NOT_SLUGS = {"embed", "robots.txt", "favicon.ico", "sitemap.xml"}
+_NOT_SLUGS = {"embed", "robots.txt", "llms.txt", "favicon.ico", "sitemap.xml"}
+_NOT_WORKDAY_SITES = {"wday", "job", "details", "login"}
 
 
 def _greenhouse_slug(host: str, segments: list[str], query: str) -> str:
@@ -44,14 +49,30 @@ def _greenhouse_slug(host: str, segments: list[str], query: str) -> str:
     return segments[0] if segments else ""
 
 
-def slug_from_url(url: str) -> tuple[ATSName, str] | None:
-    """Return ``(ats, slug)`` if the URL points at a company's job board, else None."""
+def _workday_board(tenant: str, datacenter: str, segments: list[str]) -> Company | None:
+    if segments and _LANGUAGE.fullmatch(segments[0]):
+        segments = segments[1:]
+    site = segments[0] if segments else ""
+    if not _SLUG.fullmatch(site) or site.lower() in _NOT_SLUGS | _NOT_WORKDAY_SITES:
+        return None
+    return Company(name=tenant, ats="workday", slug=f"{tenant}/{site}", datacenter=datacenter)
+
+
+def board_from_url(url: str) -> Company | None:
+    """The job board a URL points at, if any.
+
+    Its name is a placeholder (the slug, or a Workday tenant); nothing in a URL tells us the
+    real one.
+    """
     try:
         parts = urlsplit(url)
     except ValueError:
         return None
     host = (parts.hostname or "").lower()
     segments = [unquote(s) for s in parts.path.split("/") if s]
+
+    if m := _WORKDAY_HOST.fullmatch(host):
+        return _workday_board(m.group(1), m.group(2), segments)
 
     ats: ATSName
     if host == _GREENHOUSE_API or _GREENHOUSE_BOARD.fullmatch(host):
@@ -65,22 +86,22 @@ def slug_from_url(url: str) -> tuple[ATSName, str] | None:
         slug = slug.lower()
     if not _SLUG.fullmatch(slug) or slug.lower() in _NOT_SLUGS:
         return None
-    return ats, slug
+    return Company(name=slug, ats=ats, slug=slug)
 
 
 def discover(urls: Iterable[str], known: Iterable[Company] = ()) -> list[Company]:
-    """Unique companies found in ``urls``, minus ``known``, sorted by ATS then slug.
+    """Unique boards found in ``urls``, minus ``known``, sorted by ATS then slug.
 
-    The slug doubles as the display name; nothing in a URL tells us the real one.
+    Slugs are compared case-insensitively; the first spelling seen is kept.
     """
-    seen = {(c.ats, c.slug.lower()) for c in known}
+    seen = {c.key.lower() for c in known}
     found: list[Company] = []
     for url in urls:
-        hit = slug_from_url(url)
-        if hit is None or (hit[0], hit[1].lower()) in seen:
+        board = board_from_url(url)
+        if board is None or board.key.lower() in seen:
             continue
-        seen.add((hit[0], hit[1].lower()))
-        found.append(Company(name=hit[1], ats=hit[0], slug=hit[1]))
+        seen.add(board.key.lower())
+        found.append(board)
     return sorted(found, key=lambda c: (c.ats, c.slug.lower()))
 
 
@@ -99,7 +120,8 @@ def render(companies: Iterable[Company]) -> str:
         f"  - name: {_scalar(c.name)}\n"
         f"    ats: {c.ats}\n"
         f"    slug: {_scalar(c.slug)}\n"
-        f"    tags: [{', '.join(_scalar(t) for t in c.tags)}]\n"
+        + (f"    datacenter: {c.datacenter}\n" if c.datacenter else "")
+        + f"    tags: [{', '.join(_scalar(t) for t in c.tags)}]\n"
         for c in companies
     )
 

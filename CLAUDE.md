@@ -6,7 +6,7 @@ This file is the constitution for AI-assisted work in this repo. Read it before 
 
 A small, well-tested Python CLI that:
 
-1. **Ingests** open roles from company career pages via public ATS JSON APIs (Greenhouse, Lever, Ashby).
+1. **Ingests** open roles from company career pages via ATS JSON APIs (Greenhouse, Lever, Ashby, Workday).
 2. **Filters** them against hard constraints (title level, location, remote policy, keywords).
 3. **Scores** each surviving role 1–10 against a fixed candidate profile using Claude, with a written rationale.
 4. **Generates** a tailored cover letter for high-scoring roles by assembling pre-written proof modules from a Cover Letter Kit — never by inventing claims.
@@ -67,10 +67,12 @@ output/               # generated letters (gitignored)
 Agreed future work, in rough priority order. Each item still follows the workflow above (fixture + test first).
 
 1. **Prune dead boards automatically.** *(done)* `jobhunt fetch` counts consecutive HTTP 404s per board in `data/misses.json`. Any successful fetch resets the count; the third 404 in a row removes the entry from `config/companies.yaml`. `--dry-run` changes neither.
-2. **Workday and SmartRecruiters sources.** Two new modules under `sources/`, each with a recorded fixture and `respx` tests, plus `ATSName` and `FETCHERS` entries.
-   - SmartRecruiters has a public postings API keyed by company identifier.
-   - Workday has no single public API. Each tenant's careers site serves JSON from its own host, so a Workday entry needs more than one slug (tenant, site, and data-center host). That means `Company` grows an optional field rather than overloading `slug`.
-   - `jobhunt.slugs` should learn their URL shapes so Common Crawl harvesting covers them too.
+2. **Workday and SmartRecruiters sources.** A module under `sources/` for each, with a recorded fixture and `respx` tests, plus an `ATSName` entry.
+   - **Workday** *(done)*. There is no documented public API; `sources/workday.py` calls the JSON endpoints each tenant's careers site uses.
+     - A board is `slug: tenant/site` plus `datacenter: wdN`, the only optional `Company` field. Tenant and site together are the board's identity (one tenant often has several sites), so keys, 404 pruning, and duplicate checks work unchanged.
+     - The listing has no descriptions, and each description costs one request. `fetch` takes a `wants_body` check; the CLI passes "title passes the title filter", so only those postings pay.
+     - `jobhunt.slugs` harvests `<tenant>.<wdN>.myworkdayjobs.com/[<lang>/]<site>` URLs.
+   - **SmartRecruiters** *(next)*. It has a public postings API keyed by company identifier.
 3. **Companies with no ATS (e.g., Apple).** These are case-by-case and may need crawling HTML rather than calling an API, so treat this as a separate flow, not another `sources/` adapter.
    - **Investigate first.** For each company, check whether its careers site is backed by a JSON endpoint before writing a crawler.
    - **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.

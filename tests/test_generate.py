@@ -104,3 +104,10 @@ def test_generated_letter_without_company_name_keeps_configured_name(slug_named_
     complete = make_completer({"custom_opening_sentence": "Open.", "custom_closing_sentence": "Close."})
     letter = generate_letter(slug_named_job, profile, kit, complete)
     assert "role at axios." in letter.text
+
+
+def test_display_name_treats_workday_tenant_as_a_placeholder(slug_named_job):
+    job = slug_named_job.job.model_copy(
+        update={"source": "workday", "company": "axios", "company_slug": "axios/External"}
+    )
+    assert company_display_name(job, "Axios") == "Axios"

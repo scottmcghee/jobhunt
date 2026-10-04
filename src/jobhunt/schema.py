@@ -6,12 +6,15 @@ shape errors surface at the edge, not three functions later.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-ATSName = Literal["greenhouse", "lever", "ashby"]
+ATSName = Literal["greenhouse", "lever", "ashby", "workday"]
+
+_WORKDAY_DATACENTER = re.compile(r"wd\d+")
 
 
 class Company(BaseModel):
@@ -19,8 +22,19 @@ class Company(BaseModel):
 
     name: str
     ats: ATSName
-    slug: str
+    slug: str  # Workday: "tenant/site", e.g. "adobe/external_experienced"
+    datacenter: str | None = None  # Workday only: the "wd5" in adobe.wd5.myworkdayjobs.com
     tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _workday_board(self) -> Company:
+        if self.ats == "workday":
+            tenant, _, site = self.slug.partition("/")
+            if not tenant or not site or "/" in site:
+                raise ValueError("a workday slug is tenant/site, e.g. adobe/external_experienced")
+            if not self.datacenter or not _WORKDAY_DATACENTER.fullmatch(self.datacenter):
+                raise ValueError("a workday board needs datacenter: wdN, e.g. wd5")
+        return self
 
     @property
     def key(self) -> str:

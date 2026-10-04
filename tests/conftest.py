@@ -49,6 +49,11 @@ def ashby_company() -> Company:
 
 
 @pytest.fixture
+def workday_company() -> Company:
+    return Company(name="ExampleCorp", ats="workday", slug="examplecorp/External", datacenter="wd5")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

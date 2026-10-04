@@ -207,3 +207,21 @@ def test_missing_config_is_a_friendly_error(tmp_path, monkeypatch, capsys):
     assert cli.main(["--data-dir", str(tmp_path), "list"]) == 0  # list needs no config
     assert cli.main(["--data-dir", str(tmp_path), "fetch"]) == 2
     assert "cp -R config.example config" in capsys.readouterr().err
+
+
+@respx.mock
+def test_fetch_workday_fetches_bodies_for_title_matches_only(tmp_path, fixture_json):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n  - name: ExampleCorp\n    ats: workday\n    slug: examplecorp/External\n    datacenter: wd5\n"
+    )
+    base = "https://examplecorp.wd5.myworkdayjobs.com/wday/cxs/examplecorp/External"
+    respx.post(base + "/jobs").mock(return_value=httpx.Response(200, json=fixture_json("workday_jobs.json")))
+    detail = respx.get(base + "/job/Seattle-WA/Director-of-Platform-Engineering_R1001").mock(
+        return_value=httpx.Response(200, json=fixture_json("workday_job.json"))
+    )
+
+    assert _fetch(tmp_path, companies) == 0
+    assert detail.call_count == 1  # "Senior Software Engineer" and "Director of Sales" fail the title check
+    jobs = storage.load_jobs(tmp_path / "data")
+    assert [j.key for j in jobs] == ["workday:examplecorp/External:Director-of-Platform-Engineering_R1001"]

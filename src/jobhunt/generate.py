@@ -62,10 +62,11 @@ def choose_modules(scored: ScoredJob, kit: Kit) -> list[KitModule]:
 def company_display_name(job: Job, proposed: object) -> str:
     """The company name to print in the letter.
 
-    A name curated in companies.yaml (anything other than the bare slug) wins. Otherwise use
-    the model's reading of the posting, but only if the posting contains it word for word.
+    A name curated in companies.yaml wins. A placeholder name (the bare slug, or a Workday
+    board's tenant) is replaced by the model's reading of the posting, but only if the posting
+    contains it word for word.
     """
-    if job.company != job.company_slug:
+    if job.company not in (job.company_slug, job.company_slug.split("/")[0]):
         return job.company
     name = str(proposed or "").strip()
     if not name or "\n" in name or len(name) > 80:

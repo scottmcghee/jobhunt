@@ -1,9 +1,9 @@
 """Find job postings that fit a candidate profile, and draft cover letters for the best ones.
 
 Pulls open roles from the company job boards in config/companies.yaml (Greenhouse, Lever,
-Ashby), drops those that fail the hard filters in config/preferences.yaml, has Claude score the
-rest 1-10 against config/profile.md, and assembles cover letters for the top scorers from the
-pre-written modules in config/kit/.
+Ashby, Workday), drops those that fail the hard filters in config/preferences.yaml, has Claude
+score the rest 1-10 against config/profile.md, and assembles cover letters for the top scorers
+from the pre-written modules in config/kit/.
 
     jobhunt fetch   [--company NAME] [--dry-run]     pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
@@ -60,12 +60,15 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     seen = storage.SeenSet(data_dir / "seen.json")
     misses = storage.MissLedger(data_dir / "misses.json")
 
+    def title_passes(job: Job) -> bool:
+        return jfilter.check_title(job, prefs) is None
+
     new_jobs: list[Job] = []
     dead: set[str] = set()
     with _client() as client:
         for company in companies:
             try:
-                jobs = fetch_company(company, client)
+                jobs = fetch_company(company, client, wants_body=title_passes)
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 log.warning("%s: HTTP %s — check slug/ATS", company.name, status)

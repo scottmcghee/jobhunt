@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 
 from jobhunt import config
+from jobhunt.schema import ATSName
 from tests.conftest import CONFIG_DIR, LOCAL_CONFIG_DIR
 
 
 def test_companies_load_and_validate():
     companies = config.load_companies(CONFIG_DIR / "companies.yaml")
     assert companies, "companies.yaml should not be empty"
-    assert all(c.ats in {"greenhouse", "lever", "ashby"} for c in companies)
+    assert all(c.ats in get_args(ATSName) for c in companies)
     assert len({(c.ats, c.slug) for c in companies}) == len(companies), "duplicate slugs"
 
 
@@ -114,3 +117,16 @@ def test_local_config_is_valid():
     config.load_preferences(LOCAL_CONFIG_DIR / "preferences.yaml")
     assert config.load_profile(LOCAL_CONFIG_DIR / "profile.md").strip()
     assert config.load_kit(LOCAL_CONFIG_DIR / "kit").modules
+
+
+def test_workday_company_needs_tenant_site_and_datacenter():
+    from pydantic import ValidationError
+
+    c = config.Company(name="Adobe", ats="workday", slug="adobe/external_experienced", datacenter="wd5")
+    assert c.key == "workday:adobe/external_experienced"
+    with pytest.raises(ValidationError):
+        config.Company(name="Adobe", ats="workday", slug="adobe/external_experienced")  # no datacenter
+    with pytest.raises(ValidationError):
+        config.Company(name="Adobe", ats="workday", slug="adobe", datacenter="wd5")  # no site
+    with pytest.raises(ValidationError):
+        config.Company(name="Adobe", ats="workday", slug="adobe/x", datacenter="eu-west")

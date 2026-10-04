@@ -9,6 +9,10 @@
 #               API: https://api.lever.co/v0/postings/<slug>?mode=json
 #   Ashby:      jobs.ashbyhq.com/<slug>
 #               API: https://api.ashbyhq.com/posting-api/job-board/<slug>
+#   Workday:    <tenant>.<datacenter>.myworkdayjobs.com/[en-US/]<site>
+#               slug is tenant/site, plus a datacenter line, e.g. for adobe.wd5.myworkdayjobs.com/external_experienced:
+#                 slug: adobe/external_experienced
+#                 datacenter: wd5
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help` (harvests them from Common Crawl).
 #
@@ -55,3 +59,9 @@ companies:
     ats: lever
     slug: shieldai
     tags: [defense]
+
+  - name: Adobe
+    ats: workday
+    slug: adobe/external_experienced
+    datacenter: wd5
+    tags: [saas]

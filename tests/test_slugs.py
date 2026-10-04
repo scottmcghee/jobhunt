@@ -39,8 +39,60 @@ from jobhunt.schema import Company
         ("http://[bad", None),
     ],
 )
-def test_slug_from_url(url, expected):
-    assert slugs.slug_from_url(url) == expected
+def test_board_from_url(url, expected):
+    board = slugs.board_from_url(url)
+    assert (board.ats, board.slug) == expected if expected else board is None
+
+
+@pytest.mark.parametrize(
+    ("url", "slug"),
+    [
+        ("https://adobe.wd5.myworkdayjobs.com/external_experienced", "adobe/external_experienced"),
+        ("https://adobe.wd5.myworkdayjobs.com/en-US/external_experienced/job/San-Jose/X_R1", "adobe/external_experienced"),
+        ("https://Abbott.wd5.myworkdayjobs.com/abbottcareers2/job/X", "abbott/abbottcareers2"),
+        ("https://alcoa.wd5.myworkdayjobs.com/es/careers", "alcoa/careers"),
+        ("https://agilent.wd5.myworkdayjobs.com/en-us/Agilent_Careers", "agilent/Agilent_Careers"),
+        ("https://acme.wd12.myworkdayjobs.com/External/details/X_R2", "acme/External"),
+    ],
+)
+def test_board_from_workday_url(url, slug):
+    board = slugs.board_from_url(url)
+    assert (board.ats, board.slug, board.name) == ("workday", slug, slug.split("/")[0])
+    assert board.datacenter == url.split(".")[1]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://adobe.wd5.myworkdayjobs.com/",
+        "https://adobe.wd5.myworkdayjobs.com/robots.txt",
+        "https://abbott.wd5.myworkdayjobs.com/llms.txt",
+        "https://adobe.wd5.myworkdayjobs.com/en-US",
+        "https://adobe.wd5.myworkdayjobs.com/wday/cxs/adobe/external/jobs",
+        "https://www.myworkday.com/adobe",
+    ],
+)
+def test_workday_urls_without_a_site(url):
+    assert slugs.board_from_url(url) is None
+
+
+def test_discover_dedupes_workday_sites_case_insensitively():
+    urls = [
+        "https://aaamidatlantic.wd5.myworkdayjobs.com/AAAMidAtlantic/job/1",
+        "https://aaamidatlantic.wd5.myworkdayjobs.com/aaamidatlantic",
+        "https://aaamidatlantic.wd5.myworkdayjobs.com/External_Career_ASE",
+    ]
+    assert [c.slug for c in slugs.discover(urls)] == [
+        "aaamidatlantic/AAAMidAtlantic",
+        "aaamidatlantic/External_Career_ASE",
+    ]
+
+
+def test_render_includes_workday_datacenter():
+    c = Company(name="adobe", ats="workday", slug="adobe/external_experienced", datacenter="wd5")
+    out = slugs.render([c])
+    assert "    datacenter: wd5\n" in out
+    assert Company.model_validate(yaml.safe_load("companies:\n" + out)["companies"][0]) == c
 
 
 def test_discover_dedupes_and_sorts():

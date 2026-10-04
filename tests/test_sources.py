@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from jobhunt.sources import ashby, fetch_company, greenhouse, lever
+from jobhunt.sources import ashby, fetch_company, greenhouse, lever, workday
 from jobhunt.sources._html import to_text
 
 
@@ -96,3 +96,90 @@ def test_fetch_company_dispatches(gh_company, fixture_json):
     with httpx.Client() as client:
         jobs = fetch_company(gh_company, client)
     assert {j.source for j in jobs} == {"greenhouse"}
+
+
+WD = "https://examplecorp.wd5.myworkdayjobs.com/wday/cxs/examplecorp/External"
+WD_DETAIL = WD + "/job/Seattle-WA/Director-of-Platform-Engineering_R1001"
+
+
+def _wants_directors(job):
+    return job.title.startswith("Director of Platform")
+
+
+@respx.mock
+def test_workday_lists_everything_but_fetches_bodies_only_when_wanted(workday_company, fixture_json):
+    listing = respx.post(WD + "/jobs").mock(return_value=httpx.Response(200, json=fixture_json("workday_jobs.json")))
+    detail = respx.get(WD_DETAIL).mock(return_value=httpx.Response(200, json=fixture_json("workday_job.json")))
+    with httpx.Client() as client:
+        jobs = workday.fetch(workday_company, client, _wants_directors)
+
+    assert [j.title for j in jobs] == ["Director of Platform Engineering", "Senior Software Engineer", "Director of Sales"]
+    assert __import__("json").loads(listing.calls.last.request.content) == {
+        "appliedFacets": {}, "limit": 20, "offset": 0, "searchText": ""
+    }
+    assert detail.call_count == 1  # only the wanted posting
+
+    j = jobs[0]
+    assert j.source == "workday"
+    assert j.company == "ExampleCorp" and j.company_slug == "examplecorp/External"
+    assert j.external_id == "Director-of-Platform-Engineering_R1001"
+    assert j.key == "workday:examplecorp/External:Director-of-Platform-Engineering_R1001"
+    assert j.url == "https://examplecorp.wd5.myworkdayjobs.com/External/job/Seattle-WA/Director-of-Platform-Engineering_R1001"
+    assert j.location == "US-WA-Seattle; US-OR-Remote Location"
+    assert j.remote is True
+    assert j.posted_at == "2026-10-02"
+    assert "infrastructure & developer experience" in j.body and "<" not in j.body
+
+    unwanted = jobs[1]
+    assert unwanted.body == "" and unwanted.location == "US-WA-Seattle" and unwanted.remote is None
+    assert jobs[2].remote is True  # "US-Remote" in the listing is enough
+
+
+@respx.mock
+def test_workday_paginates_using_first_page_total(workday_company):
+    def page(request):
+        offset = __import__("json").loads(request.content)["offset"]
+        n = min(20, 45 - offset)
+        postings = [
+            {"title": f"Job {offset + i}", "externalPath": f"/job/X/Job_{offset + i}", "locationsText": "X"}
+            for i in range(n)
+        ]
+        # like the real API, only the first page reports the total
+        return httpx.Response(200, json={"total": 45 if offset == 0 else 0, "jobPostings": postings})
+
+    listing = respx.post(WD + "/jobs").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = workday.fetch(workday_company, client, lambda job: False)
+
+    assert len(jobs) == 45 and len({j.external_id for j in jobs}) == 45
+    assert listing.call_count == 3
+
+
+@respx.mock
+def test_workday_unknown_site_raises_404(workday_company):
+    respx.post(WD + "/jobs").mock(return_value=httpx.Response(404, json={"errorCode": "S21"}))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        workday.fetch(workday_company, client, _wants_directors)
+
+
+@respx.mock
+def test_workday_failed_detail_keeps_job_without_body(workday_company, fixture_json, caplog):
+    respx.post(WD + "/jobs").mock(return_value=httpx.Response(200, json=fixture_json("workday_jobs.json")))
+    respx.get(WD_DETAIL).mock(return_value=httpx.Response(500))
+    with httpx.Client() as client:
+        jobs = workday.fetch(workday_company, client, _wants_directors)
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert "Director-of-Platform-Engineering_R1001" in caplog.text
+
+
+@respx.mock
+def test_fetch_company_passes_wants_body_to_workday(workday_company, fixture_json):
+    respx.post(WD + "/jobs").mock(return_value=httpx.Response(200, json=fixture_json("workday_jobs.json")))
+    detail = respx.get(url__startswith=WD + "/job/").mock(
+        return_value=httpx.Response(200, json=fixture_json("workday_job.json"))
+    )
+    with httpx.Client() as client:
+        fetch_company(workday_company, client, wants_body=lambda job: False)
+        assert detail.call_count == 0
+        fetch_company(workday_company, client)  # default: every posting gets its description
+        assert detail.call_count == 3
