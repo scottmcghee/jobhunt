@@ -1,8 +1,10 @@
-"""Harvest ATS board slugs from Common Crawl index dumps.
+"""Harvest ATS board slugs from Common Crawl index files, or any other text.
 
     python -m jobhunt.slugs [INDEX ...] [--companies PATH] [-o OUT]
 
-Each INDEX is a CDX index dump: one JSON record per line, each with a ``url``. The output is a
+Each INDEX is any text file: every http(s) URL in it is checked for a job board. Lines grepped
+from Common Crawl index files (``zgrep myworkdayjobs cdx-*.gz``), JSON records, plain URL lists,
+and saved HTML all work. The output is a
 block of entries ready to paste under ``companies:`` in config/companies.yaml. Slugs already
 listed there are left out, so the output can be regenerated and re-pasted as more data arrives.
 """
@@ -24,7 +26,7 @@ from jobhunt.schema import ATSName, Company
 
 log = logging.getLogger("jobhunt.slugs")
 
-DEFAULT_INDEX = Path("data/commoncrawl.json")
+DEFAULT_INDEX = Path("data/commoncrawl.txt")
 DEFAULT_OUT = Path("data/companies.generated.yaml")
 
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
@@ -41,6 +43,10 @@ _KEEPS_CASE: set[ATSName] = {"ashby", "smartrecruiters"}  # the others are case-
 # <tenant>.<datacenter>.myworkdayjobs.com/[<language>/]<site>/...
 _WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com")
 _LANGUAGE = re.compile(r"[a-z]{2}(-[a-z]{2})?", re.I)  # en-US, en-us, es
+
+# Ends at whitespace, quotes, angle brackets, or a backslash; see _trim for trailing punctuation.
+_URL = re.compile(r"""https?://[^\s"'<>\\]+""")
+_CLOSERS = {")": "(", "]": "[", "}": "{"}
 
 _SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]*")
 _NOT_SLUGS = {"embed", "robots.txt", "llms.txt", "favicon.ico", "sitemap.xml"}
@@ -134,18 +140,23 @@ def render(companies: Iterable[Company]) -> str:
     )
 
 
+def _trim(url: str) -> str:
+    """Drop punctuation that ends a sentence, or a bracket the URL never opened."""
+    while url:
+        last = url[-1]
+        if last in ".,;:" or (last in _CLOSERS and url.count(_CLOSERS[last]) < url.count(last)):
+            url = url[:-1]
+        else:
+            return url
+    return url
+
+
 def read_urls(path: Path) -> Iterator[str]:
-    """Yield the ``url`` of each record in a line-delimited CDX index dump."""
-    with path.open() as f:
-        for lineno, line in enumerate(f, start=1):
-            if not line.strip():
-                continue
-            try:
-                url = json.loads(line)["url"]
-            except (json.JSONDecodeError, KeyError, TypeError):
-                log.warning("%s:%d: not a CDX record, skipped", path, lineno)
-                continue
-            yield url
+    """Yield every http(s) URL in a text file, in order."""
+    with path.open(errors="replace") as f:
+        for line in f:
+            for url in _URL.findall(line):
+                yield _trim(url)
 
 
 def main(argv: list[str] | None = None) -> int:

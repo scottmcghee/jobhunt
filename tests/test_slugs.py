@@ -154,20 +154,56 @@ def test_render_empty_is_empty():
     assert slugs.render([]) == ""
 
 
-def test_read_urls_skips_malformed_lines(tmp_path):
-    p = tmp_path / "cc.json"
+def test_read_urls_from_cdx_index_lines(tmp_path):
+    # raw Common Crawl index lines, as grep prints them: SURT key, timestamp, JSON
+    p = tmp_path / "cc.txt"
+    p.write_text(
+        'com,myworkdayjobs,wd5,adobe)/external 20260910104126 {"url": "https://adobe.wd5.myworkdayjobs.com/External", "status": "200"}\n'
+        'com,myworkdayjobs,wd3,lonza)/x/apply?source={pipeline_id} 20260915181741 {"url": "https://lonza.wd3.myworkdayjobs.com/Lonza_Careers/job/x/apply?source={pipeline_id}", "mime": "text/html"}\n'
+    )
+    assert list(slugs.read_urls(p)) == [
+        "https://adobe.wd5.myworkdayjobs.com/External",
+        "https://lonza.wd3.myworkdayjobs.com/Lonza_Careers/job/x/apply?source={pipeline_id}",
+    ]
+
+
+def test_read_urls_from_any_text(tmp_path):
+    p = tmp_path / "mixed.txt"
     p.write_text(
         json.dumps({"url": "https://boards.greenhouse.io/alpha", "status": "301"})
-        + "\n\nnot json\n"
-        + json.dumps({"status": "200"})
-        + "\n"
-        + json.dumps({"url": "https://boards.greenhouse.io/beta"})
-        + "\n"
+        + "\n\nno links here\n"
+        + "https://jobs.lever.co/beta\n"
+        + '<a href="https://jobs.ashbyhq.com/gamma/1">Apply</a> or http://boards.greenhouse.io/delta.\n'
+        + "(see https://jobs.lever.co/epsilon), https://jobs.lever.co/zeta;\n"
+        + "[https://jobs.lever.co/eta/a_(b)]\n"
     )
     assert list(slugs.read_urls(p)) == [
         "https://boards.greenhouse.io/alpha",
-        "https://boards.greenhouse.io/beta",
+        "https://jobs.lever.co/beta",
+        "https://jobs.ashbyhq.com/gamma/1",
+        "http://boards.greenhouse.io/delta",
+        "https://jobs.lever.co/epsilon",
+        "https://jobs.lever.co/zeta",
+        "https://jobs.lever.co/eta/a_(b)",
     ]
+
+
+def test_read_urls_survives_bad_bytes(tmp_path):
+    p = tmp_path / "bad.txt"
+    p.write_bytes(b"\xff\xfe junk https://jobs.lever.co/alpha\n")
+    assert list(slugs.read_urls(p)) == ["https://jobs.lever.co/alpha"]
+
+
+def test_main_reads_cdx_index_lines(tmp_path):
+    index = tmp_path / "cc.txt"
+    index.write_text(
+        'com,myworkdayjobs,wd5,adobe)/en-us/external/job/x 20260910104126 {"url": "https://adobe.wd5.myworkdayjobs.com/en-US/External/job/X"}\n'
+        'com,lever,jobs)/gamma 20260910104127 {"url": "https://jobs.lever.co/gamma"}\n'
+    )
+    out = tmp_path / "out.yaml"
+    assert slugs.main([str(index), "-o", str(out)]) == 0
+    found = yaml.safe_load("companies:\n" + out.read_text())["companies"]
+    assert [(c["ats"], c["slug"]) for c in found] == [("lever", "gamma"), ("workday", "adobe/External")]
 
 
 def test_main_writes_pasteable_yaml(tmp_path):
@@ -192,6 +228,10 @@ def test_main_writes_pasteable_yaml(tmp_path):
         ("greenhouse", "alpha"),
         ("lever", "gamma"),
     ]
+
+
+def test_default_index_is_a_text_file():
+    assert slugs.DEFAULT_INDEX.name == "commoncrawl.txt"
 
 
 def test_main_missing_input_is_an_error(tmp_path):
