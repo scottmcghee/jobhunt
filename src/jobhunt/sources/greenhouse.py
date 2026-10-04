@@ -12,6 +12,7 @@ import httpx
 
 from jobhunt.schema import Company, Job
 from jobhunt.sources._html import to_text
+from jobhunt.sources._postings import with_ids
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,6 @@ def fetch(company: Company, client: httpx.Client) -> list[Job]:
     resp = client.get(url, params={"content": "true"})
     resp.raise_for_status()
     data = resp.json()
-    jobs = [normalize(company, j) for j in data.get("jobs", [])]
+    jobs = [normalize(company, j) for j in with_ids(company, data.get("jobs", []))]
     log.info("greenhouse %s: %d jobs", company.slug, len(jobs))
     return jobs

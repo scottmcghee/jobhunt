@@ -306,3 +306,42 @@ def test_fetch_company_passes_max_pages(smartrecruiters_company, gh_company, fix
         fetch_company(smartrecruiters_company, client, wants_body=lambda job: False, max_pages=1)
         assert listing.call_count == 1
         assert len(fetch_company(gh_company, client, max_pages=1)) == 4  # one request anyway
+
+
+
+# source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
+SOURCES_WITH_IDS = [
+    (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
+     "greenhouse_jobs.json", "jobs", "id"),
+    (lever, "lever_company", "GET", "https://api.lever.co/v0/postings/examplelever",
+     "lever_postings.json", None, "id"),
+    (ashby, "ashby_company", "GET", "https://api.ashbyhq.com/posting-api/job-board/exampleashby",
+     "ashby_board.json", "jobs", "id"),
+    (workday, "workday_company", "POST", WD + "/jobs", "workday_jobs.json", "jobPostings", "externalPath"),
+    (smartrecruiters, "smartrecruiters_company", "GET", SR, "smartrecruiters_postings.json", "content", "id"),
+]
+
+
+def _fetch_listing(source, company, method, url, data):
+    with respx.mock:
+        respx.route(method=method, url=url).mock(return_value=httpx.Response(200, json=data))
+        with httpx.Client() as client:
+            if source in (workday, smartrecruiters):
+                return source.fetch(company, client, lambda job: False)
+            return source.fetch(company, client)
+
+
+@pytest.mark.parametrize(("source", "company_fixture", "method", "url", "payload", "key", "id_field"), SOURCES_WITH_IDS)
+def test_postings_without_an_id_are_skipped(
+    source, company_fixture, method, url, payload, key, id_field, fixture_json, request, caplog
+):
+    company = request.getfixturevalue(company_fixture)
+    data = fixture_json(payload)
+    before = _fetch_listing(source, company, method, url, data)
+
+    postings = data[key] if key else data
+    del postings[0][id_field]  # the first posting is a listed one in every fixture
+    after = _fetch_listing(source, company, method, url, data)
+
+    assert [j.title for j in after] == [j.title for j in before[1:]]
+    assert f"{company.slug}: skipped a posting with no {id_field}" in caplog.text

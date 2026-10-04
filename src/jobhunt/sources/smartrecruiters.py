@@ -22,6 +22,7 @@ import httpx
 
 from jobhunt.schema import Company, Job
 from jobhunt.sources._html import to_text
+from jobhunt.sources._postings import with_ids
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def fetch(
     max_pages: int | None = None,
 ) -> list[Job]:
     jobs: dict[str, Job] = {}
-    for posting in _list(company, client, max_pages):
+    for posting in with_ids(company, _list(company, client, max_pages)):
         job = normalize(company, posting)
         if job.external_id in jobs:  # postings can shift between pages
             continue

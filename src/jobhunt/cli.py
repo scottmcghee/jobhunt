@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -27,7 +28,7 @@ from jobhunt import config, storage
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, make_completer
-from jobhunt.schema import Job
+from jobhunt.schema import Company, Job
 from jobhunt.score import score_job
 from jobhunt.sources import fetch_company
 
@@ -49,6 +50,29 @@ def _client() -> httpx.Client:
 MAX_CONSECUTIVE_404S = 3
 
 
+def _fetch_board(
+    company: Company,
+    client: httpx.Client,
+    wants_body: Callable[[Job], bool],
+    misses: storage.MissLedger,
+    dead: set[str],
+    verbose: bool,
+) -> list[Job] | None:
+    """One board's postings, or None if it failed. A failing board never stops the run."""
+    try:
+        return fetch_company(company, client, wants_body=wants_body)
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        log.warning("%s: HTTP %s — check slug/ATS", company.name, status)
+        if status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
+            dead.add(company.key)
+    except httpx.HTTPError as e:
+        log.warning("%s: %s", company.name, e)
+    except Exception as e:  # malformed data from one board; the rest of the run still counts
+        log.warning("%s: skipped, %s: %s", company.name, type(e).__name__, e, exc_info=verbose)
+    return None
+
+
 def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     companies = config.load_companies(args.companies)
     if args.company:
@@ -65,34 +89,31 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
 
     new_jobs: list[Job] = []
     dead: set[str] = set()
+    interrupted = False
     with _client() as client:
-        for company in companies:
-            try:
-                jobs = fetch_company(company, client, wants_body=title_passes)
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                log.warning("%s: HTTP %s — check slug/ATS", company.name, status)
-                if status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
-                    dead.add(company.key)
-                continue
-            except httpx.HTTPError as e:
-                log.warning("%s: %s", company.name, e)
-                continue
-            misses.clear(company.key)
-            passed, rejected = jfilter.apply(jobs, prefs)
-            fresh = [j for j in passed if j.key not in seen]
-            print(
-                f"{company.name:<16} total={len(jobs):<4} passed={len(passed):<3} new={len(fresh)}"
-            )
-            if args.verbose:
-                for r in rejected:
-                    print(f"    - {r.job.title[:60]:<60} {r.reason}")
-            new_jobs.extend(fresh)
+        try:
+            for company in companies:
+                jobs = _fetch_board(company, client, title_passes, misses, dead, args.verbose)
+                if jobs is None:
+                    continue
+                misses.clear(company.key)
+                passed, rejected = jfilter.apply(jobs, prefs)
+                fresh = [j for j in passed if j.key not in seen]
+                counts = f"total={len(jobs):<4} passed={len(passed):<3} new={len(fresh)}"
+                print(f"{company.name:<16} {counts}")
+                if args.verbose:
+                    for r in rejected:
+                        print(f"    - {r.job.title[:60]:<60} {r.reason}")
+                new_jobs.extend(fresh)
+        except KeyboardInterrupt:
+            # Keep what the finished boards found; the next run picks up the rest.
+            interrupted = True
+            print("\ninterrupted: keeping the boards fetched so far", file=sys.stderr)
 
     if args.dry_run:
         for j in new_jobs:
             print(f"  + {j.company}: {j.title} ({j.location}) {j.url}")
-        return 0
+        return 130 if interrupted else 0
 
     for name in config.remove_companies(args.companies, dead) if dead else []:
         print(f"removed {name} from {args.companies.name}: {MAX_CONSECUTIVE_404S} 404s in a row")
@@ -105,7 +126,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         seen.add(j.key)
     seen.save()
     print(f"\n{len(new_jobs)} new job(s) recorded.")
-    return 0
+    return 130 if interrupted else 0
 
 
 def _completer() -> Completer:
