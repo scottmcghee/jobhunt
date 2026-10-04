@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
+import respx
 import yaml
 
 from jobhunt import slugs
@@ -236,3 +238,96 @@ def test_default_index_is_a_text_file():
 
 def test_main_missing_input_is_an_error(tmp_path):
     assert slugs.main([str(tmp_path / "nope.json"), "-o", str(tmp_path / "out.yaml")]) == 2
+
+
+GH = "https://boards-api.greenhouse.io/v1/boards/{}/jobs"
+SR = "https://api.smartrecruiters.com/v1/companies/{}/postings"
+EMPTY_SR = {"offset": 0, "limit": 100, "totalFound": 0, "content": []}
+
+
+@respx.mock
+def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    respx.get(GH.format("gone")).mock(return_value=httpx.Response(404))
+    respx.get(SR.format("Empty")).mock(return_value=httpx.Response(200, json=EMPTY_SR))
+    respx.get(SR.format("Locked")).mock(return_value=httpx.Response(401))
+    boards = [
+        Company(name="live", ats="greenhouse", slug="live"),
+        Company(name="gone", ats="greenhouse", slug="gone"),
+        Company(name="Empty", ats="smartrecruiters", slug="Empty"),
+        Company(name="Locked", ats="smartrecruiters", slug="Locked"),
+    ]
+    caplog.set_level("INFO", logger="jobhunt.slugs")
+    with httpx.Client() as client:
+        kept = slugs.check(boards, client)
+    assert [c.slug for c in kept] == ["live"]
+    assert "gone: HTTP 404" in caplog.text and "Locked: HTTP 401" in caplog.text
+    assert "Empty: no open postings" in caplog.text
+
+
+@respx.mock
+def test_check_keeps_boards_it_could_not_reach(caplog):
+    respx.get(GH.format("flaky")).mock(return_value=httpx.Response(503))
+    respx.get(GH.format("slow")).mock(side_effect=httpx.ConnectTimeout("timed out"))
+    boards = [Company(name=s, ats="greenhouse", slug=s) for s in ("flaky", "slow")]
+    with httpx.Client() as client:
+        assert slugs.check(boards, client) == boards
+    assert "flaky: kept, could not check" in caplog.text and "slow: kept, could not check" in caplog.text
+
+
+@respx.mock
+def test_check_does_not_fetch_descriptions(fixture_json):
+    respx.get(SR.format("Acme")).mock(
+        return_value=httpx.Response(200, json=fixture_json("smartrecruiters_postings.json"))
+    )
+    detail = respx.get(url__startswith=SR.format("Acme") + "/")
+    board = Company(name="Acme", ats="smartrecruiters", slug="Acme")
+    with httpx.Client() as client:
+        assert slugs.check([board], client) == [board]
+    assert detail.call_count == 0
+
+
+def _index_with(tmp_path, *urls):
+    index = tmp_path / "cc.txt"
+    index.write_text("".join(u + "\n" for u in urls))
+    return index
+
+
+@respx.mock
+def test_main_check_drops_dead_boards(tmp_path, monkeypatch, fixture_json):
+    monkeypatch.setattr(slugs, "_client", httpx.Client)
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    respx.get(GH.format("gone")).mock(return_value=httpx.Response(404))
+    index = _index_with(tmp_path, "https://boards.greenhouse.io/live", "https://boards.greenhouse.io/gone")
+    out = tmp_path / "out.yaml"
+    assert slugs.main([str(index), "-o", str(out), "--check"]) == 0
+    found = yaml.safe_load("companies:\n" + out.read_text())["companies"]
+    assert [c["slug"] for c in found] == ["live"]
+
+
+@respx.mock
+def test_main_without_check_makes_no_requests(tmp_path):
+    # respx.mock fails any request that has no route, so this passes only if none is made
+    index = _index_with(tmp_path, "https://boards.greenhouse.io/live")
+    out = tmp_path / "out.yaml"
+    assert slugs.main([str(index), "-o", str(out)]) == 0
+    assert "slug: live" in out.read_text()
+
+
+@respx.mock
+def test_check_reads_only_the_first_page():
+    page = {"offset": 0, "limit": 100, "totalFound": 5000, "content": [{"id": "1", "name": "Job", "location": {}}]}
+    listing = respx.get(SR.format("Big")).mock(return_value=httpx.Response(200, json=page))
+    board = Company(name="Big", ats="smartrecruiters", slug="Big")
+    with httpx.Client() as client:
+        assert slugs.check([board], client) == [board]
+    assert listing.call_count == 1
+
+
+@respx.mock
+def test_check_keeps_rate_limited_boards(caplog):
+    respx.get(GH.format("busy")).mock(return_value=httpx.Response(429))
+    board = Company(name="busy", ats="greenhouse", slug="busy")
+    with httpx.Client() as client:
+        assert slugs.check([board], client) == [board]
+    assert "busy: kept, could not check (HTTP 429)" in caplog.text

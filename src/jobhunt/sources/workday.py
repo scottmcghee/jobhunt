@@ -66,10 +66,10 @@ def normalize(company: Company, posting: dict, info: dict | None = None) -> Job:
     )
 
 
-def _list(company: Company, client: httpx.Client) -> list[dict]:
+def _list(company: Company, client: httpx.Client, max_pages: int | None = None) -> list[dict]:
     postings: list[dict] = []
     total: int | None = None
-    offset = 0
+    offset = pages = 0
     while True:
         query = {"appliedFacets": {}, "limit": PAGE_SIZE, "offset": offset, "searchText": ""}
         resp = client.post(f"{_api_url(company)}/jobs", json=query)
@@ -80,7 +80,8 @@ def _list(company: Company, client: httpx.Client) -> list[dict]:
             total = min(int(data.get("total") or 0), MAX_POSTINGS)
         postings += page
         offset += PAGE_SIZE
-        if not page or offset >= total:
+        pages += 1
+        if not page or offset >= total or pages == max_pages:
             return postings
 
 
@@ -99,9 +100,10 @@ def fetch(
     company: Company,
     client: httpx.Client,
     wants_body: Callable[[Job], bool] = lambda job: True,
+    max_pages: int | None = None,
 ) -> list[Job]:
     jobs: dict[str, Job] = {}
-    for posting in _list(company, client):
+    for posting in _list(company, client, max_pages):
         job = normalize(company, posting)
         if job.external_id in jobs:  # postings can shift between pages
             continue
