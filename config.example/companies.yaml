@@ -1,0 +1,57 @@
+# Companies to watch. EXAMPLE list: replace it with the boards you care about.
+#
+# Each entry: a display name, the ATS it uses, and the board slug used in that ATS's public API.
+#
+# How to find the slug:
+#   Greenhouse: careers page URL like boards.greenhouse.io/<slug>  or  job-boards.greenhouse.io/<slug>
+#               API: https://boards-api.greenhouse.io/v1/boards/<slug>/jobs?content=true
+#   Lever:      jobs.lever.co/<slug>
+#               API: https://api.lever.co/v0/postings/<slug>?mode=json
+#   Ashby:      jobs.ashbyhq.com/<slug>
+#               API: https://api.ashbyhq.com/posting-api/job-board/<slug>
+#
+# To find many slugs at once, see `python -m jobhunt.slugs --help` (harvests them from Common Crawl).
+#
+# Verify a slug with `jobhunt fetch --company <name> --dry-run`. A board that returns 404 on three
+# fetches in a row is removed from this file automatically.
+
+companies:
+  - name: Huntress
+    ats: greenhouse
+    slug: huntress
+    tags: [security]
+
+  - name: HubSpot
+    ats: greenhouse
+    slug: hubspot
+    tags: [saas]
+
+  - name: Figma
+    ats: greenhouse
+    slug: figma
+    tags: [saas]
+
+  - name: Vercel
+    ats: greenhouse
+    slug: vercel
+    tags: [infra]
+
+  - name: PagerDuty
+    ats: greenhouse
+    slug: pagerduty
+    tags: [infra]
+
+  - name: Grafana Labs
+    ats: greenhouse
+    slug: grafanalabs
+    tags: [infra]
+
+  - name: Counterpart
+    ats: ashby
+    slug: counterpart
+    tags: [insurtech]
+
+  - name: Shield AI
+    ats: lever
+    slug: shieldai
+    tags: [defense]

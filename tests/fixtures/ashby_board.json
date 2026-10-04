@@ -1,0 +1,30 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "7f3e1c2a-1111-4222-8333-444455556666",
+      "title": "VP of Engineering",
+      "department": "Engineering",
+      "team": "Leadership",
+      "employmentType": "FullTime",
+      "location": "Remote",
+      "secondaryLocations": [{"location": "New York, NY"}],
+      "publishedAt": "2026-09-25T15:00:00.000Z",
+      "isListed": true,
+      "isRemote": true,
+      "descriptionHtml": "<h2>About the role</h2><p>Lead a 30-person engineering org including platform, data engineering, and product teams. Own cloud cost and reliability.</p>",
+      "descriptionPlain": "About the role. Lead a 30-person engineering org...",
+      "jobUrl": "https://jobs.ashbyhq.com/exampleashby/7f3e1c2a-1111-4222-8333-444455556666",
+      "applyUrl": "https://jobs.ashbyhq.com/exampleashby/7f3e1c2a-1111-4222-8333-444455556666/application"
+    },
+    {
+      "id": "7f3e1c2a-1111-4222-8333-444455557777",
+      "title": "Unlisted Director of Platform",
+      "location": "Seattle, WA",
+      "isListed": false,
+      "isRemote": false,
+      "descriptionHtml": "<p>Should never be returned.</p>",
+      "jobUrl": "https://jobs.ashbyhq.com/exampleashby/unlisted"
+    }
+  ]
+}

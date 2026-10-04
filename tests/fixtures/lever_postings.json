@@ -1,0 +1,26 @@
+[
+  {
+    "id": "a1b2c3d4-0000-4000-8000-000000000001",
+    "text": "Head of Infrastructure",
+    "hostedUrl": "https://jobs.lever.co/examplelever/a1b2c3d4-0000-4000-8000-000000000001",
+    "createdAt": 1758900000000,
+    "workplaceType": "remote",
+    "categories": {"location": "United States", "team": "Engineering", "commitment": "Full-time"},
+    "description": "<p>Lead our cloud infrastructure and site reliability organization.</p>",
+    "lists": [
+      {"text": "What you'll do", "content": "<li>Own production reliability and on-call</li><li>Drive FinOps across AWS and GCP</li>"}
+    ],
+    "additional": "<p>We are remote-first.</p>"
+  },
+  {
+    "id": "a1b2c3d4-0000-4000-8000-000000000002",
+    "text": "Site Reliability Engineer II",
+    "hostedUrl": "https://jobs.lever.co/examplelever/a1b2c3d4-0000-4000-8000-000000000002",
+    "createdAt": 1758800000000,
+    "workplaceType": "hybrid",
+    "categories": {"location": "Seattle, WA", "team": "Engineering"},
+    "description": "<p>Hands-on SRE role.</p>",
+    "lists": [],
+    "additional": ""
+  }
+]

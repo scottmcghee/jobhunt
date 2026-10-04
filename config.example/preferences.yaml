@@ -1,0 +1,442 @@
+# EXAMPLE preferences, copied to config/preferences.yaml by setup. They are tuned for a
+# Director/VP engineering-leadership search around Seattle: change every list to fit yours.
+#
+# Hard filters applied before any LLM call. Cheap, deterministic, and testable.
+#
+# A job must pass EVERY section to be scored. Matching is case-insensitive and by whole word or
+# phrase: "intern" finds "Intern" and "Interns" but not "Internal". End a term with * to match
+# any ending: "recruit*" finds "Recruiting" and "Recruiter".
+
+title:
+  # At least one of these must appear in the title.
+  must_include_any:
+    - "avp"
+    - director
+    - "evp"
+    - head of
+    - senior manager
+    - "sr. manager"
+    - "svp"
+    - "vice president"
+    - "vp"
+  # None of these may appear in the title.
+  must_exclude_any:
+    - "account*"
+    - ad operations
+    - advancement
+    - advisory
+    - advocacy
+    - affairs
+    - agency
+    - AI
+    - alliance
+    - alliances
+    - analytics
+    - antibody
+    - appeals
+    - application security
+    - applied science
+    - area director
+    - art director
+    - asset
+    - audit
+    - autonomy
+    - avionics
+    - benefits
+    - bid management
+    - bioanalysis
+    - bioinformatics
+    - biology
+    - brand
+    - business development
+    - business line
+    - business operations
+    - business systems
+    - campaigns
+    - category management
+    - channel
+    - chemical
+    - chemistry
+    - chief information security officer
+    - city operations
+    - claims
+    - client director
+    - client management
+    - client partner
+    - client services
+    - clinical
+    - cmc
+    - commerce
+    - commercial law
+    - "commercial*"
+    - communications
+    - community
+    - compensation
+    - competitive intelligence
+    - complaints
+    - compliance
+    - configuration management
+    - consulting
+    - content
+    - continuous improvement
+    - contracting
+    - contracts
+    - controller
+    - conversion
+    - corporate applications
+    - corporate communications
+    - corporate controller
+    - corporate development
+    - corporate strategy
+    - counsel
+    - country director
+    - creative
+    - creator
+    - credentialing
+    - ctv
+    - curriculum
+    - customer adoption
+    - customer education
+    - customer experience
+    - customer onboarding
+    - customer success
+    - customer support
+    - customer training
+    - customer trust
+    - cyber security
+    - cybersecurity
+    - data center
+    - data science
+    - datacenter
+    - deal desk
+    - decision science
+    - defense
+    - delivery operations
+    - demand generation
+    - demand planning
+    - deployment operations
+    - "design*"
+    - detection
+    - development test
+    - dimensional
+    - director of it
+    - director of media
+    - director of planning
+    - director of product
+    - "director of product -"
+    - "director of product,"
+    - director of security
+    - "director, it"
+    - discovery
+    - drug
+    - dynamics
+    - economics
+    - editorial
+    - electrical
+    - engagement
+    - enterprise applications
+    - enterprise security
+    - equity
+    - event
+    - executive assistant
+    - executive support
+    - expansion
+    - experience optimization
+    - facilities
+    - field
+    - finance
+    - financial planning
+    - financial services
+    - financial systems
+    - fincrime
+    - finished goods
+    - firmware
+    - fleet
+    - flight
+    - formulation
+    - forward deployed
+    - fp&a
+    - fraud
+    - freelance
+    - fulfillment
+    - fund
+    - general manager
+    - global delivery
+    - global operations
+    - global security
+    - global support
+    - go-to-market
+    - government program
+    - government programs
+    - grc
+    - grievances
+    - growth
+    - GTM
+    - gxp
+    - hardware
+    - head of operations
+    - head of product
+    - "head of product -"
+    - "head of product,"
+    - head of security
+    - higher education
+    - hillel
+    - hr
+    - hr operations
+    - HRBP
+    - human resources
+    - imaging
+    - immunoassay
+    - impact
+    - implementation
+    - "industrial*"
+    - influencer
+    - information security
+    - information technology
+    - innovation
+    - insights
+    - insurance
+    - intellectual property
+    - intern
+    - internal controls
+    - international
+    - investment banking
+    - investor relations
+    - learning & development
+    - learning from demonstration
+    - legal
+    - lending
+    - licensing
+    - life sciences
+    - lighting
+    - listings
+    - live operations
+    - loan
+    - logistics
+    - m&a
+    - machine learning
+    - maintenance
+    - managing director
+    - manufacturing
+    - manufacturing operations
+    - market
+    - marketing
+    - marketplaces
+    - martech
+    - materials
+    - mechanical
+    - media director
+    - media planning
+    - medical
+    - medicine
+    - merchandise
+    - merchandising
+    - merchant
+    - mission director
+    - mission engineering
+    - mission readiness
+    - mission systems
+    - molecular
+    - multimedia
+    - network development
+    - nurse
+    - nursing
+    - office of the
+    - oil and gas
+    - oligonucleotide
+    - oncology
+    - order to cash
+    - order-to-cash
+    - organizing
+    - origination
+    - outreach
+    - paid acquisition
+    - paid media
+    - paid search
+    - paid social
+    - partner development
+    - partner management
+    - partner programs
+    - partner success
+    - partner support
+    - partnerships
+    - payer
+    - payloads
+    - payment operations
+    - payroll
+    - people
+    - perception
+    - pharmacist
+    - pharmacokinetics
+    - pharmacology
+    - physical security
+    - physics
+    - piracy
+    - pmo
+    - policy
+    - portfolio management
+    - pr
+    - practice
+    - pricing
+    - private equity
+    - procure-to-pay
+    - procurement
+    - product director
+    - product line
+    - product management
+    - product manager
+    - product operations
+    - product security
+    - product support
+    - "product,"
+    - professional services
+    - program business
+    - program delivery
+    - program director
+    - program management
+    - program manager
+    - program strategy
+    - programmatic
+    - project development
+    - project management
+    - project manager
+    - provider
+    - public affairs
+    - publications
+    - publishing
+    - qc
+    - quantum
+    - quote-to-cash
+    - real estate
+    - "recruit*"
+    - regional director
+    - regional vice president
+    - regulatory
+    - regulatory affairs
+    - relations
+    - relationship management
+    - renewals
+    - research operations
+    - residency
+    - retail
+    - retention
+    - revenue
+    - revenue operations
+    - revops
+    - risk
+    - safety
+    - sales
+    - salesforce
+    - scenic
+    - scientific director
+    - scientist
+    - seasonal
+    - security engineering
+    - security operations
+    - security ops
+    - security services
+    - SEO
+    - shared services
+    - silicon
+    - site head
+    - site selection
+    - sled
+    - sme
+    - social media
+    - solution
+    - sourcing
+    - SOX
+    - specialist
+    - speech
+    - sterility
+    - strategic
+    - strategies
+    - strategy
+    - success
+    - supplier
+    - supply
+    - supply chain
+    - survey
+    - sustainability
+    - sustaining
+    - "svp, product"
+    - systems integration
+    - talent
+    - talent acquisition
+    - tax
+    - technical support
+    - territory
+    - test & evaluation
+    - test director
+    - test engineering
+    - test operations
+    - therapy
+    - third party
+    - threat
+    - tiktok
+    - total rewards
+    - trading
+    - transformation
+    - transportation
+    - travel
+    - treasury
+    - trust administration
+    - underwriting
+    - user experience
+    - venture
+    - vp of it
+    - vp product
+    - "vp, product"
+    - vulnerability
+    - warehouse security
+    - wealth
+    - wholesale
+    - workplace
+
+domain:
+  # At least one of these must appear in title OR body.
+  must_include_any:
+    - cloud
+    - developer experience
+    - developer productivity
+    - devex
+    - devops
+    - engineering operations
+    - infrastructure
+    - platform
+    - production engineering
+    - site reliability
+    - sre
+    - technical operations
+
+location:
+  # A job passes if it is remote-eligible OR its location text matches one of these.
+  allow_remote: true
+  accept_any:
+    - " wa "
+    - bellevue
+    - bothell
+    - everett
+    - kirkland
+    - lynnwood
+    - pacific northwest
+    - redmond
+    - "remote (us)"
+    - "remote - us"
+    - seattle
+    - "united states"
+    - "us-remote"
+    - "usa"
+    - "wa,"
+    - "washington"
+  # Remote roles whose text names one of these are rejected (foreign-only remote).
+  reject_any:
+    - "canada only"
+    - "emea only"
+    - "india"
+    - "remote - europe"
+    - "remote - uk"
+
+scoring:
+  # Only roles scoring at or above this get a generated letter.
+  min_score_for_letter: 7

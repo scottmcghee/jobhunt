@@ -1,0 +1,26 @@
+# runtime state and generated output
+data/
+output/
+!data/.gitkeep
+!output/.gitkeep
+
+# secrets and personal details: your own profile, kit, preferences, and board list.
+# Committed templates live in config.example/; copy them to config/ to start.
+.env
+config/
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store

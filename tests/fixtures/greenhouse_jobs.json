@@ -1,0 +1,37 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/1001",
+      "id": 1001,
+      "title": "Director of Platform Engineering",
+      "updated_at": "2026-09-28T17:02:11-04:00",
+      "location": {"name": "Seattle, WA or Remote (US)"},
+      "content": "&lt;div&gt;&lt;p&gt;We are hiring a &lt;strong&gt;Director of Platform Engineering&lt;/strong&gt; to lead our infrastructure, developer experience, and SRE teams.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Own AWS infrastructure and cloud cost&lt;/li&gt;&lt;li&gt;Lead a team of 20 across platform and reliability&lt;/li&gt;&lt;/ul&gt;&lt;/div&gt;"
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/1002",
+      "id": 1002,
+      "title": "Senior Software Engineer, Backend",
+      "updated_at": "2026-09-20T10:00:00-04:00",
+      "location": {"name": "Remote - US"},
+      "content": "&lt;p&gt;Build APIs in Go on our Kubernetes platform.&lt;/p&gt;"
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/1003",
+      "id": 1003,
+      "title": "Director of Sales Engineering",
+      "updated_at": "2026-09-21T10:00:00-04:00",
+      "location": {"name": "Austin, TX"},
+      "content": "&lt;p&gt;Lead our pre-sales infrastructure demos.&lt;/p&gt;"
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/1004",
+      "id": 1004,
+      "title": "VP, Infrastructure",
+      "updated_at": "2026-09-22T10:00:00-04:00",
+      "location": {"name": "London, UK (Remote - UK)"},
+      "content": "&lt;p&gt;Lead infrastructure and SRE for our European business.&lt;/p&gt;"
+    }
+  ],
+  "meta": {"total": 4}
+}
