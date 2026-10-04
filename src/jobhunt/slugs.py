@@ -1,12 +1,17 @@
 """Harvest ATS board slugs from Common Crawl index files, or any other text.
 
-    python -m jobhunt.slugs [INDEX ...] [--companies PATH] [-o OUT]
+    python -m jobhunt.slugs [INDEX ...] [--companies PATH] [-o OUT] [--check]
 
 Each INDEX is any text file: every http(s) URL in it is checked for a job board. Lines grepped
 from Common Crawl index files (``zgrep myworkdayjobs cdx-*.gz``), JSON records, plain URL lists,
-and saved HTML all work. The output is a
-block of entries ready to paste under ``companies:`` in config/companies.yaml. Slugs already
-listed there are left out, so the output can be regenerated and re-pasted as more data arrives.
+and saved HTML all work. The output is a block of entries ready to paste under ``companies:`` in
+config/companies.yaml. Slugs already listed there are left out, so the output can be regenerated
+and re-pasted as more data arrives.
+
+Without ``--check`` this runs offline. With it, the first page of each new board is fetched
+through its source adapter (no descriptions), and the board is dropped if it has no open postings
+or answers with a 4xx other than 429: a SmartRecruiters identifier with no postings, say, or a
+Greenhouse slug that 404s. Boards that time out, are rate limited, or fail with a 5xx are kept.
 """
 
 from __future__ import annotations
@@ -16,18 +21,22 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import httpx
 import yaml
 
 from jobhunt import config
 from jobhunt.schema import ATSName, Company
+from jobhunt.sources import fetch_company
 
 log = logging.getLogger("jobhunt.slugs")
 
 DEFAULT_INDEX = Path("data/commoncrawl.txt")
 DEFAULT_OUT = Path("data/companies.generated.yaml")
+CHECK_WORKERS = 4
 
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
 _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
@@ -159,13 +168,48 @@ def read_urls(path: Path) -> Iterator[str]:
                 yield _trim(url)
 
 
+def _client() -> httpx.Client:
+    return httpx.Client(
+        timeout=20.0,
+        headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
+        follow_redirects=True,
+    )
+
+
+def _has_jobs(company: Company, client: httpx.Client) -> bool:
+    """Whether a board is worth listing. Boards that can't be checked right now are kept."""
+    try:
+        jobs = fetch_company(company, client, wants_body=lambda job: False, max_pages=1)
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        if status < 500 and status != 429:  # 429: busy, not gone
+            log.info("dropped %s: HTTP %s", company.key, status)
+            return False
+        log.warning("%s: kept, could not check (HTTP %s)", company.key, status)
+        return True
+    except httpx.HTTPError as e:
+        log.warning("%s: kept, could not check (%s)", company.key, e)
+        return True
+    if not jobs:
+        log.info("dropped %s: no open postings", company.key)
+    return bool(jobs)
+
+
+def check(companies: list[Company], client: httpx.Client) -> list[Company]:
+    """The boards that have open postings, in their original order."""
+    with ThreadPoolExecutor(CHECK_WORKERS) as pool:
+        keep = list(pool.map(lambda c: _has_jobs(c, client), companies))
+    return [c for c, k in zip(companies, keep, strict=True) if k]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m jobhunt.slugs", description=__doc__)
     parser.add_argument("index", nargs="*", type=Path, default=[DEFAULT_INDEX])
     parser.add_argument("--companies", type=Path, help="existing companies.yaml to skip")
     parser.add_argument("-o", "--out", type=Path, default=DEFAULT_OUT)
+    check_help = "fetch the first page of each new board; drop those with no open postings"
+    parser.add_argument("--check", action="store_true", help=check_help)
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     missing = [p for p in args.index if not p.is_file()]
     if missing:
@@ -174,10 +218,19 @@ def main(argv: list[str] | None = None) -> int:
 
     known = config.load_companies(args.companies)
     found = discover((url for p in args.index for url in read_urls(p)), known)
+    if args.check:
+        with _client() as client:
+            checked = check(found, client)
+        log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
+        found = checked
     args.out.write_text(render(found))
     log.info("%d new companies -> %s (%d already known)", len(found), args.out, len(known))
     return 0
 
 
 if __name__ == "__main__":
+    # Progress and drop reasons from this module only: --check would otherwise log every request
+    # (httpx) and every board's job count (sources) as well.
+    logging.basicConfig(level=logging.ERROR, format="%(message)s")
+    log.setLevel(logging.INFO)
     raise SystemExit(main())

@@ -41,6 +41,8 @@ src/jobhunt/
   storage.py          # seen-set and 404 ledgers, JSONL append
   llm.py              # the ONLY module that talks to a model: Anthropic SDK or `claude -p` backend
   cli.py              # `jobhunt fetch | score | letter | run`
+  slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
+                      # offline, except --check, which fetches the first page of each new board via sources/
 tests/
   fixtures/           # real-shaped ATS responses, anonymized
 data/                 # runtime state (gitignored)

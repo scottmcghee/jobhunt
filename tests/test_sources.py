@@ -272,3 +272,37 @@ def test_fetch_company_passes_wants_body_to_smartrecruiters(smartrecruiters_comp
         assert detail.call_count == 0
         fetch_company(smartrecruiters_company, client)  # default: every posting gets its description
         assert detail.call_count == 3
+
+
+@respx.mock
+def test_workday_max_pages_stops_early(workday_company):
+    page = {
+        "total": 45,
+        "jobPostings": [{"title": f"Job {i}", "externalPath": f"/job/X/Job_{i}", "locationsText": "X"} for i in range(20)],
+    }
+    listing = respx.post(WD + "/jobs").mock(return_value=httpx.Response(200, json=page))
+    with httpx.Client() as client:
+        jobs = workday.fetch(workday_company, client, lambda job: False, max_pages=1)
+    assert len(jobs) == 20 and listing.call_count == 1
+
+
+@respx.mock
+def test_smartrecruiters_max_pages_stops_early(smartrecruiters_company):
+    page = {"offset": 0, "limit": 100, "totalFound": 250, "content": [{"id": str(i), "name": "Job", "location": {}} for i in range(100)]}
+    listing = respx.get(SR).mock(return_value=httpx.Response(200, json=page))
+    with httpx.Client() as client:
+        jobs = smartrecruiters.fetch(smartrecruiters_company, client, lambda job: False, max_pages=1)
+    assert len(jobs) == 100 and listing.call_count == 1
+
+
+@respx.mock
+def test_fetch_company_passes_max_pages(smartrecruiters_company, gh_company, fixture_json):
+    page = {"offset": 0, "limit": 100, "totalFound": 250, "content": [{"id": str(i), "name": "Job", "location": {}} for i in range(100)]}
+    listing = respx.get(SR).mock(return_value=httpx.Response(200, json=page))
+    respx.get("https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs").mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    with httpx.Client() as client:
+        fetch_company(smartrecruiters_company, client, wants_body=lambda job: False, max_pages=1)
+        assert listing.call_count == 1
+        assert len(fetch_company(gh_company, client, max_pages=1)) == 4  # one request anyway
