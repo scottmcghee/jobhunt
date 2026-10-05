@@ -39,7 +39,7 @@ src/jobhunt/
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
   storage.py          # seen-set and 404 ledgers, JSONL append
-  llm.py              # the ONLY module that talks to a model: Anthropic SDK or `claude -p` backend
+  llm.py              # the ONLY module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
   cli.py              # `jobhunt fetch | score | letter | run`
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
                       # offline, except --check, which fetches the first page of each new board via sources/
@@ -66,7 +66,7 @@ output/               # generated letters (gitignored)
 ## Conventions
 
 - Python 3.11+. `httpx` for HTTP, `pydantic` v2 for models, `pyyaml` for config, `anthropic` SDK for Claude.
-- Model and backend selection live in one place: `llm.py`. `JOBHUNT_BACKEND` picks `anthropic` or `claude-code`; `JOBHUNT_MODEL` overrides the model. Tests fake the `Completer`; never call a real backend in tests.
+- Model and backend selection live in one place: `llm.py`. `JOBHUNT_BACKEND` picks `anthropic`, `claude-code`, or `bedrock` (never chosen automatically); `JOBHUNT_MODEL` overrides the model. Tests fake the `Completer`; never call a real backend in tests.
 - Logging via `logging`, not `print`, except in `cli.py` output.
 - Dates are ISO 8601 strings in UTC.
 

@@ -37,14 +37,21 @@ cp -R config.example config      # your own copy; config/ is gitignored
 
 ## Pick a model backend
 
-`llm.py` is the only module that talks to a model, and it supports two interchangeable backends:
+`llm.py` is the only module that talks to a model, and it supports three interchangeable backends:
 
 | Backend | How it runs | Auth | Select with |
 |---|---|---|---|
 | `claude-code` | Shells out to the Claude Code CLI: `claude -p --tools "" --max-turns 1` | Your Claude subscription login (`claude auth login`) | Automatic when `claude` is on PATH and no API key is set |
 | `anthropic` | Anthropic Python SDK | `ANTHROPIC_API_KEY` from the [Claude Console](https://platform.claude.com) (pay-as-you-go) | Automatic when `ANTHROPIC_API_KEY` is set |
+| `bedrock` | Anthropic Python SDK's [Amazon Bedrock](https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock) client, billed to your AWS account | `AWS_REGION`, plus a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` or your usual AWS credentials | `JOBHUNT_BACKEND=bedrock` only, never automatic |
 
-Force one with `JOBHUNT_BACKEND=claude-code` or `JOBHUNT_BACKEND=anthropic`. Override the model with `JOBHUNT_MODEL` (an alias like `sonnet` for the CLI, a full model ID for the SDK).
+Force one with `JOBHUNT_BACKEND=claude-code`, `anthropic`, or `bedrock`. Override the model with `JOBHUNT_MODEL`: an alias like `sonnet` for the CLI, a full model ID for the SDK, or a Bedrock model ID such as `anthropic.claude-opus-5-5` for Bedrock.
+
+For Bedrock, enable access to the model in the AWS console first; the default is Claude Sonnet 5.5 (`anthropic.claude-sonnet-5-5`), with thinking turned off so its short answers fit their token limits. A Bedrock API key works with the base install. To sign with regular AWS credentials (environment variables, a profile, SSO, or a role), also install the AWS signing libraries:
+
+```bash
+pip install -e ".[bedrock]"
+```
 
 The CLI backend runs each call stateless, tool-less, and single-turn, so it behaves like a plain completion endpoint. Every score and letter records which backend and model produced it.
 
@@ -95,7 +102,7 @@ Read `CLAUDE.md` first. It is the contract for anyone — human or model — cha
 
 ## Design notes
 
-- **Single source of truth for the model call.** `llm.py` is the only module that knows about the Anthropic SDK or the Claude Code CLI. Everything else takes a `Completer` callable, so tests inject a fake and never need a key or a subprocess.
+- **Single source of truth for the model call.** `llm.py` is the only module that knows about the Anthropic SDK, Bedrock, or the Claude Code CLI. Everything else takes a `Completer` callable, so tests inject a fake and never need a key or a subprocess.
 - **Pydantic at the boundaries.** `Job`, `Score`, `ScoredJob`, `Letter`. A malformed ATS response or an out-of-range score fails loudly at the edge.
 - **Fixtures over mocks.** `tests/fixtures/` holds real-shaped responses from each ATS (anonymized), including Greenhouse's habit of returning HTML that is itself entity-escaped — a bug the fixture caught on the first run.
 - **Boring storage.** JSON and JSONL on disk. The whole state is `data/`; delete it to start over.
