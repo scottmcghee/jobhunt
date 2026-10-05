@@ -307,3 +307,114 @@ def test_stats_per_group():
     stats = transport.stats()
     assert stats["greenhouse"] == {"requests": 2, "throttles": 1, "max_in_flight": 1, "limit": 2.0}
     assert stats["lever"]["requests"] == 1 and stats["lever"]["throttles"] == 0
+
+
+# ------------------------------------------------------------------ stopping
+
+STOP_WAIT = 5  # seconds; only reached if a test is broken
+
+
+def _acquire_in_thread(lim):
+    """Start ``lim.acquire()`` on a thread; returns the thread and what acquire raised (if anything)."""
+    import threading
+
+    raised: list[BaseException] = []
+
+    def run():
+        try:
+            lim.acquire()
+        except BaseException as e:
+            raised.append(e)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, raised
+
+
+def test_a_limiter_waiting_out_a_pause_wakes_and_raises_when_stopped():
+    import threading
+
+    stop, sleeping = threading.Event(), threading.Event()
+
+    def sleep(seconds):  # the real wait, announced
+        sleeping.set()
+        stop.wait(seconds)
+
+    lim = throttle.GroupLimiter(start=2, ceiling=6, sleep=sleep, stop=stop)
+    lim.acquire()
+    lim.release(throttled=True, retry_after=100)
+    thread, raised = _acquire_in_thread(lim)
+    assert sleeping.wait(STOP_WAIT)
+    stop.set()
+    thread.join(STOP_WAIT)
+    assert not thread.is_alive()
+    assert [type(e) for e in raised] == [throttle.Stopped]
+    assert lim.in_flight == 0
+
+
+def test_a_limiter_waiting_for_a_slot_wakes_and_raises_when_stopped():
+    import threading
+
+    stop = threading.Event()
+    lim = throttle.GroupLimiter(start=1, ceiling=1, stop=stop)
+    lim.acquire()  # the only slot, never released
+    thread, raised = _acquire_in_thread(lim)
+    stop.set()
+    thread.join(STOP_WAIT)
+    assert not thread.is_alive()
+    assert [type(e) for e in raised] == [throttle.Stopped]
+    assert lim.in_flight == 1
+
+
+def test_stopped_is_not_an_http_error():
+    # so a description fetch's `except httpx.HTTPError` doesn't report it as a missing description
+    assert not issubclass(throttle.Stopped, httpx.HTTPError)
+
+
+@pytest.mark.parametrize("how", ["stop", "close"])
+def test_a_stopped_transport_sends_nothing(how):
+    sent = []
+    transport = throttle.ThrottledTransport(inner=httpx.MockTransport(lambda r: sent.append(r) or httpx.Response(200)))
+    client = httpx.Client(transport=transport)
+    assert client.get(URL).status_code == 200
+    getattr(transport, how)()
+    with pytest.raises(throttle.Stopped):
+        transport.handle_request(httpx.Request("GET", URL))
+    assert len(sent) == 1
+    assert transport.limiter("greenhouse").in_flight == 0
+
+
+def test_a_request_waiting_for_a_global_slot_is_not_sent_after_a_stop():
+    import threading
+
+    first_in, finish_first = threading.Event(), threading.Event()
+    sent = []
+
+    def handler(request):
+        sent.append(request.url)
+        if len(sent) == 1:
+            first_in.set()
+            assert finish_first.wait(STOP_WAIT)
+        return httpx.Response(200)
+
+    transport = throttle.ThrottledTransport(inner=httpx.MockTransport(handler), max_in_flight=1)
+    first = threading.Thread(target=transport.handle_request, args=(httpx.Request("GET", URL),), daemon=True)
+    first.start()
+    assert first_in.wait(STOP_WAIT)
+    raised: list[BaseException] = []
+
+    def second():
+        try:
+            transport.handle_request(httpx.Request("GET", "https://api.lever.co/v0/postings/acme"))
+        except BaseException as e:
+            raised.append(e)
+
+    waiting = threading.Thread(target=second, daemon=True)
+    waiting.start()  # holds lever's slot, then waits for the one global slot
+    transport.stop()
+    finish_first.set()  # the request in flight finishes; the waiting one must not go out
+    first.join(STOP_WAIT)
+    waiting.join(STOP_WAIT)
+    assert not waiting.is_alive()
+    assert [type(e) for e in raised] == [throttle.Stopped]
+    assert len(sent) == 1

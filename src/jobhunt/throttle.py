@@ -16,6 +16,9 @@ halves it, never below 1, at most once per ``COOLDOWN``, so a burst of 429s from
 were already in flight counts as one signal.
 
 The default inner transport retries a failed connection once (httpx's default client: never).
+
+``stop()`` (or ``close()``) ends the run: requests waiting for a slot or out a pause wake and
+raise ``Stopped``, and no new request is sent; one already sent finishes.
 """
 
 from __future__ import annotations
@@ -35,6 +38,10 @@ from jobhunt.sources import request_group
 MAX_RETRIES = 3
 MAX_RETRY_AFTER = 120.0  # seconds; a server asking for more gets a skipped board instead
 COOLDOWN = 5.0  # seconds between two halvings of one group's limit
+
+
+class Stopped(Exception):
+    """The transport was stopped, so the request wasn't sent. Not an httpx.HTTPError, on purpose."""
 
 
 def retry_after_seconds(value: str | None, now: float | None = None) -> float | None:
@@ -62,7 +69,8 @@ class GroupLimiter:
         start: int = 2,
         ceiling: int = 6,
         clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], None] | None = None,
+        stop: threading.Event | None = None,
     ):
         self.ceiling = ceiling
         self.limit = float(min(start, ceiling))
@@ -73,11 +81,15 @@ class GroupLimiter:
         self.max_in_flight = 0
         self._cooldown_until = 0.0
         self._clock = clock
-        self._sleep = sleep
+        self._stop = stop or threading.Event()
+        self._sleep = sleep or self._stop.wait  # by default a pause ends early on a stop
         self._cond = threading.Condition()
 
     def acquire(self) -> None:
+        """Wait for a slot and out any pause; raises ``Stopped`` once ``stop`` is set."""
         while True:
+            if self._stop.is_set():
+                raise Stopped
             with self._cond:
                 wait = self.pause_until - self._clock()
                 if wait <= 0:
@@ -126,7 +138,7 @@ class ThrottledTransport(httpx.BaseTransport):
         start: int = 2,
         ceiling: int = 6,
         clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], None] | None = None,
         jitter: Callable[[], float] = lambda: random.uniform(0, 0.5),
         max_in_flight: int | None = None,
         limits: httpx.Limits | None = None,
@@ -143,6 +155,7 @@ class ThrottledTransport(httpx.BaseTransport):
         self._clock, self._sleep, self._jitter = clock, sleep, jitter
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
+        self._stop = threading.Event()
         # Caps requests in flight across all groups; taken after the group's slot, never before.
         self._slots = threading.BoundedSemaphore(max_in_flight) if max_in_flight else None
 
@@ -150,7 +163,11 @@ class ThrottledTransport(httpx.BaseTransport):
         with self._lock:
             if group not in self._limiters:
                 self._limiters[group] = GroupLimiter(
-                    self._start, self._ceiling, clock=self._clock, sleep=self._sleep
+                    self._start,
+                    self._ceiling,
+                    clock=self._clock,
+                    sleep=self._sleep,
+                    stop=self._stop,
                 )
             return self._limiters[group]
 
@@ -176,10 +193,10 @@ class ThrottledTransport(httpx.BaseTransport):
             limiter.acquire()
             try:
                 if self._slots is None:
-                    response = self._inner.handle_request(request)
+                    response = self._send(request)
                 else:
                     with self._slots:
-                        response = self._inner.handle_request(request)
+                        response = self._send(request)
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
                 delay = retry_after_seconds(retry_after)
@@ -207,5 +224,15 @@ class ThrottledTransport(httpx.BaseTransport):
             limiter.release(neutral=response.status_code >= 500)
             return response
 
+    def _send(self, request: httpx.Request) -> httpx.Response:
+        if self._stop.is_set():  # stopped while waiting for the slot
+            raise Stopped
+        return self._inner.handle_request(request)
+
+    def stop(self) -> None:
+        """Send nothing more; wake every request waiting for a slot or out a pause."""
+        self._stop.set()
+
     def close(self) -> None:
+        self.stop()
         self._inner.close()

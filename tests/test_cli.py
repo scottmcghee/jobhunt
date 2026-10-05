@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
 import respx
 
-from jobhunt import cli, storage
+from jobhunt import cli, storage, throttle
 from jobhunt.schema import Score, ScoredJob
 from tests.conftest import make_completer
 
@@ -669,18 +671,124 @@ def test_verbose_fetch_prints_per_group_stats(tmp_path, fixture_json, capsys):
 
 
 @respx.mock
-def test_fetch_gives_every_board_the_shared_pool(tmp_path, fixture_json, monkeypatch):
+def test_fetch_gives_each_rate_group_its_own_pool(tmp_path, fixture_json, monkeypatch):
     companies = tmp_path / "companies.yaml"
-    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
-    respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
-    pools = []
+    companies.write_text(
+        "companies:\n"
+        "  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n"
+        "  - name: Other\n    ats: greenhouse\n    slug: other\n"
+        "  - name: ExampleLever\n    ats: lever\n    slug: examplelever\n"
+    )
+    for slug in ("examplecorp", "other"):
+        respx.get(GH.format(slug)).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    respx.get("https://api.lever.co/v0/postings/examplelever").mock(
+        return_value=httpx.Response(200, json=fixture_json("lever_postings.json"))
+    )
+    pools = {}
     real = cli.fetch_company
 
     def fetch(company, client, **kwargs):
-        pools.append(kwargs.get("pool"))
+        pools[company.slug] = kwargs.get("pool")
         return real(company, client, **kwargs)
 
     monkeypatch.setattr(cli, "fetch_company", fetch)
-    assert _fetch(tmp_path, companies, "--workers", "3") == 0
-    (pool,) = pools
-    assert pool is not None and pool._max_workers == 3
+    assert _fetch(tmp_path, companies, "--workers", "8", "--per-host", "3") == 0
+    assert pools["examplecorp"] is pools["other"]  # one host, one queue
+    assert pools["examplelever"] is not pools["examplecorp"]
+    assert {pool._max_workers for pool in pools.values()} == {3}
+
+
+def _throttled_transport(handler):
+    """Stands in for cli._transport: the real throttling, over a fake network."""
+    return lambda workers=32, per_host=6: throttle.ThrottledTransport(
+        inner=httpx.MockTransport(handler), ceiling=per_host, max_in_flight=workers
+    )
+
+
+def _workday_page(request, total):
+    offset = json.loads(request.content)["offset"]
+    postings = [{"title": f"J{offset + i}", "externalPath": f"/job/X/J_{offset + i}", "locationsText": "X"}
+                for i in range(20)]
+    return httpx.Response(200, json={"total": total if offset == 0 else 0, "jobPostings": postings})
+
+
+def test_one_hosts_pooled_pages_do_not_hold_up_anothers(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n"
+        "  - name: BigWorkday\n    ats: workday\n    slug: big/External\n    datacenter: wd5\n"
+        "  - name: SmallSR\n    ats: smartrecruiters\n    slug: smallsr\n"
+    )
+    workday_stuck, small_done = threading.Event(), threading.Event()
+    waited = []
+
+    def handler(request):
+        if "myworkdayjobs" in request.url.host:
+            if json.loads(request.content)["offset"] == 20:  # a later page that hangs...
+                workday_stuck.set()
+                waited.append(small_done.wait(5))  # ...until the other host's board is done
+            return _workday_page(request, total=60)
+        offset = int(request.url.params["offset"])
+        if offset == 0:  # queue SmallSR's later pages only once BigWorkday's are stuck
+            assert workday_stuck.wait(5)
+        postings = [{"id": str(offset + i), "name": f"S{offset + i}", "location": {}} for i in range(100)]
+        return httpx.Response(200, json={"totalFound": 200, "content": postings})
+
+    real = cli.fetch_company
+
+    def fetch(company, client, **kwargs):
+        jobs = real(company, client, **kwargs)
+        if company.slug == "smallsr":
+            small_done.set()
+        return jobs
+
+    monkeypatch.setattr(cli, "_transport", _throttled_transport(handler))
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, companies, "--dry-run", "--workers", "2", "--per-host", "1") == 0
+    assert waited == [True]
+
+
+def test_an_interrupt_stops_pooled_requests_waiting_out_a_429(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n"
+        "  - name: Slow\n    ats: greenhouse\n    slug: slow\n"
+        "  - name: Big\n    ats: workday\n    slug: big/External\n    datacenter: wd5\n"
+    )
+    throttled = threading.Event()
+    later_pages = []
+
+    def handler(request):
+        if json.loads(request.content)["offset"] != 0:
+            later_pages.append(request)
+            if len(later_pages) == 1:  # pauses the datacenter; the other pages wait it out
+                throttled.set()
+                return httpx.Response(429, headers={"Retry-After": "60"})
+        return _workday_page(request, total=2000)
+
+    real = cli.fetch_company
+
+    def fetch(company, client, **kwargs):
+        if company.slug == "slow":
+            assert throttled.wait(5)
+            raise KeyboardInterrupt  # Ctrl-C while Big's pages wait out the pause
+        return real(company, client, **kwargs)
+
+    pools = []
+
+    class Pool(ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            pools.append(self)
+
+    monkeypatch.setattr(cli, "_transport", _throttled_transport(handler))
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    monkeypatch.setattr(cli, "ThreadPoolExecutor", Pool)
+    assert _fetch(tmp_path, companies, "--dry-run", "--workers", "8", "--per-host", "6") == 130
+    sent = len(later_pages)
+    for pool in pools:  # every pool thread must finish now, not when the pause ends
+        joiner = threading.Thread(target=pool.shutdown, kwargs={"wait": True}, daemon=True)
+        joiner.start()
+        joiner.join(5)
+        assert not joiner.is_alive()
+    assert len(later_pages) == sent == 1

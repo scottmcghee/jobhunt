@@ -487,3 +487,49 @@ def test_fetch_company_passes_the_pool(workday_company):
     respx.post(WD + "/jobs").mock(side_effect=_workday_pages(45, together={20, 40}))
     with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
         assert len(fetch_company(workday_company, client, wants_body=lambda job: False, pool=pool)) == 45
+
+
+def _pages_with_gaps(source, total, empty):
+    """Listing pages for ``source``; the pages at offsets in ``empty`` come back with no postings."""
+    size = 20 if source == "workday" else 100
+
+    def page(request):
+        if source == "workday":
+            offset = json.loads(request.content)["offset"]
+        else:
+            offset = int(request.url.params["offset"])
+        n = 0 if offset in empty else max(0, min(size, total - offset))
+        if source == "workday":
+            postings = [{"title": f"Job {offset + i}", "externalPath": f"/job/X/Job_{offset + i}", "locationsText": "X"}
+                        for i in range(n)]
+            return httpx.Response(200, json={"total": total if offset == 0 else 0, "jobPostings": postings})
+        postings = [{"id": str(offset + i), "name": f"Job {offset + i}", "location": {}} for i in range(n)]
+        return httpx.Response(200, json={"totalFound": total, "content": postings})
+
+    return page
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["serial", "pooled"])
+@pytest.mark.parametrize(
+    ("source", "total", "empty", "expected"),
+    [
+        ("workday", 65, {0}, 0),  # an empty first page ends the listing, whatever the total says
+        ("workday", 65, {20}, 20),  # so does an empty later page: nothing after it is kept
+        ("smartrecruiters", 250, {0}, 0),
+        ("smartrecruiters", 250, {100}, 100),
+    ],
+)
+@respx.mock
+def test_an_empty_page_ends_the_listing_in_both_paths(
+    source, total, empty, expected, pooled, workday_company, smartrecruiters_company
+):
+    company, module, route = {
+        "workday": (workday_company, workday, respx.post(WD + "/jobs")),
+        "smartrecruiters": (smartrecruiters_company, smartrecruiters, respx.get(SR)),
+    }[source]
+    listing = route.mock(side_effect=_pages_with_gaps(source, total, empty))
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        jobs = module.fetch(company, client, lambda job: False, pool=pool if pooled else None)
+    assert len(jobs) == expected
+    if 0 in empty:
+        assert listing.call_count == 1

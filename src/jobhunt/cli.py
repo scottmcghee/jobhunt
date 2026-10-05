@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager
@@ -98,13 +99,48 @@ def _host_refused(response: httpx.Response) -> bool:
     return not (isinstance(body, dict) and "errorCode" in body)
 
 
+class _GroupPools:
+    """One thread pool per rate group, for boards' later pages and descriptions.
+
+    A board's pooled work only queues behind its own host's, as with the runner's board queues.
+    Its threads only send requests, never wait on a pool, so they can't deadlock.
+    """
+
+    def __init__(self, size: int):
+        self._size = size
+        self._pools: dict[str, ThreadPoolExecutor] = {}
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def get(self, group: str) -> ThreadPoolExecutor:
+        with self._lock:
+            if group not in self._pools:
+                pool = ThreadPoolExecutor(self._size, thread_name_prefix=f"fetch-{group}")
+                if self._closed:  # a board starting after the end gets a pool that refuses work
+                    pool.shutdown()
+                self._pools[group] = pool
+            return self._pools[group]
+
+    def shutdown(self) -> None:
+        with self._lock:
+            self._closed = True
+            pools = list(self._pools.values())
+        for pool in pools:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+
 @contextmanager
-def _shut_down_on_exit(pool: ThreadPoolExecutor) -> Iterator[None]:
-    """Cancel queued page requests on the way out, so Ctrl-C isn't held up by them."""
+def _stop_on_exit(transport: throttle.ThrottledTransport, pools: _GroupPools) -> Iterator[None]:
+    """On the way out (Ctrl-C included), send nothing more and cancel queued page requests.
+
+    Stopping the transport first wakes pool threads waiting for a slot or out a 429 pause, so
+    the process can exit once the requests already sent are done.
+    """
     try:
         yield
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        transport.stop()
+        pools.shutdown()
 
 
 def _refused(outcome: BoardOutcome) -> bool:
@@ -188,15 +224,19 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     dead: set[str] = set()
     interrupted = False
     transport = _transport(args.workers, args.per_host)
-    # Shared by every board for its later pages and descriptions (Workday, SmartRecruiters).
-    # Its threads only send requests, never wait on the pool, so it can't deadlock; the
+    # Later pages and descriptions (Workday, SmartRecruiters) go to their group's pool; the
     # transport's per-host and global limits still decide how many are in flight.
-    pool = ThreadPoolExecutor(args.workers, thread_name_prefix="fetch-pages")
-    with _client(transport) as client, _shut_down_on_exit(pool):
+    pools = _GroupPools(args.per_host)
+    with _client(transport) as client, _stop_on_exit(transport, pools):
         boards = BoardRunner(
             companies,
             lambda company: _fetch_board(
-                company, client, title_passes, args.verbose, lambda: boards.stopping, pool
+                company,
+                client,
+                title_passes,
+                args.verbose,
+                lambda: boards.stopping,
+                pools.get(rate_group(company)),
             ),
             group_of=rate_group,
             per_group=args.per_host,

@@ -80,11 +80,15 @@ def _list(
     pool: Executor | None = None,
 ) -> list[dict]:
     postings, total = _page(company, client, 0)
+    if not postings:  # an empty page ends the listing, whatever the total says
+        return postings
     offsets = range(PAGE_SIZE, min(total, MAX_POSTINGS), PAGE_SIZE)
     if max_pages is not None:
         offsets = offsets[: max_pages - 1]
     if pool is not None:  # every offset is known now, so the rest can go at once
         for page in pool.map(lambda offset: _page(company, client, offset)[0], offsets):
+            if not page:  # as in the serial loop; leaving map() cancels the pages not yet started
+                break
             postings += page
         return postings
     for offset in offsets:
