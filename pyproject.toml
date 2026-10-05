@@ -21,7 +21,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "respx>=0.21",
-    "ruff>=0.5",
+    "ruff==0.16.10",  # pinned so local runs and CI agree; bump deliberately
 ]
 
 [project.scripts]
