@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -92,8 +93,8 @@ def load_scores(data_dir: Path) -> list[ScoredJob]:
     return [ScoredJob.model_validate(r) for r in read_jsonl(data_dir / "scores.jsonl")]
 
 
-def _slug(s: str, limit: int | None = 60) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:limit]
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
 _LETTER_HEADER = re.compile(r"<!-- (\S+) \|")
@@ -114,9 +115,10 @@ def lettered_job_keys(output_dir: Path) -> set[str]:
 
 def write_letter(letter: Letter, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    # The posting's external id keeps two postings with the same company and title apart.
-    posting = _slug(letter.job_key.split(":", 2)[-1], limit=None)
-    path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}__{posting}.md"
+    # A short hash of the job key keeps two postings with the same company and title apart
+    # (even one requisition on two boards of a tenant) and keeps the name a bounded length.
+    key_hash = hashlib.sha1(letter.job_key.encode()).hexdigest()[:10]
+    path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}__{key_hash}.md"
     header = (
         f"<!-- {letter.job_key} | modules: {', '.join(letter.modules_used)} | "
         f"{letter.model} | {letter.generated_at} -->\n\n"

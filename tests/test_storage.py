@@ -23,7 +23,7 @@ def test_jobs_jsonl_roundtrip(tmp_path, platform_director_job):
     assert len(jobs) == 1 and jobs[0].key == platform_director_job.key
 
 
-def test_write_letter_names_file_by_company_title_and_posting(tmp_path):
+def test_write_letter_names_file_by_company_title_and_key_hash(tmp_path):
     letter = Letter(
         job_key="greenhouse:x:1",
         company="Example Corp",
@@ -33,8 +33,34 @@ def test_write_letter_names_file_by_company_title_and_posting(tmp_path):
         model="t",
     )
     path = storage.write_letter(letter, tmp_path)
-    assert path.name == "example-corp__director-platform-engineering__1.md"
+    assert path.name == "example-corp__director-platform-engineering__275f06b4bb.md"
     assert "greenhouse:x:1" in path.read_text()
+
+
+def test_write_letter_keeps_same_posting_on_two_boards_apart(tmp_path):
+    # One Workday tenant, two sites: same company name, title, and external id; different keys.
+    keys = {
+        "workday:adobe/external_experienced:Senior-Software-Engineer_R1002-1",
+        "workday:adobe/university:Senior-Software-Engineer_R1002-1",
+    }
+    for key in keys:
+        letter = Letter(job_key=key, company="Adobe", title="Senior Software Engineer", modules_used=[], text="x", model="t")
+        storage.write_letter(letter, tmp_path)
+    assert len(list(tmp_path.glob("*.md"))) == 2
+    assert storage.lettered_job_keys(tmp_path) == keys
+
+
+def test_write_letter_bounds_the_filename(tmp_path):
+    letter = Letter(
+        job_key="workday:tenant/site:" + "x" * 300,
+        company="C" * 200,
+        title="T" * 200,
+        modules_used=[],
+        text="x",
+        model="t",
+    )
+    path = storage.write_letter(letter, tmp_path)
+    assert path.exists() and len(path.name.encode()) <= 255
 
 
 def test_miss_ledger_counts_resets_and_persists(tmp_path):
