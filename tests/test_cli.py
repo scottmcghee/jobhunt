@@ -654,3 +654,15 @@ def test_a_host_level_refusal_trips_the_breaker(tmp_path, monkeypatch, response)
     )
     assert _fetch(tmp_path, _seven_boards(tmp_path), "--per-host", "1") == 0
     assert route.call_count == 5  # the breaker trips after five in a row
+
+
+@respx.mock
+def test_verbose_fetch_prints_per_group_stats(tmp_path, fixture_json, capsys):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert "requests by host" not in capsys.readouterr().err
+    assert cli.main(["-v", "--data-dir", str(tmp_path / "data"), "--companies", str(companies), "fetch", "--dry-run"]) == 0
+    err = capsys.readouterr().err
+    assert "requests by host" in err and "greenhouse" in err and "1 requests" in err
