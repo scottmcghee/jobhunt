@@ -47,6 +47,8 @@ src/jobhunt/
                       # offline, except --check, which fetches the first page of each new board via sources/
 tests/
   fixtures/           # real-shaped ATS responses, anonymized
+scripts/
+  bench_fetch.py      # times fetch on a stratified sample of boards, to tune --workers/--per-host
 data/                 # runtime state (gitignored)
 output/               # generated letters (gitignored)
 ```

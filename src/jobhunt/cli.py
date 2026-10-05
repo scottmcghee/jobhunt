@@ -39,16 +39,30 @@ from jobhunt.sources import fetch_company, rate_group
 log = logging.getLogger("jobhunt")
 
 
-def _client(workers: int = 32, per_host: int = 6) -> httpx.Client:
+def _transport(workers: int = 32, per_host: int = 6) -> throttle.ThrottledTransport:
     # Polite by construction: per-group concurrency limits, and retries on 429 (see throttle.py).
     # `workers` caps requests in flight across all groups and sizes the connection pool to match.
     pool = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
+    return throttle.ThrottledTransport(ceiling=per_host, max_in_flight=workers, limits=pool)
+
+
+def _client(transport: httpx.BaseTransport) -> httpx.Client:
     return httpx.Client(
-        transport=throttle.ThrottledTransport(ceiling=per_host, max_in_flight=workers, limits=pool),
+        transport=transport,
         timeout=20.0,
         headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
         follow_redirects=True,
     )
+
+
+def _print_stats(transport: throttle.ThrottledTransport) -> None:
+    print("requests by host:", file=sys.stderr)
+    for group, st in transport.stats().items():
+        print(
+            f"  {group:<18} {st['requests']:>5} requests, {st['throttles']:>3} throttled, "
+            f"peak {st['max_in_flight']} in flight, limit now {st['limit']:.1f}",
+            file=sys.stderr,
+        )
 
 
 # --------------------------------------------------------------------------- commands
@@ -160,7 +174,8 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     new_jobs: list[Job] = []
     dead: set[str] = set()
     interrupted = False
-    with _client(args.workers, args.per_host) as client:
+    transport = _transport(args.workers, args.per_host)
+    with _client(transport) as client:
         boards = BoardRunner(
             companies,
             lambda company: _fetch_board(
@@ -183,6 +198,8 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
                 print("finished out of order:")
             for outcome in late:
                 _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
+    if args.verbose:
+        _print_stats(transport)
 
     if args.dry_run:
         for j in new_jobs:

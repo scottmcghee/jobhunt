@@ -154,6 +154,20 @@ class ThrottledTransport(httpx.BaseTransport):
                 )
             return self._limiters[group]
 
+    def stats(self) -> dict[str, dict[str, float]]:
+        """Per group: requests sent (retries included), throttles, peak in flight, current limit."""
+        with self._lock:
+            limiters = dict(self._limiters)
+        return {
+            group: {
+                "requests": lim.requests,
+                "throttles": lim.throttles,
+                "max_in_flight": lim.max_in_flight,
+                "limit": lim.limit,
+            }
+            for group, lim in sorted(limiters.items())
+        }
+
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         limiter = self.limiter(request_group(request.url))
         retries = 0

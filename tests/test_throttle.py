@@ -293,3 +293,17 @@ def test_limits_size_the_connection_pool(monkeypatch):
     _no_proxy_env(monkeypatch)
     transport = throttle.ThrottledTransport(limits=httpx.Limits(max_connections=32))
     assert transport._inner._pool._max_connections == 32
+
+
+@respx.mock
+def test_stats_per_group():
+    clock = FakeClock()
+    respx.get(URL).mock(side_effect=[httpx.Response(429, headers={"Retry-After": "0"}), httpx.Response(200)])
+    respx.get("https://api.lever.co/v0/postings/acme").mock(return_value=httpx.Response(200, json=[]))
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    with httpx.Client(transport=transport) as client:
+        client.get(URL)
+        client.get("https://api.lever.co/v0/postings/acme")
+    stats = transport.stats()
+    assert stats["greenhouse"] == {"requests": 2, "throttles": 1, "max_in_flight": 1, "limit": 2.0}
+    assert stats["lever"]["requests"] == 1 and stats["lever"]["throttles"] == 0
