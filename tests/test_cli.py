@@ -290,7 +290,7 @@ def test_fetch_interrupted_saves_what_it_has(tmp_path, fixture_json, monkeypatch
     )
     _failing_for("later", KeyboardInterrupt(), monkeypatch)
 
-    assert _fetch(tmp_path, companies) == 130
+    assert _fetch(tmp_path, companies, "--per-host", "1") == 130  # one worker: deterministic order
     assert "interrupted" in capsys.readouterr().err
     jobs = storage.load_jobs(tmp_path / "data")
     assert [j.title for j in jobs] == ["Director of Platform Engineering"]
@@ -303,7 +303,7 @@ def test_fetch_interrupted_dry_run_writes_nothing(tmp_path, fixture_json, monkey
         return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
     )
     _failing_for("broken", KeyboardInterrupt(), monkeypatch)
-    assert _fetch(tmp_path, _two_boards(tmp_path), "--dry-run") == 130
+    assert _fetch(tmp_path, _two_boards(tmp_path), "--dry-run", "--per-host", "1") == 130
     assert not (tmp_path / "data").exists()
 
 
@@ -422,3 +422,56 @@ def test_a_throttled_board_is_retried_not_skipped(tmp_path, fixture_json):
     assert route.call_count == 2
     assert [j.title for j in storage.load_jobs(tmp_path / "data")] == ["Director of Platform Engineering"]
     assert _misses(tmp_path).counts == {}
+
+
+
+@pytest.mark.parametrize("cmd", ["fetch", "run"])
+def test_concurrency_flags(cmd):
+    args = cli.build_parser().parse_args([cmd])
+    assert (args.workers, args.per_host) == (32, 6)
+    args = cli.build_parser().parse_args([cmd, "--workers", "1", "--per-host", "1"])
+    assert (args.workers, args.per_host) == (1, 1)
+
+
+@respx.mock
+def test_a_group_that_keeps_refusing_is_skipped(tmp_path, caplog):
+    p = tmp_path / "companies.yaml"
+    p.write_text("companies:\n" + "".join(f"  - name: B{i}\n    ats: greenhouse\n    slug: b{i}\n" for i in range(7)))
+    route = respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
+        return_value=httpx.Response(403)
+    )
+    assert _fetch(tmp_path, p, "--per-host", "1") == 0
+    assert route.call_count == 5  # the breaker trips after five refusals in a row
+    assert "skipping its other 2" in caplog.text
+    assert _misses(tmp_path).counts == {}  # refused or skipped isn't a 404
+
+
+@respx.mock
+def test_interrupt_keeps_a_board_that_finished_out_of_order(tmp_path, fixture_json, monkeypatch, capsys):
+    import threading
+
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - name: Slow\n    ats: greenhouse\n    slug: slow\n\n"
+        "  - name: ExampleLever\n    ats: lever\n    slug: examplelever\n"
+    )
+    respx.get("https://api.lever.co/v0/postings/examplelever").mock(
+        return_value=httpx.Response(200, json=fixture_json("lever_postings.json"))
+    )
+    lever_done = threading.Event()
+    real = cli.fetch_company
+
+    def fetch(company, client, **kwargs):
+        if company.slug == "slow":
+            assert lever_done.wait(5)
+            raise KeyboardInterrupt  # Ctrl-C while the first board is still running
+        jobs = real(company, client, **kwargs)
+        lever_done.set()
+        return jobs
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, p) == 130
+    out = capsys.readouterr().out
+    assert "finished out of order" in out and "ExampleLever" in out
+    assert [j.company for j in storage.load_jobs(tmp_path / "data")] == ["ExampleLever"]

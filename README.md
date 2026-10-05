@@ -62,11 +62,14 @@ The CLI backend runs each call stateless, tool-less, and single-turn, so it beha
 ```bash
 jobhunt fetch --dry-run          # what would be recorded, without recording it
 jobhunt fetch -v                 # record new postings; -v shows why each rejected one was rejected
+jobhunt fetch --workers 1 --per-host 1   # the gentlest, slowest setting (defaults: 32 and 6)
 jobhunt score                    # score everything not yet scored
 jobhunt list --min-score 7       # the shortlist
 jobhunt letter                   # write letters for the shortlist into output/ (skips jobs that have one; --force rewrites)
 jobhunt run                      # all of the above
 ```
+
+`fetch` works on many boards at once: each Workday datacenter and each API host has its own queue and at most `--per-host` requests in flight (fewer while the host is answering 429), and `--workers` caps the total. Output still comes out in `companies.yaml` order. If one host refuses five boards in a row (429 or 403), its remaining boards are skipped for that run; lower the two flags to get through a strict host. Ctrl-C keeps every board that finished, including those that finished ahead of their turn.
 
 Re-running `fetch` is idempotent; `data/seen.json` is the ledger. A board that returns HTTP 404 on three fetches in a row is removed from `config/companies.yaml` (counts live in `data/misses.json`; any successful fetch resets them). SmartRecruiters answers an unknown company with an empty list rather than a 404, so those boards are never removed; `fetch` logs a warning for any SmartRecruiters board with no postings instead.
 

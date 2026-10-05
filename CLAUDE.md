@@ -40,6 +40,7 @@ src/jobhunt/
   generate.py         # Claude call: ScoredJob x Kit -> Letter
   storage.py          # seen-set and 404 ledgers, JSONL append
   throttle.py         # polite HTTP for fetch: per-group concurrency limits, 429/Retry-After retries
+  runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the ONLY module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
   cli.py              # `jobhunt fetch | score | letter | run`
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;

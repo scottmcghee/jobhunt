@@ -30,17 +30,20 @@ from jobhunt import config, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, make_completer
+from jobhunt.runner import BoardRunner
 from jobhunt.schema import Company, Job
 from jobhunt.score import score_job
-from jobhunt.sources import fetch_company
+from jobhunt.sources import fetch_company, rate_group
 
 log = logging.getLogger("jobhunt")
 
 
-def _client() -> httpx.Client:
+def _client(workers: int = 32, per_host: int = 6) -> httpx.Client:
     # Polite by construction: per-group concurrency limits, and retries on 429 (see throttle.py).
+    # `workers` caps requests in flight across all groups and sizes the connection pool to match.
+    pool = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
     return httpx.Client(
-        transport=throttle.ThrottledTransport(),
+        transport=throttle.ThrottledTransport(ceiling=per_host, max_in_flight=workers, limits=pool),
         timeout=20.0,
         headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
         follow_redirects=True,
@@ -61,6 +64,12 @@ class BoardOutcome:
     company: Company
     jobs: list[Job] | None = None
     status: int | None = None
+    skipped: bool = False  # not fetched: its group's circuit breaker had tripped
+
+
+def _refused(outcome: BoardOutcome) -> bool:
+    """A host pushing back (rate limit or block), which feeds the runner's circuit breaker."""
+    return outcome.status in (403, 429)
 
 
 def _fetch_board(
@@ -94,6 +103,8 @@ def _record(
 ) -> None:
     """Fold one board's outcome into the run's books and print its line. Main thread only."""
     company = outcome.company
+    if outcome.skipped:
+        return
     if outcome.jobs is None:
         if outcome.status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
             dead.add(company.key)
@@ -126,15 +137,27 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     new_jobs: list[Job] = []
     dead: set[str] = set()
     interrupted = False
-    with _client() as client:
+    with _client(args.workers, args.per_host) as client:
+        boards = BoardRunner(
+            companies,
+            lambda company: _fetch_board(company, client, title_passes, args.verbose),
+            group_of=rate_group,
+            per_group=args.per_host,
+            refused=_refused,
+            skip=lambda company: BoardOutcome(company, skipped=True),
+        )
         try:
-            for company in companies:
-                outcome = _fetch_board(company, client, title_passes, args.verbose)
+            for outcome in boards:  # in companies.yaml order, whatever order they finish in
                 _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
         except KeyboardInterrupt:
             # Keep what the finished boards found; the next run picks up the rest.
             interrupted = True
             print("\ninterrupted: keeping the boards fetched so far", file=sys.stderr)
+            late = boards.finished_out_of_order()
+            if late:
+                print("finished out of order:")
+            for outcome in late:
+                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
 
     if args.dry_run:
         for j in new_jobs:
@@ -253,6 +276,15 @@ def cmd_run(args: argparse.Namespace, data_dir: Path, output_dir: Path) -> int:
 # --------------------------------------------------------------------------- parser
 
 
+def _concurrency_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--workers", type=int, default=32, metavar="N",
+                   help="most requests in flight across all boards (default: 32)")
+    p.add_argument("--per-host", type=int, default=6, metavar="N",
+                   help="most in flight per Workday datacenter or API host; it adapts below this "
+                        "when a host answers 429 (default: 6). --workers 1 --per-host 1 is the "
+                        "gentlest setting")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jobhunt", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -279,6 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="pull postings, filter, record new ones")
     f.add_argument("--company", metavar="NAME", help=company_help)
     f.add_argument("--dry-run", action="store_true", help=dry_run_help)
+    _concurrency_args(f)
 
     s = sub.add_parser("score", help="score unscored jobs with Claude")
     s.add_argument("--limit", type=int, metavar="N", help=limit_help)
@@ -295,6 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="fetch -> score -> letter")
     r.add_argument("--company", metavar="NAME", help=company_help)
     r.add_argument("--dry-run", action="store_true", help=dry_run_help)
+    _concurrency_args(r)
     r.add_argument("--limit", type=int, metavar="N", help=limit_help)
     r.add_argument("--rescore", action="store_true", help=rescore_help)
     r.add_argument("--min-score", type=int, metavar="N", help=min_score_help)

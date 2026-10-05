@@ -258,3 +258,38 @@ def test_the_default_transport_connects_directly_without_a_proxy(monkeypatch):
     _no_proxy_env(monkeypatch)
     inner = throttle.ThrottledTransport()._inner
     assert not isinstance(inner._pool, httpcore.HTTPProxy)
+
+
+@respx.mock
+def test_max_in_flight_caps_requests_across_groups():
+    # with a cap of 1, the lever request can't start while the greenhouse one is in flight
+    import threading
+
+    greenhouse_in, lever_started = threading.Event(), threading.Event()
+    overlapped = []
+
+    def greenhouse(request):
+        greenhouse_in.set()
+        overlapped.append(lever_started.wait(0.5))  # times out only if lever is held back
+        return httpx.Response(200)
+
+    def lever(request):
+        lever_started.set()
+        return httpx.Response(200)
+
+    respx.get(URL).mock(side_effect=greenhouse)
+    respx.get("https://api.lever.co/v0/postings/acme").mock(side_effect=lever)
+    transport = throttle.ThrottledTransport(max_in_flight=1)
+    with httpx.Client(transport=transport) as client:
+        first = threading.Thread(target=client.get, args=(URL,))
+        first.start()
+        assert greenhouse_in.wait(5)
+        client.get("https://api.lever.co/v0/postings/acme")
+        first.join()
+    assert overlapped == [False]
+
+
+def test_limits_size_the_connection_pool(monkeypatch):
+    _no_proxy_env(monkeypatch)
+    transport = throttle.ThrottledTransport(limits=httpx.Limits(max_connections=32))
+    assert transport._inner._pool._max_connections == 32

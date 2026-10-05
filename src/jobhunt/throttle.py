@@ -128,18 +128,23 @@ class ThrottledTransport(httpx.BaseTransport):
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = lambda: random.uniform(0, 0.5),
+        max_in_flight: int | None = None,
+        limits: httpx.Limits | None = None,
     ):
         if inner is None:
             proxies = urllib.request.getproxies()
             proxy = proxies.get("https") or proxies.get("all")
             if proxy and "://" not in proxy:
                 proxy = f"http://{proxy}"  # as httpx does for a bare host:port
-            inner = httpx.HTTPTransport(retries=1, proxy=proxy)
+            # httpx.Client ignores its own limits when given a transport, so they go here
+            inner = httpx.HTTPTransport(retries=1, proxy=proxy, limits=limits or httpx.Limits())
         self._inner = inner
         self._start, self._ceiling = start, ceiling
         self._clock, self._sleep, self._jitter = clock, sleep, jitter
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
+        # Caps requests in flight across all groups; taken after the group's slot, never before.
+        self._slots = threading.BoundedSemaphore(max_in_flight) if max_in_flight else None
 
     def limiter(self, group: str) -> GroupLimiter:
         with self._lock:
@@ -156,7 +161,11 @@ class ThrottledTransport(httpx.BaseTransport):
         while True:
             limiter.acquire()
             try:
-                response = self._inner.handle_request(request)
+                if self._slots is None:
+                    response = self._inner.handle_request(request)
+                else:
+                    with self._slots:
+                        response = self._inner.handle_request(request)
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
                 delay = retry_after_seconds(retry_after)
