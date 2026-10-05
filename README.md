@@ -102,6 +102,8 @@ ruff check .
 
 Read `CLAUDE.md` first. It is the contract for anyone — human or model — changing this code.
 
+In Claude Code, `/pr-review-loop <PR#>` reviews a pull request with a skeptical reviewer agent, has a fixer agent fix and push what the review proves wrong, and repeats until a round finds nothing (at most 3), posting each round's summary on the PR. The agents and the skill are in `.claude/`.
+
 ## Design notes
 
 - **Single source of truth for the model call.** `llm.py` is the only module that knows about the Anthropic SDK, Bedrock, or the Claude Code CLI. Everything else takes a `Completer` callable, so tests inject a fake and never need a key or a subprocess.

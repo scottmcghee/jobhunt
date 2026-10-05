@@ -62,6 +62,7 @@ output/               # generated letters (gitignored)
 3. Implement the smallest change that passes.
 4. `pytest -q`. Then `ruff check .` if available.
 5. Summarize what changed and what was *not* changed.
+6. Open a PR and run `/pr-review-loop <PR#>` on it before the owner merges. A read-only `pr-reviewer` agent reports only verified findings, a `pr-fixer` agent fixes the confirmed ones test-first and pushes, and the loop repeats until a round is clean (at most 3). Both agents and the skill live in `.claude/`.
 
 ## Conventions
 
