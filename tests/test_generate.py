@@ -122,3 +122,11 @@ def test_letter_leaves_room_for_the_reply(scored_job, profile, kit):
 
     generate_letter(scored_job, profile, kit, complete)
     assert budgets == [800]
+
+
+def test_letter_prompt_takes_the_target_from_the_profile():
+    from jobhunt.generate import SYSTEM as LETTER_SYSTEM
+
+    # what the candidate wants comes from profile.md's Target section, not from the code
+    assert "Director/VP" not in LETTER_SYSTEM and "infrastructure/platform" not in LETTER_SYSTEM
+    assert "Target" in LETTER_SYSTEM

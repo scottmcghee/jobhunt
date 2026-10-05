@@ -26,7 +26,7 @@ Score the role 1-10 for THIS candidate using the rubric:
 
 Rules:
 - Treat the candidate's "Known gaps" section as facts. If the posting's primary requirement is a
-  known gap (e.g., deep production Kubernetes ownership), the ceiling is 5.
+  known gap (e.g., a core technology the profile lists as a gap), the ceiling is 5.
 - Do not inflate. Most roles score 4-7. A 9 or 10 should be rare.
 - "suggested_modules" must be exactly two ids from the provided module list, best matched to what
   the posting spends the most words on.

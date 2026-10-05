@@ -30,7 +30,7 @@ paragraphs that will appear in the letter. Produce:
    unusual emphasis in the JD, a technology choice, a mission detail. Concrete beats flattering.
    Never "I've long admired..." Never generic.
 2. custom_closing_sentence — ONE sentence on why this specific role fits what the candidate wants
-   (Director/VP, infrastructure/platform/data/engineering leadership).
+   (the Target section of the profile).
 
 Rules:
 - Use only facts present in the profile or the posting. Invent nothing about the candidate.
