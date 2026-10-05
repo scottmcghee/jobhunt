@@ -21,8 +21,8 @@ Score the role 1-10 for THIS candidate using the rubric:
 6-7 Plausible: level or domain is a partial match; two gaps, or one gap that is a core requirement.
 4-5 Stretch: the posting's core requirement is in the candidate's known-gaps list,
     or level is off by one.
-1-3 No: wrong level (IC or far above), wrong function, wrong geography, or a
-    disqualifying requirement.
+1-3 No: wrong level (well below or far above the profile's Target), wrong function,
+    wrong geography, or a disqualifying requirement.
 
 Rules:
 - Treat the candidate's "Known gaps" section as facts. If the posting's primary requirement is a
