@@ -24,8 +24,9 @@ clean and `git rev-parse HEAD` equals `origin/<head>` (if not, stop and tell the
 create one next to the repo: `git worktree add ../jobhunt-pr-$0 <head>` (or with
 `-b <head> origin/<head>` if no local branch exists). Note whether you created it, so you can
 remove it at the end. A new worktree gets the same check: if its `git rev-parse HEAD` does not
-equal `git rev-parse origin/<head>`, run `git merge --ff-only origin/<head>` there, and stop and
-tell the user if that fails.
+equal `git rev-parse origin/<head>`, run `git merge --ff-only origin/<head>` there, then compare
+them again: continue only if they are now equal (the merge also exits 0 when the local branch is
+ahead), otherwise stop and tell the user.
 
 ## 2. Rounds (at most 3)
 
