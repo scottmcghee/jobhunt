@@ -60,8 +60,9 @@ output/               # generated letters (gitignored)
    - **Scope:** the files expected to change, and what will deliberately *not* change.
 2. Add or update the test.
 3. Implement the smallest change that passes.
-4. `pytest -q`. Then `ruff check .` if available.
+4. `pytest`. Then `ruff check .` if available.
 5. Summarize what changed and what was *not* changed.
+6. Open a PR, then run `/pr-review-loop <PR#>` on it before the owner merges (the owner can also run it). A read-only `pr-reviewer` agent reports only verified findings, a `pr-fixer` agent fixes the confirmed ones test-first and pushes, and the loop repeats until a round is clean (at most 3). The owner has given standing approval for the loop on every PR: the fixer fixes and pushes confirmed findings without a separate plan, and steps 2-4 still apply. Both agents and the skill live in `.claude/`.
 
 ## Conventions
 
