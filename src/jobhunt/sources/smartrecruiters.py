@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import Executor
 
 import httpx
 
@@ -64,21 +65,38 @@ def normalize(company: Company, posting: dict, detail: dict | None = None) -> Jo
     )
 
 
-def _list(company: Company, client: httpx.Client, max_pages: int | None = None) -> list[dict]:
-    url = BASE.format(slug=company.slug)
-    postings: list[dict] = []
-    offset = pages = 0
-    while True:
-        resp = client.get(url, params={"limit": PAGE_SIZE, "offset": offset})
-        resp.raise_for_status()
-        data = resp.json()
-        page = data.get("content") or []
-        total = min(int(data.get("totalFound") or 0), MAX_POSTINGS)
+def _page(company: Company, client: httpx.Client, offset: int) -> tuple[list[dict], int]:
+    """One listing page, and the total it reports (every page has it)."""
+    resp = client.get(BASE.format(slug=company.slug), params={"limit": PAGE_SIZE, "offset": offset})
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("content") or [], int(data.get("totalFound") or 0)
+
+
+def _list(
+    company: Company,
+    client: httpx.Client,
+    max_pages: int | None = None,
+    pool: Executor | None = None,
+) -> list[dict]:
+    postings, total = _page(company, client, 0)
+    if not postings:  # an empty page ends the listing, whatever the total says
+        return postings
+    offsets = range(PAGE_SIZE, min(total, MAX_POSTINGS), PAGE_SIZE)
+    if max_pages is not None:
+        offsets = offsets[: max_pages - 1]
+    if pool is not None:  # every offset is known now, so the rest can go at once
+        for page in pool.map(lambda offset: _page(company, client, offset)[0], offsets):
+            if not page:  # as in the serial loop; leaving map() cancels the pages not yet started
+                break
+            postings += page
+        return postings
+    for offset in offsets:
+        page, _ = _page(company, client, offset)
+        if not page:
+            break
         postings += page
-        offset += PAGE_SIZE
-        pages += 1
-        if not page or offset >= total or pages == max_pages:
-            return postings
+    return postings
 
 
 def _detail(company: Company, client: httpx.Client, posting_id: str) -> dict | None:
@@ -96,16 +114,22 @@ def fetch(
     client: httpx.Client,
     wants_body: Callable[[Job], bool] = lambda job: True,
     max_pages: int | None = None,
+    pool: Executor | None = None,
 ) -> list[Job]:
-    jobs: dict[str, Job] = {}
-    for posting in with_ids(company, _list(company, client, max_pages)):
+    """All postings; with ``pool``, later pages and descriptions are fetched concurrently."""
+    listed: dict[str, tuple[dict, Job]] = {}
+    for posting in with_ids(company, _list(company, client, max_pages, pool)):
         job = normalize(company, posting)
-        if job.external_id in jobs:  # postings can shift between pages
-            continue
-        if wants_body(job) and (detail := _detail(company, client, job.external_id)):
+        listed.setdefault(job.external_id, (posting, job))  # postings can shift between pages
+    wanted = [posting for posting, job in listed.values() if wants_body(job)]
+    ids = [str(posting["id"]) for posting in wanted]
+    run = pool.map if pool is not None else map
+    details = run(lambda posting_id: _detail(company, client, posting_id), ids)
+    for posting, detail in zip(wanted, details, strict=True):
+        if detail:
             job = normalize(company, posting, detail)
-        jobs[job.external_id] = job
-    if not jobs:
+            listed[job.external_id] = (posting, job)
+    if not listed:
         log.warning("smartrecruiters %s: 0 postings — check the identifier", company.slug)
-    log.info("smartrecruiters %s: %d jobs", company.slug, len(jobs))
-    return list(jobs.values())
+    log.info("smartrecruiters %s: %d jobs", company.slug, len(listed))
+    return [job for _, job in listed.values()]

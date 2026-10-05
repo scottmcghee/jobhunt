@@ -21,7 +21,10 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from concurrent.futures import Executor, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,6 +99,50 @@ def _host_refused(response: httpx.Response) -> bool:
     return not (isinstance(body, dict) and "errorCode" in body)
 
 
+class _GroupPools:
+    """One thread pool per rate group, for boards' later pages and descriptions.
+
+    A board's pooled work only queues behind its own host's, as with the runner's board queues.
+    Its threads only send requests, never wait on a pool, so they can't deadlock.
+    """
+
+    def __init__(self, size: int):
+        self._size = size
+        self._pools: dict[str, ThreadPoolExecutor] = {}
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def get(self, group: str) -> ThreadPoolExecutor:
+        with self._lock:
+            if group not in self._pools:
+                pool = ThreadPoolExecutor(self._size, thread_name_prefix=f"fetch-{group}")
+                if self._closed:  # a board starting after the end gets a pool that refuses work
+                    pool.shutdown()
+                self._pools[group] = pool
+            return self._pools[group]
+
+    def shutdown(self) -> None:
+        with self._lock:
+            self._closed = True
+            pools = list(self._pools.values())
+        for pool in pools:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+
+@contextmanager
+def _stop_on_exit(transport: throttle.ThrottledTransport, pools: _GroupPools) -> Iterator[None]:
+    """On the way out (Ctrl-C included), send nothing more and cancel queued page requests.
+
+    Stopping the transport first wakes pool threads waiting for a slot or out a 429 pause, so
+    the process can exit once the requests already sent are done.
+    """
+    try:
+        yield
+    finally:
+        transport.stop()
+        pools.shutdown()
+
+
 def _refused(outcome: BoardOutcome) -> bool:
     """A host pushing back (rate limit or block), which feeds the runner's circuit breaker."""
     return outcome.refused
@@ -107,6 +154,7 @@ def _fetch_board(
     wants_body: Callable[[Job], bool],
     verbose: bool,
     stopping: Callable[[], bool] = lambda: False,
+    pool: Executor | None = None,
 ) -> BoardOutcome:
     """Fetch one board. Touches no shared state, and a failing board never stops the run.
 
@@ -114,7 +162,8 @@ def _fetch_board(
     under boards still in flight, and the runner discards their outcomes anyway.
     """
     try:
-        return BoardOutcome(company, jobs=fetch_company(company, client, wants_body=wants_body))
+        jobs = fetch_company(company, client, wants_body=wants_body, pool=pool)
+        return BoardOutcome(company, jobs=jobs)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
         if not stopping():
@@ -175,11 +224,19 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     dead: set[str] = set()
     interrupted = False
     transport = _transport(args.workers, args.per_host)
-    with _client(transport) as client:
+    # Later pages and descriptions (Workday, SmartRecruiters) go to their group's pool; the
+    # transport's per-host and global limits still decide how many are in flight.
+    pools = _GroupPools(args.per_host)
+    with _client(transport) as client, _stop_on_exit(transport, pools):
         boards = BoardRunner(
             companies,
             lambda company: _fetch_board(
-                company, client, title_passes, args.verbose, lambda: boards.stopping
+                company,
+                client,
+                title_passes,
+                args.verbose,
+                lambda: boards.stopping,
+                pools.get(rate_group(company)),
             ),
             group_of=rate_group,
             per_group=args.per_host,
