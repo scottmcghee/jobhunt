@@ -1,5 +1,7 @@
 # jobhunt
 
+[![CI](https://github.com/scottmcghee/jobhunt/actions/workflows/ci.yml/badge.svg)](https://github.com/scottmcghee/jobhunt/actions/workflows/ci.yml)
+
 A small, tested Python CLI that watches company career pages, filters postings against hard constraints, scores the survivors against a fixed candidate profile with Claude, and assembles a tailored cover letter for the ones worth pursuing.
 
 I built this during my own search for Director/VP infrastructure and platform roles. It is also a worked example of how I think engineering should be done with AI assistance in 2026: a written constitution (`CLAUDE.md`), tests before implementation, no network in the test suite, and a hard line between what the model is allowed to decide and what it isn't.
