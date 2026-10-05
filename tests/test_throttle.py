@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 
+import httpcore
 import httpx
 import pytest
 import respx
@@ -72,7 +74,7 @@ def test_acquire_waits_out_a_pause():
 
 @pytest.mark.parametrize(
     ("header", "expected"),
-    [("7", 7.0), ("0", 0.0), ("999", throttle.MAX_RETRY_AFTER), ("soon", None), (None, None)],
+    [("7", 7.0), ("0", 0.0), ("999", 999.0), ("soon", None), (None, None), ("²", None)],
 )
 def test_retry_after_seconds(header, expected):
     assert throttle.retry_after_seconds(header) == expected
@@ -81,6 +83,13 @@ def test_retry_after_seconds(header, expected):
 def test_retry_after_http_date():
     now = 1_700_000_000.0
     header = "Tue, 14 Nov 2023 22:13:30 GMT"  # 10 s after `now`
+    assert throttle.retry_after_seconds(header, now=now) == pytest.approx(10.0)
+
+
+def test_retry_after_http_date_in_minus_zero_zone_is_utc():
+    # parsedate_to_datetime gives a naive datetime for -0000; it must not be read as local time
+    now = 1_700_000_000.0
+    header = "Tue, 14 Nov 2023 22:13:30 -0000"
     assert throttle.retry_after_seconds(header, now=now) == pytest.approx(10.0)
 
 
@@ -193,3 +202,51 @@ def test_a_throttled_workday_description_is_kept(workday_company, fixture_json):
     with _client(clock) as client:
         jobs = workday.fetch(workday_company, client, lambda job: job.title.startswith("Director of Platform"))
     assert "infrastructure & developer experience" in jobs[0].body
+
+
+@respx.mock
+def test_an_unparseable_retry_after_backs_off_and_frees_the_slot():
+    # "²" passes str.isdigit but not float(); it used to raise with the slot still held
+    clock = FakeClock()
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    respx.get(URL).mock(
+        side_effect=[httpx.Response(429, headers=[(b"Retry-After", "²".encode())]), httpx.Response(200)]
+    )
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 200
+    assert clock.slept == [1.0]
+    assert transport.limiter("greenhouse").in_flight == 0
+
+
+@respx.mock
+def test_a_retry_after_over_the_cap_is_not_retried_but_pauses_the_group():
+    clock = FakeClock()
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    route = respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "3600"}))
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 429  # the caller skips the board
+    assert route.call_count == 1
+    limiter = transport.limiter("greenhouse")
+    assert limiter.pause_until == pytest.approx(clock.now + throttle.MAX_RETRY_AFTER)
+    assert limiter.in_flight == 0
+
+
+def _no_proxy_env(monkeypatch):
+    for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    # only the environment, never this machine's system proxy settings
+    monkeypatch.setattr(urllib.request, "getproxies", urllib.request.getproxies_environment)
+
+
+def test_the_default_transport_uses_the_environment_https_proxy(monkeypatch):
+    # passing transport= to httpx.Client turns off its own env-proxy support, so we must do it
+    _no_proxy_env(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    inner = throttle.ThrottledTransport()._inner
+    assert isinstance(inner._pool, httpcore.HTTPProxy)
+
+
+def test_the_default_transport_connects_directly_without_a_proxy(monkeypatch):
+    _no_proxy_env(monkeypatch)
+    inner = throttle.ThrottledTransport()._inner
+    assert not isinstance(inner._pool, httpcore.HTTPProxy)

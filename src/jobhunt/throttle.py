@@ -4,15 +4,18 @@ Every request goes through ``ThrottledTransport``. It finds the request's rate-l
 (``sources.request_group``: a Workday datacenter or an API host) and:
 
 - waits for a free slot in that group's ``GroupLimiter``, and out any pause a 429 set;
-- retries a 429, or a 503 that carries Retry-After, after Retry-After seconds (capped) or a
-  1/2/4 s backoff, up to ``MAX_RETRIES`` times; the last response is then returned as is, so the
-  caller's ``raise_for_status`` handles it like any other error;
+- retries a 429, or a 503 that carries Retry-After, after Retry-After seconds or a 1/2/4 s
+  backoff, up to ``MAX_RETRIES`` times; the last response is then returned as is, so the
+  caller's ``raise_for_status`` handles it like any other error. A Retry-After over
+  ``MAX_RETRY_AFTER`` is not retried: the group pauses for the cap and the response is returned;
 - retries a 502 or 504 once;
 - passes everything else through untouched.
 
 ``GroupLimiter`` is AIMD: each success raises the limit by 1/limit, up to the ceiling; a throttle
 halves it, never below 1, at most once per ``COOLDOWN``, so a burst of 429s from requests that
 were already in flight counts as one signal.
+
+The default inner transport retries a failed connection once (httpx's default client: never).
 """
 
 from __future__ import annotations
@@ -21,7 +24,9 @@ import email.utils
 import random
 import threading
 import time
+import urllib.request
 from collections.abc import Callable
+from datetime import UTC
 
 import httpx
 
@@ -37,14 +42,16 @@ def retry_after_seconds(value: str | None, now: float | None = None) -> float | 
     if value is None:
         return None
     value = value.strip()
-    if value.isdigit():
-        return min(float(value), MAX_RETRY_AFTER)
+    if value.isascii() and value.isdigit():  # not "²", which isdigit() accepts but float() doesn't
+        return float(value)
     try:
         when = email.utils.parsedate_to_datetime(value)
     except (TypeError, ValueError):
         return None
+    if when.tzinfo is None:  # a "-0000" zone; it is still UTC, not local time
+        when = when.replace(tzinfo=UTC)
     now = time.time() if now is None else now
-    return min(max(when.timestamp() - now, 0.0), MAX_RETRY_AFTER)
+    return max(when.timestamp() - now, 0.0)
 
 
 class GroupLimiter:
@@ -106,7 +113,12 @@ def _throttled(response: httpx.Response) -> bool:
 
 
 class ThrottledTransport(httpx.BaseTransport):
-    """An httpx transport that applies the group limits and retries above to every request."""
+    """An httpx transport that applies the group limits and retries above to every request.
+
+    Giving httpx.Client a transport turns off its environment-proxy support, so the default
+    inner transport uses the HTTPS (else ALL) proxy from ``urllib.request.getproxies()`` itself.
+    NO_PROXY is not honored.
+    """
 
     def __init__(
         self,
@@ -117,7 +129,10 @@ class ThrottledTransport(httpx.BaseTransport):
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = lambda: random.uniform(0, 0.5),
     ):
-        self._inner = inner or httpx.HTTPTransport(retries=1)
+        if inner is None:
+            proxies = urllib.request.getproxies()
+            inner = httpx.HTTPTransport(retries=1, proxy=proxies.get("https") or proxies.get("all"))
+        self._inner = inner
         self._start, self._ceiling = start, ceiling
         self._clock, self._sleep, self._jitter = clock, sleep, jitter
         self._limiters: dict[str, GroupLimiter] = {}
@@ -139,14 +154,19 @@ class ThrottledTransport(httpx.BaseTransport):
             limiter.acquire()
             try:
                 response = self._inner.handle_request(request)
+                throttled = _throttled(response)
+                retry_after = response.headers.get("retry-after") if throttled else None
+                delay = retry_after_seconds(retry_after)
             except BaseException:
                 limiter.release(neutral=True)
                 raise
-            if _throttled(response):
+            if throttled:
+                if delay is not None and delay > MAX_RETRY_AFTER:
+                    limiter.release(throttled=True, retry_after=MAX_RETRY_AFTER)
+                    return response
                 if retries == MAX_RETRIES:
                     limiter.release(throttled=True)
                     return response
-                delay = retry_after_seconds(response.headers.get("retry-after"))
                 if delay is None:
                     delay = 2.0**retries + self._jitter()
                 retries += 1
