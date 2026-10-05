@@ -15,7 +15,8 @@ an item is skipped is decided when it is taken off the queue, so the logged coun
 
 Ctrl-C, or a ``KeyboardInterrupt`` raised inside ``work``, stops the run: iteration raises
 ``KeyboardInterrupt``, workers start no new items, and ``finished_out_of_order()`` returns the
-results that were done but not yet released. Any other exception from ``work``, ``refused`` or
+results that were done before the stop but not yet released; a result that comes back after it is
+dropped. Any other exception from ``work``, ``refused`` or
 ``skip`` stops the run the same way and is re-raised by the iteration. ``stopping`` tells work
 still in flight that the run is over.
 """
@@ -95,7 +96,7 @@ class BoardRunner(Generic[T, R]):
             raise
 
     def finished_out_of_order(self) -> list[R]:
-        """After an interrupt: results that were done but not yet released, in input order."""
+        """After an interrupt: results done before it but not yet released, in input order."""
         while True:
             try:
                 index, result = self._results.get_nowait()
@@ -125,6 +126,8 @@ class BoardRunner(Generic[T, R]):
                 self._count(group, result)
             except BaseException as e:  # queued so iteration raises it rather than waiting forever
                 self._results.put((index, _Failed(e)))
+                return
+            if self._stop.is_set():  # finished after the stop: the run no longer wants it
                 return
             self._results.put((index, result))
 

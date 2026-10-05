@@ -96,7 +96,7 @@ def _fetch_board(
     """Fetch one board. Touches no shared state, and a failing board never stops the run.
 
     Once the run is ``stopping`` (interrupted), errors go unreported: the client is being closed
-    under boards still in flight, and their outcomes are discarded anyway.
+    under boards still in flight, and the runner discards their outcomes anyway.
     """
     try:
         return BoardOutcome(company, jobs=fetch_company(company, client, wants_body=wants_body))
@@ -178,7 +178,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             interrupted = True
             print("\ninterrupted: keeping the boards fetched so far", file=sys.stderr)
             late = boards.finished_out_of_order()
-            if late:
+            if any(o.jobs is not None and not o.skipped for o in late):  # only if a line follows
                 print("finished out of order:")
             for outcome in late:
                 _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)

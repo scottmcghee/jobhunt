@@ -537,6 +537,83 @@ def test_a_board_still_running_after_an_interrupt_logs_nothing(tmp_path, monkeyp
     assert not [r for r in caplog.records if r.levelname == "WARNING" and "Big" in r.getMessage()]
 
 
+@respx.mock
+def test_a_404_that_comes_back_after_an_interrupt_is_not_counted(tmp_path, monkeypatch, capsys, caplog):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - name: Slow\n    ats: greenhouse\n    slug: slow\n\n"
+        "  - name: Gone\n    ats: lever\n    slug: gone\n"
+    )
+    respx.get("https://api.lever.co/v0/postings/gone").mock(return_value=httpx.Response(404))
+    gone_started, gone_done = threading.Event(), threading.Event()
+    runners, gone_thread = [], []
+    real = cli.fetch_company
+
+    class Runner(cli.BoardRunner):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            runners.append(self)
+
+        def _worker(self, group):
+            try:
+                super()._worker(group)
+            finally:
+                if gone_thread == [threading.get_ident()]:
+                    gone_done.set()
+
+        def finished_out_of_order(self):
+            assert gone_done.wait(5)  # drain only once Gone's worker has finished
+            return super().finished_out_of_order()
+
+    def fetch(company, client, **kwargs):
+        if company.slug == "slow":
+            assert gone_started.wait(5)
+            raise KeyboardInterrupt
+        gone_thread.append(threading.get_ident())
+        gone_started.set()
+        assert runners[0]._stop.wait(5)  # the 404 comes back just after Ctrl-C
+        return real(company, client, **kwargs)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    monkeypatch.setattr(cli, "BoardRunner", Runner)
+    assert _fetch(tmp_path, p) == 130
+    assert _misses(tmp_path).counts == {}  # unwarned, so it doesn't count toward pruning either
+    assert "Gone" not in capsys.readouterr().out
+    assert not [r for r in caplog.records if "Gone" in r.getMessage()]
+
+
+@respx.mock
+def test_no_out_of_order_header_when_no_late_board_prints_a_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli.throttle, "MAX_RETRIES", 0)
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n  - name: Slow\n    ats: lever\n    slug: slow\n"
+        + "".join(f"  - name: B{i}\n    ats: greenhouse\n    slug: b{i}\n" for i in range(7))
+    )
+    respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
+        return_value=httpx.Response(403)
+    )
+    last_queued = threading.Event()
+    real = cli.fetch_company
+
+    class Runner(cli.BoardRunner):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._results = _Announcing(index=7, queued=last_queued)
+
+    def fetch(company, client, **kwargs):
+        if company.slug == "slow":
+            assert last_queued.wait(5)  # every other board refused or skipped, all out of order
+            raise KeyboardInterrupt
+        return real(company, client, **kwargs)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    monkeypatch.setattr(cli, "BoardRunner", Runner)
+    assert _fetch(tmp_path, p, "--per-host", "1") == 130
+    assert "finished out of order" not in capsys.readouterr().out
+
+
 def _seven_boards(tmp_path, ats="greenhouse"):
     p = tmp_path / "companies.yaml"
     if ats == "workday":
