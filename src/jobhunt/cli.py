@@ -5,12 +5,13 @@ Ashby, Workday, SmartRecruiters), drops those that fail the hard filters in
 config/preferences.yaml, has Claude score the rest 1-10 against config/profile.md, and assembles
 cover letters for the top scorers from the pre-written modules in config/kit/.
 
-    jobhunt fetch   [--company NAME] [--dry-run]     pull postings, filter, record new ones
+    jobhunt fetch   [--company NAME] [--dry-run] [--workers N] [--per-host N]
+                                                     pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
     jobhunt list    [--min-score N]                  show scored jobs and their keys
     jobhunt letter  [--min-score N] [--job KEY] [--force]
                                                      letters for high scorers that have none yet
-    jobhunt run                                      fetch -> score -> letter
+    jobhunt run     [--workers N] [--per-host N]     fetch -> score -> letter
 
 A job key is source:company_slug:external_id, e.g. greenhouse:huntress:7777533003.
 """
@@ -30,17 +31,20 @@ from jobhunt import config, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, make_completer
+from jobhunt.runner import BoardRunner
 from jobhunt.schema import Company, Job
 from jobhunt.score import score_job
-from jobhunt.sources import fetch_company
+from jobhunt.sources import fetch_company, rate_group
 
 log = logging.getLogger("jobhunt")
 
 
-def _client() -> httpx.Client:
+def _client(workers: int = 32, per_host: int = 6) -> httpx.Client:
     # Polite by construction: per-group concurrency limits, and retries on 429 (see throttle.py).
+    # `workers` caps requests in flight across all groups and sizes the connection pool to match.
+    pool = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
     return httpx.Client(
-        transport=throttle.ThrottledTransport(),
+        transport=throttle.ThrottledTransport(ceiling=per_host, max_in_flight=workers, limits=pool),
         timeout=20.0,
         headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
         follow_redirects=True,
@@ -61,6 +65,26 @@ class BoardOutcome:
     company: Company
     jobs: list[Job] | None = None
     status: int | None = None
+    skipped: bool = False  # not fetched: its group's circuit breaker had tripped
+    refused: bool = False  # the host pushed back (429, or a 403 that isn't about this board)
+
+
+def _host_refused(response: httpx.Response) -> bool:
+    """429 always; 403 unless it is a board-level error, as Workday sends for a closed site."""
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    try:
+        body = response.json()
+    except ValueError:  # an HTML block page, say
+        return True
+    return not (isinstance(body, dict) and "errorCode" in body)
+
+
+def _refused(outcome: BoardOutcome) -> bool:
+    """A host pushing back (rate limit or block), which feeds the runner's circuit breaker."""
+    return outcome.refused
 
 
 def _fetch_board(
@@ -68,18 +92,26 @@ def _fetch_board(
     client: httpx.Client,
     wants_body: Callable[[Job], bool],
     verbose: bool,
+    stopping: Callable[[], bool] = lambda: False,
 ) -> BoardOutcome:
-    """Fetch one board. Touches no shared state, and a failing board never stops the run."""
+    """Fetch one board. Touches no shared state, and a failing board never stops the run.
+
+    Once the run is ``stopping`` (interrupted), errors go unreported: the client is being closed
+    under boards still in flight, and the runner discards their outcomes anyway.
+    """
     try:
         return BoardOutcome(company, jobs=fetch_company(company, client, wants_body=wants_body))
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
-        log.warning("%s: HTTP %s — check slug/ATS", company.name, status)
-        return BoardOutcome(company, status=status)
+        if not stopping():
+            log.warning("%s: HTTP %s — check slug/ATS", company.name, status)
+        return BoardOutcome(company, status=status, refused=_host_refused(e.response))
     except httpx.HTTPError as e:
-        log.warning("%s: %s", company.name, e)
+        if not stopping():
+            log.warning("%s: %s", company.name, e)
     except Exception as e:  # malformed data from one board; the rest of the run still counts
-        log.warning("%s: skipped, %s: %s", company.name, type(e).__name__, e, exc_info=verbose)
+        if not stopping():
+            log.warning("%s: skipped, %s: %s", company.name, type(e).__name__, e, exc_info=verbose)
     return BoardOutcome(company)
 
 
@@ -94,6 +126,8 @@ def _record(
 ) -> None:
     """Fold one board's outcome into the run's books and print its line. Main thread only."""
     company = outcome.company
+    if outcome.skipped:
+        return
     if outcome.jobs is None:
         if outcome.status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
             dead.add(company.key)
@@ -126,15 +160,29 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     new_jobs: list[Job] = []
     dead: set[str] = set()
     interrupted = False
-    with _client() as client:
+    with _client(args.workers, args.per_host) as client:
+        boards = BoardRunner(
+            companies,
+            lambda company: _fetch_board(
+                company, client, title_passes, args.verbose, lambda: boards.stopping
+            ),
+            group_of=rate_group,
+            per_group=args.per_host,
+            refused=_refused,
+            skip=lambda company: BoardOutcome(company, skipped=True),
+        )
         try:
-            for company in companies:
-                outcome = _fetch_board(company, client, title_passes, args.verbose)
+            for outcome in boards:  # in companies.yaml order, whatever order they finish in
                 _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
         except KeyboardInterrupt:
             # Keep what the finished boards found; the next run picks up the rest.
             interrupted = True
             print("\ninterrupted: keeping the boards fetched so far", file=sys.stderr)
+            late = boards.finished_out_of_order()
+            if any(o.jobs is not None and not o.skipped for o in late):  # only if a line follows
+                print("finished out of order:")
+            for outcome in late:
+                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
 
     if args.dry_run:
         for j in new_jobs:
@@ -253,6 +301,25 @@ def cmd_run(args: argparse.Namespace, data_dir: Path, output_dir: Path) -> int:
 # --------------------------------------------------------------------------- parser
 
 
+def _at_least_one(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {value!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, not {number}")
+    return number
+
+
+def _concurrency_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--workers", type=_at_least_one, default=32, metavar="N",
+                   help="most requests in flight across all boards (default: 32)")
+    p.add_argument("--per-host", type=_at_least_one, default=6, metavar="N",
+                   help="most in flight per Workday datacenter or API host; it adapts below this "
+                        "when a host answers 429 (default: 6). --workers 1 --per-host 1 is the "
+                        "gentlest setting")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jobhunt", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -279,6 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="pull postings, filter, record new ones")
     f.add_argument("--company", metavar="NAME", help=company_help)
     f.add_argument("--dry-run", action="store_true", help=dry_run_help)
+    _concurrency_args(f)
 
     s = sub.add_parser("score", help="score unscored jobs with Claude")
     s.add_argument("--limit", type=int, metavar="N", help=limit_help)
@@ -295,6 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="fetch -> score -> letter")
     r.add_argument("--company", metavar="NAME", help=company_help)
     r.add_argument("--dry-run", action="store_true", help=dry_run_help)
+    _concurrency_args(r)
     r.add_argument("--limit", type=int, metavar="N", help=limit_help)
     r.add_argument("--rescore", action="store_true", help=rescore_help)
     r.add_argument("--min-score", type=int, metavar="N", help=min_score_help)
