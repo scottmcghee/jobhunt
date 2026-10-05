@@ -97,7 +97,8 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
-_LETTER_HEADER = re.compile(r"<!-- (\S+) \|")
+# Up to write_letter's " | modules: " separator, not the first space: Ashby slugs keep spaces.
+_LETTER_HEADER = re.compile(r"<!-- (.+?) \| modules: ")
 
 
 def lettered_job_keys(output_dir: Path) -> set[str]:

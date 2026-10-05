@@ -104,3 +104,10 @@ def test_lettered_job_keys_reads_letter_headers(tmp_path):
     (tmp_path / "latin1.md").write_bytes(b"caf\xe9 notes\n")  # not UTF-8; must not crash
     assert storage.lettered_job_keys(tmp_path) == {"greenhouse:acme:1"}
     assert storage.lettered_job_keys(tmp_path / "missing") == set()
+
+
+def test_lettered_job_keys_finds_keys_with_spaces(tmp_path):
+    # Ashby board names keep their spelling, so a slug (and the job key) can contain spaces.
+    letter = Letter(job_key="ashby:Some Co:3f2a", company="Some Co", title="VP Eng", modules_used=["m"], text="Hi", model="t")
+    storage.write_letter(letter, tmp_path)
+    assert storage.lettered_job_keys(tmp_path) == {"ashby:Some Co:3f2a"}

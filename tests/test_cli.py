@@ -368,6 +368,15 @@ def test_letter_keeps_one_letter_per_posting_with_the_same_title(tmp_path, score
     assert _letter(tmp_path) == 0 and len(calls) == 2  # nothing regenerated
 
 
+def test_letter_skips_a_lettered_job_whose_key_has_a_space(tmp_path, scored_job, monkeypatch):
+    spaced = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"source": "ashby", "company_slug": "Some Co"})})
+    storage.append_jsonl(tmp_path / "data" / "scores.jsonl", spaced.model_dump())
+    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)
+    assert _letter(tmp_path) == 0
+    monkeypatch.setattr(cli, "_completer", lambda: pytest.fail)  # must not be called
+    assert _letter(tmp_path) == 0
+
+
 def test_letter_for_one_job_respects_existing_letters(tmp_path, scored_job, monkeypatch, capsys):
     first, _ = _two_scored_jobs(tmp_path, scored_job)
     monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)
