@@ -2,7 +2,7 @@
 
 This is an EXAMPLE profile for a fictional candidate. Replace all of it with your own. The scorer
 reads this file verbatim, so write it for a skeptical recruiter: concrete scope, numbers, and an
-honest list of gaps. Keep the "Known gaps" heading; the scoring rubric refers to it by name.
+honest list of gaps. Keep the "Target" and "Known gaps" headings; the prompts refer to them by name.
 
 ## Target
 

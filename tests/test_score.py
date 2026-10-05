@@ -81,3 +81,15 @@ def test_score_leaves_room_for_the_reply(platform_director_job, profile, kit):
 
     score_job(platform_director_job, profile, kit, complete)
     assert budgets == [1600]
+
+
+def test_rubric_carries_no_candidate_specifics():
+    # The rubric is shared by every candidate; what they want and lack lives in profile.md.
+    assert "Kubernetes" not in SYSTEM
+    assert "Known gaps" in SYSTEM and "profile" in SYSTEM
+
+
+def test_rubric_judges_level_against_the_target():
+    # Golden assertion: level is measured against the profile's Target, not a fixed track.
+    assert "IC" not in SYSTEM
+    assert "wrong level (well below or far above the profile's Target)" in SYSTEM

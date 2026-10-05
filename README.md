@@ -83,7 +83,7 @@ Everything personal lives in `config/`, which is gitignored and never committed.
 |---|---|
 | `config/companies.yaml` | Company → ATS type + board slug. Comments explain how to find a slug. |
 | `config/preferences.yaml` | The hard filters and the letter threshold. The template's lists are tuned for the fictional candidate; replace every one. |
-| `config/profile.md` | The candidate narrative the scorer reads. Facts here are fixed. |
+| `config/profile.md` | The candidate narrative the scorer reads. Facts here are fixed. Keep the `Target` and `Known gaps` headings: the scoring and letter prompts refer to them by name. |
 | `config/kit/` | Opening, closing, and proof modules with `use_when` keywords. |
 
 To adapt this for yourself: rewrite `profile.md` and the Kit in your own voice, edit the filters, and point `companies.yaml` at the boards you care about. Nothing in `src/` is specific to one candidate.

@@ -130,3 +130,11 @@ def test_workday_company_needs_tenant_site_and_datacenter():
         config.Company(name="Adobe", ats="workday", slug="adobe", datacenter="wd5")  # no site
     with pytest.raises(ValidationError):
         config.Company(name="Adobe", ats="workday", slug="adobe/x", datacenter="eu-west")
+
+
+def test_profile_template_keeps_the_headings_the_prompts_name():
+    # score.py names "Known gaps" and generate.py names "Target"; renaming either breaks a prompt.
+    text = config.load_profile(CONFIG_DIR / "profile.md")
+    assert "## Target" in text
+    assert "## Known gaps" in text
+    assert '"Target" and "Known gaps" headings' in text
