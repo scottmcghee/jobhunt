@@ -87,3 +87,18 @@ def test_run_prints_timing_when_fetch_finishes_or_is_stopped(rc, tmp_path, monke
     monkeypatch.setattr(bench.cli, "main", lambda argv: rc)
     assert bench.main(["run", "--companies", str(sample)]) == rc
     assert "--workers 32 --per-host 6:" in capsys.readouterr().err
+
+
+def test_sample_without_a_companies_file_prints_the_hint(tmp_path, capsys):
+    out = tmp_path / "b.yaml"
+    assert bench.main(["sample", "--companies", str(tmp_path / "missing.yaml"), "-o", str(out)]) == 2
+    assert "missing.yaml not found" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_sample_of_no_boards_writes_nothing(tmp_path, capsys):
+    companies, out = tmp_path / "companies.yaml", tmp_path / "b.yaml"
+    companies.write_text("companies: []\n")
+    assert bench.main(["sample", "--companies", str(companies), "-o", str(out)]) == 2
+    assert "no boards" in capsys.readouterr().err
+    assert not out.exists()

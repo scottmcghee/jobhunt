@@ -70,7 +70,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "sample":
-        boards = stratified_sample(config.load_companies(args.companies), args.n, args.seed)
+        try:
+            companies = config.load_companies(args.companies)
+        except config.ConfigMissing as e:
+            print(e, file=sys.stderr)
+            return 2
+        if not companies:
+            print("no boards to sample; add some to companies.yaml first", file=sys.stderr)
+            return 2
+        boards = stratified_sample(companies, args.n, args.seed)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text("companies:\n" + slugs.render(boards))
         print(f"{len(boards)} boards -> {args.out}")

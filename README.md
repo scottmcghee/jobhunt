@@ -71,7 +71,7 @@ jobhunt run                      # all of the above
 
 `fetch` works on many boards at once: each Workday datacenter and each API host has its own queue and at most `--per-host` requests in flight (fewer while the host is answering 429), and `--workers` caps the total. Output still comes out in `companies.yaml` order. If one host refuses five boards in a row (429, or a 403 such as a block page), its remaining boards are skipped for that run; lower the two flags to get through a strict host. A board-level 403, like the one Workday sends for a closed site, doesn't count. Both flags must be at least 1. Ctrl-C keeps every board that finished, including those that finished ahead of their turn.
 
-To see how your own boards respond, `python scripts/bench_fetch.py sample` writes a 150-board sample that keeps your datacenter and host mix, and `python scripts/bench_fetch.py run --per-host N` times a dry-run fetch of it. `fetch -v` ends with requests, 429s and peak concurrency per host.
+To see how your own boards respond, `python scripts/bench_fetch.py sample` writes a 150-board sample that keeps your datacenter and host mix, and `python scripts/bench_fetch.py run --per-host N` times a dry-run fetch of it. `fetch -v` ends with requests, throttles (429, or 503 with Retry-After) and peak concurrency per host.
 
 Re-running `fetch` is idempotent; `data/seen.json` is the ledger. A board that returns HTTP 404 on three fetches in a row is removed from `config/companies.yaml` (counts live in `data/misses.json`; any successful fetch resets them). SmartRecruiters answers an unknown company with an empty list rather than a 404, so those boards are never removed; `fetch` logs a warning for any SmartRecruiters board with no postings instead.
 
