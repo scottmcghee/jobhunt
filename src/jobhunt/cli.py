@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import Executor, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,6 +98,15 @@ def _host_refused(response: httpx.Response) -> bool:
     return not (isinstance(body, dict) and "errorCode" in body)
 
 
+@contextmanager
+def _shut_down_on_exit(pool: ThreadPoolExecutor) -> Iterator[None]:
+    """Cancel queued page requests on the way out, so Ctrl-C isn't held up by them."""
+    try:
+        yield
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def _refused(outcome: BoardOutcome) -> bool:
     """A host pushing back (rate limit or block), which feeds the runner's circuit breaker."""
     return outcome.refused
@@ -107,6 +118,7 @@ def _fetch_board(
     wants_body: Callable[[Job], bool],
     verbose: bool,
     stopping: Callable[[], bool] = lambda: False,
+    pool: Executor | None = None,
 ) -> BoardOutcome:
     """Fetch one board. Touches no shared state, and a failing board never stops the run.
 
@@ -114,7 +126,8 @@ def _fetch_board(
     under boards still in flight, and the runner discards their outcomes anyway.
     """
     try:
-        return BoardOutcome(company, jobs=fetch_company(company, client, wants_body=wants_body))
+        jobs = fetch_company(company, client, wants_body=wants_body, pool=pool)
+        return BoardOutcome(company, jobs=jobs)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
         if not stopping():
@@ -175,11 +188,15 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     dead: set[str] = set()
     interrupted = False
     transport = _transport(args.workers, args.per_host)
-    with _client(transport) as client:
+    # Shared by every board for its later pages and descriptions (Workday, SmartRecruiters).
+    # Its threads only send requests, never wait on the pool, so it can't deadlock; the
+    # transport's per-host and global limits still decide how many are in flight.
+    pool = ThreadPoolExecutor(args.workers, thread_name_prefix="fetch-pages")
+    with _client(transport) as client, _shut_down_on_exit(pool):
         boards = BoardRunner(
             companies,
             lambda company: _fetch_board(
-                company, client, title_passes, args.verbose, lambda: boards.stopping
+                company, client, title_passes, args.verbose, lambda: boards.stopping, pool
             ),
             group_of=rate_group,
             per_group=args.per_host,

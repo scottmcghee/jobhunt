@@ -666,3 +666,21 @@ def test_verbose_fetch_prints_per_group_stats(tmp_path, fixture_json, capsys):
     assert cli.main(["-v", "--data-dir", str(tmp_path / "data"), "--companies", str(companies), "fetch", "--dry-run"]) == 0
     err = capsys.readouterr().err
     assert "requests by host" in err and "greenhouse" in err and "1 requests" in err
+
+
+@respx.mock
+def test_fetch_gives_every_board_the_shared_pool(tmp_path, fixture_json, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    pools = []
+    real = cli.fetch_company
+
+    def fetch(company, client, **kwargs):
+        pools.append(kwargs.get("pool"))
+        return real(company, client, **kwargs)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, companies, "--workers", "3") == 0
+    (pool,) = pools
+    assert pool is not None and pool._max_workers == 3

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from concurrent.futures import Executor
 
 import httpx
 
@@ -20,7 +21,7 @@ FETCHERS: dict[ATSName, Fetcher] = {
 }
 
 # Sources whose listings lack descriptions, so each description costs a request.
-PagedFetcher = Callable[[Company, httpx.Client, BodyCheck, int | None], list[Job]]
+PagedFetcher = Callable[[Company, httpx.Client, BodyCheck, int | None, Executor | None], list[Job]]
 ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
     "workday": workday.fetch,
     "smartrecruiters": smartrecruiters.fetch,
@@ -32,6 +33,7 @@ def fetch_company(
     client: httpx.Client,
     wants_body: BodyCheck = lambda job: True,
     max_pages: int | None = None,
+    pool: Executor | None = None,
 ) -> list[Job]:
     """Dispatch to the right ATS adapter for this company.
 
@@ -40,9 +42,10 @@ def fetch_company(
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters) early; the others are one request.
+    With ``pool``, those two fetch later pages and descriptions concurrently on it.
     """
     if company.ats in ON_DEMAND_FETCHERS:
-        return ON_DEMAND_FETCHERS[company.ats](company, client, wants_body, max_pages)
+        return ON_DEMAND_FETCHERS[company.ats](company, client, wants_body, max_pages, pool)
     return FETCHERS[company.ats](company, client)
 
 

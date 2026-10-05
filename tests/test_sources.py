@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 import pytest
 import respx
@@ -389,3 +393,97 @@ def test_rate_groups():
     assert rate_group(wd("wd1")) == "workday:wd1" and rate_group(wd("wd103")) == "workday:wd103"
     assert rate_group(Company(name="x", ats="lever", slug="x")) == "lever"
     assert request_group(httpx.URL("https://other.example.com/x")) == "other.example.com"
+
+
+# ------------------------------------------------------------------ concurrent pages and details
+
+BARRIER_WAIT = 5  # seconds; only reached if a test is broken
+
+
+def _workday_pages(total, together):
+    """Workday listing pages; the pages at offsets in ``together`` must be in flight at once."""
+    barrier = threading.Barrier(len(together), timeout=BARRIER_WAIT) if together else None
+
+    def page(request):
+        offset = json.loads(request.content)["offset"]
+        if barrier and offset in together:
+            barrier.wait()  # raises BrokenBarrierError unless they overlap
+        n = max(0, min(20, total - offset))
+        postings = [{"title": f"Job {offset + i}", "externalPath": f"/job/X/Job_{offset + i}", "locationsText": "X"}
+                    for i in range(n)]
+        return httpx.Response(200, json={"total": total if offset == 0 else 0, "jobPostings": postings})
+
+    return page
+
+
+@respx.mock
+def test_workday_fetches_later_pages_concurrently_and_keeps_their_order(workday_company):
+    listing = respx.post(WD + "/jobs").mock(side_effect=_workday_pages(65, together={20, 40, 60}))
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        jobs = workday.fetch(workday_company, client, lambda job: False, pool=pool)
+    assert [j.title for j in jobs] == [f"Job {i}" for i in range(65)]
+    assert listing.call_count == 4
+
+
+@respx.mock
+def test_workday_fetches_descriptions_concurrently(workday_company, fixture_json):
+    respx.post(WD + "/jobs").mock(return_value=httpx.Response(200, json=fixture_json("workday_jobs.json")))
+    both = threading.Barrier(2, timeout=BARRIER_WAIT)
+
+    def detail(request):
+        both.wait()
+        return httpx.Response(200, json=fixture_json("workday_job.json"))
+
+    respx.get(url__startswith=WD + "/job/").mock(side_effect=detail)
+    wanted = {"Director of Platform Engineering", "Director of Sales"}
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        jobs = workday.fetch(workday_company, client, lambda job: job.title in wanted, pool=pool)
+    assert [bool(j.body) for j in jobs] == [True, False, True]
+
+
+@respx.mock
+def test_workday_page_error_fails_the_board_with_a_pool(workday_company):
+    def page(request):
+        offset = json.loads(request.content)["offset"]
+        if offset == 20:
+            return httpx.Response(500)
+        return httpx.Response(200, json={"total": 45, "jobPostings": [
+            {"title": "J", "externalPath": f"/job/X/J_{offset}", "locationsText": "X"}]})
+
+    respx.post(WD + "/jobs").mock(side_effect=page)
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool, pytest.raises(httpx.HTTPStatusError):
+        workday.fetch(workday_company, client, lambda job: False, pool=pool)
+
+
+@respx.mock
+def test_smartrecruiters_fetches_later_pages_concurrently_and_keeps_their_order(smartrecruiters_company):
+    barrier = threading.Barrier(2, timeout=BARRIER_WAIT)
+
+    def page(request):
+        offset = int(request.url.params["offset"])
+        if offset in (100, 200):
+            barrier.wait()
+        n = max(0, min(100, 250 - offset))
+        postings = [{"id": str(offset + i), "name": f"Job {offset + i}", "location": {}} for i in range(n)]
+        return httpx.Response(200, json={"offset": offset, "limit": 100, "totalFound": 250, "content": postings})
+
+    listing = respx.get(SR).mock(side_effect=page)
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        jobs = smartrecruiters.fetch(smartrecruiters_company, client, lambda job: False, pool=pool)
+    assert [j.external_id for j in jobs] == [str(i) for i in range(250)]
+    assert listing.call_count == 3
+
+
+@respx.mock
+def test_max_pages_still_limits_a_pooled_listing(workday_company):
+    listing = respx.post(WD + "/jobs").mock(side_effect=_workday_pages(65, together=set()))
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        assert len(workday.fetch(workday_company, client, lambda job: False, max_pages=1, pool=pool)) == 20
+    assert listing.call_count == 1
+
+
+@respx.mock
+def test_fetch_company_passes_the_pool(workday_company):
+    respx.post(WD + "/jobs").mock(side_effect=_workday_pages(45, together={20, 40}))
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        assert len(fetch_company(workday_company, client, wants_body=lambda job: False, pool=pool)) == 45
