@@ -390,3 +390,19 @@ def test_letter_for_one_job_respects_existing_letters(tmp_path, scored_job, monk
 def test_run_accepts_force():
     args = cli.build_parser().parse_args(["run", "--force"])
     assert args.force is True
+
+
+@respx.mock
+def test_fetch_board_only_reports_and_record_keeps_the_books(tmp_path):
+    # the worker half touches no shared state, so it can later run in a thread
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    board = cli.Company(name="Dead", ats="greenhouse", slug="dead")
+    with httpx.Client() as client:
+        outcome = cli._fetch_board(board, client, lambda job: True, verbose=False)
+    assert outcome.jobs is None and outcome.status == 404
+
+    misses, dead, new_jobs = _misses(tmp_path), set(), []
+    prefs = cli.config.load_preferences()
+    seen = storage.SeenSet(tmp_path / "seen.json")
+    cli._record(outcome, prefs, seen, misses, dead, new_jobs, verbose=False)
+    assert misses.counts == {"greenhouse:dead": 1} and not dead and not new_jobs

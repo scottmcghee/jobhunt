@@ -21,6 +21,7 @@ import argparse
 import logging
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -51,27 +52,59 @@ def _client() -> httpx.Client:
 MAX_CONSECUTIVE_404S = 3
 
 
+@dataclass(frozen=True)
+class BoardOutcome:
+    """What fetching one board produced: its jobs, or None plus the HTTP status if it failed."""
+
+    company: Company
+    jobs: list[Job] | None = None
+    status: int | None = None
+
+
 def _fetch_board(
     company: Company,
     client: httpx.Client,
     wants_body: Callable[[Job], bool],
-    misses: storage.MissLedger,
-    dead: set[str],
     verbose: bool,
-) -> list[Job] | None:
-    """One board's postings, or None if it failed. A failing board never stops the run."""
+) -> BoardOutcome:
+    """Fetch one board. Touches no shared state, and a failing board never stops the run."""
     try:
-        return fetch_company(company, client, wants_body=wants_body)
+        return BoardOutcome(company, jobs=fetch_company(company, client, wants_body=wants_body))
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
         log.warning("%s: HTTP %s — check slug/ATS", company.name, status)
-        if status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
-            dead.add(company.key)
+        return BoardOutcome(company, status=status)
     except httpx.HTTPError as e:
         log.warning("%s: %s", company.name, e)
     except Exception as e:  # malformed data from one board; the rest of the run still counts
         log.warning("%s: skipped, %s: %s", company.name, type(e).__name__, e, exc_info=verbose)
-    return None
+    return BoardOutcome(company)
+
+
+def _record(
+    outcome: BoardOutcome,
+    prefs: config.Preferences,
+    seen: storage.SeenSet,
+    misses: storage.MissLedger,
+    dead: set[str],
+    new_jobs: list[Job],
+    verbose: bool,
+) -> None:
+    """Fold one board's outcome into the run's books and print its line. Main thread only."""
+    company = outcome.company
+    if outcome.jobs is None:
+        if outcome.status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
+            dead.add(company.key)
+        return
+    misses.clear(company.key)
+    passed, rejected = jfilter.apply(outcome.jobs, prefs)
+    fresh = [j for j in passed if j.key not in seen]
+    counts = f"total={len(outcome.jobs):<4} passed={len(passed):<3} new={len(fresh)}"
+    print(f"{company.name:<16} {counts}")
+    if verbose:
+        for r in rejected:
+            print(f"    - {r.job.title[:60]:<60} {r.reason}")
+    new_jobs.extend(fresh)
 
 
 def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
@@ -94,18 +127,8 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     with _client() as client:
         try:
             for company in companies:
-                jobs = _fetch_board(company, client, title_passes, misses, dead, args.verbose)
-                if jobs is None:
-                    continue
-                misses.clear(company.key)
-                passed, rejected = jfilter.apply(jobs, prefs)
-                fresh = [j for j in passed if j.key not in seen]
-                counts = f"total={len(jobs):<4} passed={len(passed):<3} new={len(fresh)}"
-                print(f"{company.name:<16} {counts}")
-                if args.verbose:
-                    for r in rejected:
-                        print(f"    - {r.job.title[:60]:<60} {r.reason}")
-                new_jobs.extend(fresh)
+                outcome = _fetch_board(company, client, title_passes, args.verbose)
+                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
         except KeyboardInterrupt:
             # Keep what the finished boards found; the next run picks up the rest.
             interrupted = True

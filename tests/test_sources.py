@@ -6,7 +6,17 @@ import httpx
 import pytest
 import respx
 
-from jobhunt.sources import ashby, fetch_company, greenhouse, lever, smartrecruiters, workday
+from jobhunt.schema import Company
+from jobhunt.sources import (
+    ashby,
+    fetch_company,
+    greenhouse,
+    lever,
+    rate_group,
+    request_group,
+    smartrecruiters,
+    workday,
+)
 from jobhunt.sources._html import to_text
 
 
@@ -186,6 +196,7 @@ def test_fetch_company_passes_wants_body_to_workday(workday_company, fixture_jso
 
 
 SR = "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings"
+GH_JOBS_URL = "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs"
 SR_DETAIL = SR + "/744000000001001"
 
 
@@ -345,3 +356,36 @@ def test_postings_without_an_id_are_skipped(
 
     assert [j.title for j in after] == [j.title for j in before[1:]]
     assert f"{company.slug}: skipped a posting with no {id_field}" in caplog.text
+
+
+def _requests_made(company, mocks):
+    with respx.mock(assert_all_called=False) as router:
+        for method, url, payload in mocks:
+            router.route(method=method, url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+        with httpx.Client() as client:
+            fetch_company(company, client)
+        return [call.request.url for call in router.calls]
+
+
+@pytest.mark.parametrize(
+    ("company_fixture", "mocks"),
+    [
+        ("gh_company", [("GET", GH_JOBS_URL, "greenhouse_jobs.json")]),
+        ("lever_company", [("GET", "https://api.lever.co/v0/postings/examplelever", "lever_postings.json")]),
+        ("ashby_company", [("GET", "https://api.ashbyhq.com/posting-api/job-board/exampleashby", "ashby_board.json")]),
+        ("workday_company", [("POST", WD + "/jobs", "workday_jobs.json"), ("GET", WD + "/job/", "workday_job.json")]),
+        ("smartrecruiters_company", [("GET", SR + "/", "smartrecruiters_posting.json"), ("GET", SR, "smartrecruiters_postings.json")]),
+    ],
+)
+def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
+    company = request.getfixturevalue(company_fixture)
+    urls = _requests_made(company, [(m, u, fixture_json(f)) for m, u, f in mocks])
+    assert urls, "the adapter made no requests"
+    assert {request_group(u) for u in urls} == {rate_group(company)}
+
+
+def test_rate_groups():
+    wd = lambda dc: Company(name="x", ats="workday", slug="x/y", datacenter=dc)  # noqa: E731
+    assert rate_group(wd("wd1")) == "workday:wd1" and rate_group(wd("wd103")) == "workday:wd103"
+    assert rate_group(Company(name="x", ats="lever", slug="x")) == "lever"
+    assert request_group(httpx.URL("https://other.example.com/x")) == "other.example.com"
