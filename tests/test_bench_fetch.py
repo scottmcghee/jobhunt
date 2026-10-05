@@ -115,3 +115,14 @@ def test_run_leaves_unset_flags_to_the_settings(tmp_path, monkeypatch, capsys):
     assert "--workers 9 --per-host 6:" in capsys.readouterr().err
     assert bench.main(["run", "--companies", str(sample), "--per-host", "2"]) == 0
     assert seen[1][-2:] == ["--per-host", "2"]
+
+
+def test_run_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch, capsys):
+    sample = tmp_path / "bench.yaml"
+    sample.write_text("companies: []\n")
+    called = []
+    monkeypatch.setattr(bench.cli, "main", lambda argv: called.append(argv) or 0)
+    monkeypatch.setenv("JOBHUNT_FETCH_WORKERS", "lots")
+    assert bench.main(["run", "--companies", str(sample)]) == 2
+    assert "JOBHUNT_FETCH_WORKERS" in capsys.readouterr().err
+    assert not called

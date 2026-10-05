@@ -87,7 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.companies.exists():
         print(f"no sample at {args.companies}; run `bench_fetch.py sample` first", file=sys.stderr)
         return 2
-    fetch = settings.load().fetch  # what fetch itself will use for any flag not given here
+    try:
+        fetch = settings.load().fetch  # what fetch itself will use for any flag not given here
+    except settings.SettingsError as e:
+        print(e, file=sys.stderr)
+        return 2
     flags = []
     if args.workers:
         flags += ["--workers", args.workers]

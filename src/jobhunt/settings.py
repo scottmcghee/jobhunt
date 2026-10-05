@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from jobhunt import config
+from jobhunt import config, storage
 
 
 class SettingsError(ValueError):
@@ -57,6 +57,12 @@ class FetchSettings(_Section):
 class PathSettings(_Section):
     data_dir: Path | None = None  # None: the repo's data/
     output_dir: Path | None = None  # None: the repo's output/
+
+    @field_validator("data_dir", "output_dir")
+    @classmethod
+    def _from_repo(cls, value: Path | None) -> Path | None:
+        """``~`` expands; a relative path is under the repo, like the defaults, from any cwd."""
+        return None if value is None else storage.DEFAULT_DATA_DIR.parent / value.expanduser()
 
 
 class SlugsSettings(_Section):
@@ -95,11 +101,15 @@ def load(path: Path | None = None, environ: Mapping[str, str] | None = None) -> 
     """Settings from ``path`` (default: config/settings.yaml, if it exists) and the environment."""
     path = path or config.DEFAULT_CONFIG_DIR / "settings.yaml"
     environ = os.environ if environ is None else environ
-    raw: Any = yaml.safe_load(path.read_text()) if path.exists() else None
+    try:
+        raw: Any = yaml.safe_load(path.read_text()) if path.exists() else None
+    except yaml.YAMLError as e:
+        raise SettingsError(f"{path}: not valid YAML: {e}") from None
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise SettingsError(f"{path}: expected sections like 'fetch:' and 'llm:' at the top level")
+    raw = {k: {} if v is None else v for k, v in raw.items()}  # a section, all keys commented
     try:
         Settings.model_validate(raw)
     except ValidationError as e:

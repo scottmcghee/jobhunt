@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import queue
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -48,7 +49,7 @@ def test_fetch_then_score_then_letter(tmp_path, fixture_json, monkeypatch):
         {"score": 8, "rationale": "fits", "strengths": [], "gaps": [],
          "suggested_modules": ["build_infra_devx", "sre_from_nothing"]}
     )
-    monkeypatch.setattr(cli, "_completer", lambda: fake_score)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: fake_score)
     rc = cli.main(["--data-dir", str(data_dir), "score"])
     assert rc == 0
     assert storage.load_scores(data_dir)[0].score.score == 8
@@ -57,7 +58,7 @@ def test_fetch_then_score_then_letter(tmp_path, fixture_json, monkeypatch):
     fake_letter = make_completer(
         {"custom_opening_sentence": "Specific opener.", "custom_closing_sentence": "Specific closer."}
     )
-    monkeypatch.setattr(cli, "_completer", lambda: fake_letter)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: fake_letter)
     rc = cli.main(["--data-dir", str(data_dir), "--output-dir", str(out_dir), "letter"])
     assert rc == 0
     files = list(out_dir.glob("*.md"))
@@ -80,7 +81,7 @@ def test_score_skips_unusable_reply_and_keeps_going(
 
     good = make_completer({"score": 6, "rationale": "ok", "suggested_modules": []})
     replies = iter(["I cannot score this one.", good("", "")])
-    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: next(replies))
+    monkeypatch.setattr(cli, "_completer", lambda _=None: lambda system, user, max_tokens: next(replies))
 
     rc = cli.main(["--data-dir", str(tmp_path), "score"])
 
@@ -328,7 +329,7 @@ LETTER_REPLY = '{"custom_opening_sentence": "Open.", "custom_closing_sentence": 
 def test_letter_skips_an_unusable_reply_and_keeps_going(tmp_path, scored_job, monkeypatch, caplog, capsys):
     first, second = _two_scored_jobs(tmp_path, scored_job)
     replies = iter(["I cannot write this one.", LETTER_REPLY])
-    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: next(replies))
+    monkeypatch.setattr(cli, "_completer", lambda _=None: lambda system, user, max_tokens: next(replies))
 
     assert _letter(tmp_path) == 0
     assert storage.lettered_job_keys(tmp_path / "out") == {second.job.key}
@@ -344,7 +345,7 @@ def test_letter_skips_jobs_that_already_have_one(tmp_path, scored_job, monkeypat
         calls.append(user)
         return LETTER_REPLY
 
-    monkeypatch.setattr(cli, "_completer", lambda: complete)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: complete)
     assert _letter(tmp_path) == 0 and len(calls) == 2
     capsys.readouterr()
 
@@ -365,7 +366,7 @@ def test_letter_keeps_one_letter_per_posting_with_the_same_title(tmp_path, score
         calls.append(user)
         return LETTER_REPLY
 
-    monkeypatch.setattr(cli, "_completer", lambda: complete)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: complete)
     assert _letter(tmp_path) == 0 and len(calls) == 2
     assert len(list((tmp_path / "out").glob("*.md"))) == 2
     assert storage.lettered_job_keys(tmp_path / "out") == {scored_job.job.key, second.job.key}
@@ -375,18 +376,18 @@ def test_letter_keeps_one_letter_per_posting_with_the_same_title(tmp_path, score
 def test_letter_skips_a_lettered_job_whose_key_has_a_space(tmp_path, scored_job, monkeypatch):
     spaced = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"source": "ashby", "company_slug": "Some Co"})})
     storage.append_jsonl(tmp_path / "data" / "scores.jsonl", spaced.model_dump())
-    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: lambda system, user, max_tokens: LETTER_REPLY)
     assert _letter(tmp_path) == 0
-    monkeypatch.setattr(cli, "_completer", lambda: pytest.fail)  # must not be called
+    monkeypatch.setattr(cli, "_completer", lambda _=None: pytest.fail)  # must not be called
     assert _letter(tmp_path) == 0
 
 
 def test_letter_for_one_job_respects_existing_letters(tmp_path, scored_job, monkeypatch, capsys):
     first, _ = _two_scored_jobs(tmp_path, scored_job)
-    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: lambda system, user, max_tokens: LETTER_REPLY)
     _letter(tmp_path, "--job", first.job.key)
     capsys.readouterr()
-    monkeypatch.setattr(cli, "_completer", lambda: pytest.fail)  # must not be called
+    monkeypatch.setattr(cli, "_completer", lambda _=None: pytest.fail)  # must not be called
     assert _letter(tmp_path, "--job", first.job.key) == 0
     assert "already have a letter" in capsys.readouterr().out
 
@@ -804,6 +805,7 @@ def _settings_file(monkeypatch, tmp_path, text):
     (cfg / "settings.yaml").write_text(text)
     for name in ("preferences.yaml", "profile.md"):
         (cfg / name).write_text((CONFIG_DIR / name).read_text())
+    shutil.copytree(CONFIG_DIR / "kit", cfg / "kit")
     monkeypatch.setattr(cli.config, "DEFAULT_CONFIG_DIR", cfg)
 
 
@@ -845,3 +847,86 @@ def test_invalid_settings_are_a_friendly_error(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("JOBHUNT_FETCH_WORKERS", "lots")
     assert cli.main(["--data-dir", str(tmp_path), "list"]) == 2
     assert "JOBHUNT_FETCH_WORKERS" in capsys.readouterr().err
+
+
+@respx.mock
+def test_fetch_tuning_comes_from_settings(tmp_path, monkeypatch, fixture_json):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    route = respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    for key, value in {"START_PER_HOST": "1", "MAX_RETRY_AFTER": "7", "COOLDOWN": "0.5", "BREAKER": "2",
+                       "TIMEOUT": "9", "USER_AGENT": "test-agent/1"}.items():
+        monkeypatch.setenv(f"JOBHUNT_FETCH_{key}", value)
+    transports, runners = [], []
+    real_transport, real_runner = throttle.ThrottledTransport, cli.BoardRunner
+    monkeypatch.setattr(throttle, "ThrottledTransport", lambda **kw: transports.append(kw) or real_transport(**kw))
+    monkeypatch.setattr(cli, "BoardRunner", lambda *a, **kw: runners.append(kw) or real_runner(*a, **kw))
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    (kw,) = transports
+    assert (kw["start"], kw["max_retry_after"], kw["cooldown"]) == (1, 7, 0.5)
+    assert runners[0]["breaker"] == 2
+    request = route.calls.last.request
+    assert request.headers["User-Agent"] == "test-agent/1"
+    assert request.extensions["timeout"]["read"] == 9
+
+
+def _one_job(tmp_path, job):
+    storage.append_jsonl(tmp_path / "jobs.jsonl", job.model_dump())
+
+
+def test_score_token_budget_and_body_length_come_from_settings(tmp_path, platform_director_job, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_LLM_SCORE_MAX_TOKENS", "123")
+    monkeypatch.setenv("JOBHUNT_LLM_BODY_CHARS", "40")
+    _one_job(tmp_path, platform_director_job)
+    reply = make_completer({"score": 6, "rationale": "ok", "suggested_modules": []})
+    calls = []
+
+    def complete(system, user, max_tokens):
+        calls.append((user, max_tokens))
+        return reply(system, user)
+
+    monkeypatch.setattr(cli, "_completer", lambda _=None: complete)
+    assert cli.main(["--data-dir", str(tmp_path), "score"]) == 0
+    ((user, max_tokens),) = calls
+    body = platform_director_job.body
+    assert max_tokens == 123
+    assert body[:40] in user and body[:41] not in user
+
+
+def test_letter_token_budget_body_length_and_output_dir_come_from_settings(tmp_path, scored_job, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_LLM_LETTER_MAX_TOKENS", "77")
+    monkeypatch.setenv("JOBHUNT_LLM_BODY_CHARS", "40")
+    monkeypatch.setenv("JOBHUNT_PATHS_OUTPUT_DIR", str(tmp_path / "letters"))
+    storage.append_jsonl(tmp_path / "data" / "scores.jsonl", scored_job.model_dump())
+    calls = []
+
+    def complete(system, user, max_tokens):
+        calls.append((user, max_tokens))
+        return LETTER_REPLY
+
+    monkeypatch.setattr(cli, "_completer", lambda _=None: complete)
+    assert cli.main(["--data-dir", str(tmp_path / "data"), "letter"]) == 0
+    ((user, max_tokens),) = calls
+    body = scored_job.job.body
+    assert max_tokens == 77
+    assert body[:40] in user and body[:41] not in user
+    assert storage.lettered_job_keys(tmp_path / "letters") == {scored_job.job.key}
+
+
+def test_a_settings_edit_mid_run_does_not_change_the_recorded_model(tmp_path, platform_director_job, monkeypatch):
+    _settings_file(monkeypatch, tmp_path, "llm:\n  backend: claude-code\n  model: opus\n")
+    for job in (platform_director_job, platform_director_job.model_copy(update={"external_id": "second"})):
+        _one_job(tmp_path, job)
+    # the user edits settings.yaml for the next run while this one is still scoring
+    edits = iter(["llm:\n  backend: claude-code\n  model: haiku\n", "llm:\n  model: [oops\n"])
+    reply = make_completer({"score": 6, "rationale": "ok", "suggested_modules": []})
+
+    def complete(system, user, max_tokens):
+        (tmp_path / "cfg" / "settings.yaml").write_text(next(edits))
+        return reply(system, user)
+
+    given = []
+    monkeypatch.setattr(cli, "_completer", lambda llm_settings: given.append(llm_settings) or complete)
+    assert cli.main(["--data-dir", str(tmp_path), "score"]) == 0
+    assert given[0].model == "opus"  # the completer is built from the run's settings
+    assert [s.score.model for s in storage.load_scores(tmp_path)] == ["claude-code:opus"] * 2

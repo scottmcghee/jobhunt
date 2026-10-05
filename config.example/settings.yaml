@@ -41,6 +41,8 @@ fetch:
   prune_after_404s: 3
 
 paths:
+  # ~ expands, and a relative path is under the repo (like the defaults), whatever directory
+  # you run from. The --data-dir and --output-dir flags are relative to the current directory.
   data_dir: null  # null: the repo's data/ (`--data-dir`). Env: JOBHUNT_PATHS_DATA_DIR
   output_dir: null  # null: the repo's output/ (`--output-dir`). Env: JOBHUNT_PATHS_OUTPUT_DIR
 

@@ -167,8 +167,8 @@ def read_urls(path: Path) -> Iterator[str]:
                 yield _trim(url)
 
 
-def _client() -> httpx.Client:
-    fetch = settings.load().fetch
+def _client(fetch: settings.FetchSettings | None = None) -> httpx.Client:
+    fetch = fetch or settings.load().fetch
     return httpx.Client(
         timeout=fetch.timeout,
         headers={"User-Agent": fetch.user_agent},
@@ -200,9 +200,11 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
     return bool(jobs)
 
 
-def check(companies: list[Company], client: httpx.Client) -> list[Company]:
+def check(
+    companies: list[Company], client: httpx.Client, workers: int | None = None
+) -> list[Company]:
     """The boards that have open postings, in their original order."""
-    with ThreadPoolExecutor(check_workers()) as pool:
+    with ThreadPoolExecutor(workers or check_workers()) as pool:
         keep = list(pool.map(lambda c: _has_jobs(c, client), companies))
     return [c for c, k in zip(companies, keep, strict=True) if k]
 
@@ -224,8 +226,13 @@ def main(argv: list[str] | None = None) -> int:
     known = config.load_companies(args.companies)
     found = discover((url for p in args.index for url in read_urls(p)), known)
     if args.check:
-        with _client() as client:
-            checked = check(found, client)
+        try:
+            s = settings.load()
+        except settings.SettingsError as e:
+            log.error("%s", e)
+            return 2
+        with _client(s.fetch) as client:
+            checked = check(found, client, s.slugs.check_workers)
         log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
         found = checked
     args.out.write_text(render(found))

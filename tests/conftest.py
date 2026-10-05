@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from jobhunt import config
+from jobhunt import config, settings
 from jobhunt.schema import Company, Job, Score, ScoredJob
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -23,6 +23,13 @@ LOCAL_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 def _use_example_config(monkeypatch):
     """Code paths that fall back to the default config dir get the templates too."""
     monkeypatch.setattr(config, "DEFAULT_CONFIG_DIR", CONFIG_DIR)
+
+
+@pytest.fixture(autouse=True)
+def _no_settings_env(monkeypatch):
+    """Settings from your shell (JOBHUNT_FETCH_WORKERS=...) don't leak in; a test sets its own."""
+    for name in settings.env_names():
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

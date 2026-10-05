@@ -143,3 +143,9 @@ def test_letter_budget_and_body_size_are_parameters(scored_job, profile, kit):
     generate_letter(job, profile, kit, complete, max_tokens=321, body_chars=40)
     (max_tokens, user), = seen
     assert max_tokens == 321 and "TAIL" not in user
+
+
+def test_letter_records_the_model_label_it_is_given(scored_job, profile, kit):
+    complete = make_completer({"custom_opening_sentence": "Open.", "custom_closing_sentence": "Close."})
+    letter = generate_letter(scored_job, profile, kit, complete, model_label="claude-code:opus")
+    assert letter.model == "claude-code:opus"

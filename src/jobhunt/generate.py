@@ -116,6 +116,7 @@ def generate_letter(
     complete: Completer,
     max_tokens: int = 800,
     body_chars: int = 12000,
+    model_label: str | None = None,  # backend:model; default: from settings now
 ) -> Letter:
     modules = choose_modules(scored, kit)
     user = f"""# CANDIDATE PROFILE
@@ -152,5 +153,5 @@ Gaps: {'; '.join(scored.score.gaps) or 'none noted'}
         title=scored.job.title,
         modules_used=[m.id for m in modules],
         text=text,
-        model=f"{backend_name()}:{model_name()}",
+        model=model_label or f"{backend_name()}:{model_name()}",
     )

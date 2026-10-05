@@ -33,7 +33,7 @@ import httpx
 from jobhunt import config, settings, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
-from jobhunt.llm import Completer, make_completer
+from jobhunt.llm import Completer, backend_name, make_completer, model_name
 from jobhunt.runner import BoardRunner
 from jobhunt.schema import Company, Job
 from jobhunt.score import score_job
@@ -291,8 +291,13 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     return 130 if interrupted else 0
 
 
-def _completer() -> Completer:
-    return make_completer()
+def _completer(llm_settings: settings.LLMSettings | None = None) -> Completer:
+    return make_completer(llm_settings)
+
+
+def _model_label(llm_settings: settings.LLMSettings) -> str:
+    """backend:model, worked out once per run and recorded with every score and letter."""
+    return f"{backend_name(llm_settings)}:{model_name(llm_settings)}"
 
 
 def cmd_score(args: argparse.Namespace, data_dir: Path, complete: Completer | None = None) -> int:
@@ -305,13 +310,14 @@ def cmd_score(args: argparse.Namespace, data_dir: Path, complete: Completer | No
         print("nothing to score.")
         return 0
 
-    complete = complete or _completer()
     llm = args.settings.llm
+    complete = complete or _completer(llm)
+    label = _model_label(llm)
     profile = config.load_profile()
     kit = config.load_kit()
     for j in todo:
         try:
-            sj = score_job(j, profile, kit, complete, llm.score_max_tokens, llm.body_chars)
+            sj = score_job(j, profile, kit, complete, llm.score_max_tokens, llm.body_chars, label)
         except (ValueError, KeyError) as e:  # unusable model reply; stays unscored for next run
             log.warning("%s: %s — skipped (%s: %s)", j.key, j.title, type(e).__name__, e)
             continue
@@ -346,15 +352,16 @@ def cmd_letter(
         if not targets:
             return 0
 
-    complete = complete or _completer()
     llm = args.settings.llm
+    complete = complete or _completer(llm)
+    label = _model_label(llm)
     profile = config.load_profile()
     kit = config.load_kit()
     skipped = 0
     for s in targets:
         try:
             letter = generate_letter(
-                s, profile, kit, complete, llm.letter_max_tokens, llm.body_chars
+                s, profile, kit, complete, llm.letter_max_tokens, llm.body_chars, label
             )
         except (ValueError, KeyError) as e:  # unusable model reply; the next run retries it
             log.warning("%s: %s — skipped (%s: %s)", s.job.key, s.job.title, type(e).__name__, e)

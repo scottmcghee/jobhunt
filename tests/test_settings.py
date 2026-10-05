@@ -107,3 +107,30 @@ def test_env_names_follow_section_and_key():
     names = settings.env_names()
     assert "JOBHUNT_FETCH_PER_HOST" in names and "JOBHUNT_SLUGS_CHECK_WORKERS" in names
     assert "JOBHUNT_MODEL" in names and "JOBHUNT_BACKEND" in names  # the short aliases
+
+
+def test_a_section_with_every_key_commented_out_means_defaults(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_text("fetch:\n  # workers: 8\nllm:\n")
+    assert settings.load(p, environ={}) == settings.Settings()
+    assert settings.load(p, environ={"JOBHUNT_FETCH_WORKERS": "9"}).fetch.workers == 9
+
+
+def test_a_yaml_syntax_error_names_the_file(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_text("llm:\n  model: [oops\n")
+    with pytest.raises(settings.SettingsError, match=r"settings\.yaml"):
+        settings.load(p, environ={})
+
+
+def test_paths_expand_home_and_resolve_relative_ones_against_the_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)  # the current directory doesn't matter
+    p = tmp_path / "settings.yaml"
+    p.write_text("paths:\n  data_dir: ~/x\n  output_dir: letters\n")
+    s = settings.load(p, environ={})
+    repo = Path(__file__).resolve().parents[1]
+    assert s.paths.data_dir == tmp_path / "x"
+    assert s.paths.output_dir == repo / "letters"
+    s = settings.load(p, environ={"JOBHUNT_PATHS_OUTPUT_DIR": "/abs/out"})
+    assert s.paths.output_dir == Path("/abs/out")

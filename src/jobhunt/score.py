@@ -70,6 +70,7 @@ def score_job(
     complete: Completer,
     max_tokens: int = 1600,
     body_chars: int = 12000,
+    model_label: str | None = None,  # backend:model; default: from settings now
 ) -> ScoredJob:
     raw = complete(SYSTEM, build_user_prompt(job, profile, kit, body_chars), max_tokens)
     data = extract_json(raw)
@@ -81,6 +82,6 @@ def score_job(
         strengths=[str(s) for s in data.get("strengths", [])],
         gaps=[str(g) for g in data.get("gaps", [])],
         suggested_modules=mods,
-        model=f"{backend_name()}:{model_name()}",
+        model=model_label or f"{backend_name()}:{model_name()}",
     )
     return ScoredJob(job=job, score=score)

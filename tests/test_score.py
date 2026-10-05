@@ -106,3 +106,9 @@ def test_score_budget_and_body_size_are_parameters(platform_director_job, profil
     score_job(job, profile, kit, complete, max_tokens=999, body_chars=50)
     (max_tokens, user), = budgets
     assert max_tokens == 999 and "x" * 50 in user and "TAIL" not in user
+
+
+def test_score_records_the_model_label_it_is_given(platform_director_job, profile, kit):
+    complete = make_completer({"score": 5, "rationale": "ok", "suggested_modules": []})
+    sj = score_job(platform_director_job, profile, kit, complete, model_label="claude-code:opus")
+    assert sj.score.model == "claude-code:opus"

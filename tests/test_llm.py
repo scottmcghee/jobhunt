@@ -282,3 +282,25 @@ def test_claude_code_timeout_comes_from_settings(monkeypatch):
 
     llm.claude_code_completer(runner=fake_run)("SYS", "USER", 10)
     assert seen["timeout"] == 42
+
+
+def test_settings_passed_in_are_used_without_reading_the_file(tmp_path, monkeypatch):
+    # One CLI run loads settings once; an edit (or a typo) in the file mid-run changes nothing.
+    (tmp_path / "settings.yaml").write_text("llm:\n  model: [oops\n")
+    monkeypatch.setattr(llm.settings.config, "DEFAULT_CONFIG_DIR", tmp_path)
+    s = llm.settings.LLMSettings(backend="claude-code", model="opus", claude_code_timeout=42)
+    assert (llm.backend_name(s), llm.model_name(s)) == ("claude-code", "opus")
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen.update(model=argv[argv.index("--model") + 1], timeout=kw["timeout"])
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"result": "ok", "is_error": False}), stderr="")
+
+    llm.claude_code_completer(runner=fake_run, llm_settings=s)("SYS", "USER", 10)
+    assert seen == {"model": "opus", "timeout": 42}
+    for make in (llm.anthropic_completer, llm.bedrock_completer):
+        client = _fake_client()
+        make(client=client, llm_settings=s)("SYS", "USER", 10)
+        assert client.messages.calls[0]["model"] == "opus"
+    monkeypatch.setattr(llm, "claude_code_completer", lambda llm_settings: llm_settings)
+    assert llm.make_completer(s) is s
