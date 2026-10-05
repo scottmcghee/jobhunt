@@ -26,7 +26,7 @@ from pathlib import Path
 
 import httpx
 
-from jobhunt import config, storage
+from jobhunt import config, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, make_completer
@@ -38,7 +38,9 @@ log = logging.getLogger("jobhunt")
 
 
 def _client() -> httpx.Client:
+    # Polite by construction: per-group concurrency limits, and retries on 429 (see throttle.py).
     return httpx.Client(
+        transport=throttle.ThrottledTransport(),
         timeout=20.0,
         headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
         follow_redirects=True,

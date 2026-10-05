@@ -406,3 +406,19 @@ def test_fetch_board_only_reports_and_record_keeps_the_books(tmp_path):
     seen = storage.SeenSet(tmp_path / "seen.json")
     cli._record(outcome, prefs, seen, misses, dead, new_jobs, verbose=False)
     assert misses.counts == {"greenhouse:dead": 1} and not dead and not new_jobs
+
+
+@respx.mock
+def test_a_throttled_board_is_retried_not_skipped(tmp_path, fixture_json):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    route = respx.get(GH.format("examplecorp")).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(200, json=fixture_json("greenhouse_jobs.json")),
+        ]
+    )
+    assert _fetch(tmp_path, companies) == 0
+    assert route.call_count == 2
+    assert [j.title for j in storage.load_jobs(tmp_path / "data")] == ["Director of Platform Engineering"]
+    assert _misses(tmp_path).counts == {}
