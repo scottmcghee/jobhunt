@@ -122,3 +122,32 @@ def test_term_does_not_match_inside_other_words(term, text):
 def test_internal_platform_director_not_mistaken_for_intern(prefs):
     r = jfilter.evaluate(_job("Director, Internal Developer Platform", "Seattle, WA"), prefs)
     assert r.passed, r.reason
+
+
+def _onsite(prefs, *terms):
+    loc = prefs.location.model_copy(update={"onsite_accept_any": list(terms)})
+    return prefs.model_copy(update={"location": loc})
+
+
+def test_onsite_role_outside_onsite_region_rejected(prefs):
+    # "united states" is accepted in general, but this role is explicitly on-site in New York
+    job = _job("Director of Platform Engineering", "New York, NY, United States", remote=False)
+    assert jfilter.evaluate(job, _onsite(prefs)).passed  # rule off: unchanged behavior
+    r = jfilter.evaluate(job, _onsite(prefs, "seattle", "bellevue"))
+    assert not r.passed
+    assert "on-site" in r.reason and "New York" in r.reason
+
+
+def test_onsite_role_inside_onsite_region_passes(prefs):
+    job = _job("Director of Platform Engineering", "Bellevue, WA, United States", remote=False)
+    assert jfilter.evaluate(job, _onsite(prefs, "seattle", "bellevue")).passed
+
+
+@pytest.mark.parametrize("remote", [True, None])
+def test_onsite_rule_ignores_remote_and_unknown(prefs, remote):
+    job = _job("Director of Platform Engineering", "Austin, TX, United States", remote=remote)
+    assert jfilter.evaluate(job, _onsite(prefs, "seattle")).passed
+
+
+def test_example_preferences_turn_the_onsite_rule_on(prefs):
+    assert "seattle" in prefs.location.onsite_accept_any

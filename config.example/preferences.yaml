@@ -429,6 +429,22 @@ location:
     - "usa"
     - "wa,"
     - "washington"
+  # Roles explicitly NOT remote must be in one of these places, even if accept_any matched
+  # (e.g. "united states" alone doesn't make an on-site New York role commutable). Leave empty to
+  # turn this off.
+  onsite_accept_any:
+    - " wa "
+    - bellevue
+    - bothell
+    - everett
+    - kirkland
+    - lynnwood
+    - pacific northwest
+    - redmond
+    - renton
+    - seattle
+    - tacoma
+    - "wa,"
   # Remote roles whose text names one of these are rejected (foreign-only remote).
   reject_any:
     - "canada only"

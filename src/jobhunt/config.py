@@ -43,6 +43,8 @@ class LocationRules(BaseModel):
     allow_remote: bool = True
     accept_any: list[str] = Field(default_factory=list)
     reject_any: list[str] = Field(default_factory=list)
+    # When set, a role that is explicitly not remote must be in one of these places. Empty = off.
+    onsite_accept_any: list[str] = Field(default_factory=list)
 
 
 class ScoringRules(BaseModel):
