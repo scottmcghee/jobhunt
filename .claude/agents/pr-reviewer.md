@@ -48,7 +48,8 @@ Every finding needs evidence of one of these kinds:
    step by step through the code.
 
 If you suspect something but cannot demonstrate it, leave it out, or list it under "Unverified
-concerns" with what you would need to confirm it. Unverified concerns are not acted on.
+concerns" with what you would need to confirm it. Nothing is fixed on the strength of an
+unverified concern alone; the orchestrator may settle one and turn it into a finding.
 
 ## Before you report
 
