@@ -18,6 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# AWS credential-chain signing for JOBHUNT_BACKEND=bedrock (a Bedrock API key needs nothing extra)
+bedrock = ["anthropic[bedrock]>=1.11"]
 dev = [
     "pytest>=8.0",
     "respx>=0.21",
