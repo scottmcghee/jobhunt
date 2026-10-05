@@ -3,11 +3,11 @@
     python scripts/bench_fetch.py sample [-n 150] [--seed 1] [--companies PATH] [-o data/bench.yaml]
     python scripts/bench_fetch.py run [--companies data/bench.yaml] [--workers N] [--per-host N]
 
-``sample`` draws boards so every rate-limit group (a Workday datacenter or an API host) is
-represented in proportion to its size, keeping companies.yaml order. ``run`` times a dry-run fetch
-of that file with -v, so the per-host request, throttle and peak-concurrency stats print at the
-end. A dry run records nothing, but it does make real requests: every run hits each sampled board
-once, so keep samples small and don't loop it.
+``sample`` draws boards so every rate-limit group (a Workday datacenter or an API host) gets one,
+then shares the rest by each group's remaining room, keeping companies.yaml order. ``run`` times a
+dry-run fetch of that file with -v, so the per-host request, throttle and peak-concurrency stats
+print at the end. A dry run records nothing, but it does make real requests: every run hits each
+sampled board once, so keep samples small and don't loop it.
 """
 
 from __future__ import annotations
@@ -27,7 +27,9 @@ DEFAULT_SAMPLE = Path("data/bench.yaml")
 
 
 def stratified_sample(companies: Sequence[Company], n: int, seed: int = 1) -> list[Company]:
-    """n boards: one per group while there's room, the rest by group size; in config order."""
+    """n boards: one per group while there's room, the rest by remaining room; in config order."""
+    if n < 1:
+        raise ValueError(f"n must be at least 1, not {n}")
     if n >= len(companies):
         return list(companies)
     groups: dict[str, list[Company]] = {}
@@ -57,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sample", help="write a stratified sample of companies.yaml")
-    s.add_argument("-n", type=int, default=150)
+    s.add_argument("-n", type=cli._at_least_one, default=150)
     s.add_argument("--seed", type=int, default=1)
     s.add_argument("--companies", type=Path, help="default: config/companies.yaml")
     s.add_argument("-o", "--out", type=Path, default=DEFAULT_SAMPLE)
@@ -74,12 +76,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(boards)} boards -> {args.out}")
         return 0
 
+    if not args.companies.exists():
+        print(f"no sample at {args.companies}; run `bench_fetch.py sample` first", file=sys.stderr)
+        return 2
     start = time.monotonic()
     rc = cli.main(["-v", "--companies", str(args.companies), "fetch", "--dry-run",
                    "--workers", args.workers, "--per-host", args.per_host])
     elapsed = time.monotonic() - start
-    flags = f"--workers {args.workers} --per-host {args.per_host}"
-    print(f"\n{flags}: {elapsed:.0f} s", file=sys.stderr)
+    if rc in (0, 130):  # finished, or stopped with Ctrl-C: the time still means something
+        flags = f"--workers {args.workers} --per-host {args.per_host}"
+        print(f"\n{flags}: {elapsed:.0f} s", file=sys.stderr)
     return rc
 
 

@@ -6,6 +6,8 @@ import collections
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from jobhunt.schema import Company
 from jobhunt.sources import rate_group
 
@@ -26,7 +28,8 @@ def test_sample_keeps_each_groups_share():
     sample = bench.stratified_sample(_boards(), 20, seed=1)
     assert len(sample) == 20
     counts = collections.Counter(rate_group(c) for c in sample)
-    # one per group first, then the other 16 by size (60/30/9/1): 9.6/4.8/1.4/0.2, largest remainders
+    # one per group first, then the other 16 by remaining room (59/29/8/0): 9.83/4.83/1.33/0,
+    # largest remainders
     assert counts == {"workday:wd1": 11, "workday:wd5": 6, "greenhouse": 2, "lever": 1}
 
 
@@ -45,3 +48,42 @@ def test_sample_is_deterministic_and_in_config_order():
 
 def test_asking_for_more_than_there_are_returns_them_all():
     assert bench.stratified_sample(_boards(), 500, seed=1) == _boards()
+
+
+def test_sampling_zero_or_fewer_boards_is_an_error():
+    with pytest.raises(ValueError):
+        bench.stratified_sample(_boards(), 0)
+
+
+@pytest.mark.parametrize("n", ["0", "-1"])
+def test_sample_rejects_n_below_one(n, tmp_path):
+    with pytest.raises(SystemExit):
+        bench.main(["sample", "-n", n, "-o", str(tmp_path / "b.yaml")])
+    assert not (tmp_path / "b.yaml").exists()
+
+
+def test_run_without_a_sample_says_to_make_one(tmp_path, monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(bench.cli, "main", lambda argv: called.append(argv) or 0)
+    assert bench.main(["run", "--companies", str(tmp_path / "missing.yaml")]) == 2
+    assert not called
+    err = capsys.readouterr().err
+    assert "bench_fetch.py sample" in err
+    assert "--workers" not in err
+
+
+def test_run_prints_no_timing_when_fetch_fails(tmp_path, monkeypatch, capsys):
+    sample = tmp_path / "bench.yaml"
+    sample.write_text("companies: []\n")
+    monkeypatch.setattr(bench.cli, "main", lambda argv: 1)
+    assert bench.main(["run", "--companies", str(sample)]) == 1
+    assert "--per-host" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("rc", [0, 130])
+def test_run_prints_timing_when_fetch_finishes_or_is_stopped(rc, tmp_path, monkeypatch, capsys):
+    sample = tmp_path / "bench.yaml"
+    sample.write_text("companies: []\n")
+    monkeypatch.setattr(bench.cli, "main", lambda argv: rc)
+    assert bench.main(["run", "--companies", str(sample)]) == rc
+    assert "--workers 32 --per-host 6:" in capsys.readouterr().err
