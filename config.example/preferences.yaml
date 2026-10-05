@@ -429,9 +429,9 @@ location:
     - "usa"
     - "wa,"
     - "washington"
-  # Roles explicitly NOT remote must be in one of these places, even if accept_any matched
-  # (e.g. "united states" alone doesn't make an on-site New York role commutable). Leave empty to
-  # turn this off.
+  # Roles explicitly NOT remote (on-site or hybrid) are checked against this list instead of
+  # accept_any (e.g. "united states" alone doesn't make an on-site New York role commutable).
+  # Leave empty to turn this off.
   onsite_accept_any:
     - " wa "
     - bellevue

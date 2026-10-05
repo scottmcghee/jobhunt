@@ -136,6 +136,23 @@ def test_onsite_role_outside_onsite_region_rejected(prefs):
     r = jfilter.evaluate(job, _onsite(prefs, "seattle", "bellevue"))
     assert not r.passed
     assert "on-site" in r.reason and "New York" in r.reason
+    assert "hybrid" in r.reason  # remote=False also covers hybrid postings
+
+
+def test_onsite_list_replaces_accept_any_for_onsite_roles(prefs):
+    # Renton is only in the on-site list, not accept_any; for an on-site role that is enough
+    assert "renton" not in prefs.location.accept_any
+    job = _job("Director of Platform Engineering", "Renton", remote=False)
+    assert not jfilter.evaluate(job, _onsite(prefs)).passed  # rule off: accept_any decides
+    assert jfilter.evaluate(job, _onsite(prefs, "renton")).passed
+
+
+def test_reject_any_wins_over_onsite_rule(prefs):
+    assert "india" in prefs.location.reject_any
+    job = _job("Director of Platform Engineering", "Seattle, WA / India", remote=False)
+    r = jfilter.evaluate(job, _onsite(prefs, "seattle"))
+    assert not r.passed
+    assert "rejected term" in r.reason
 
 
 def test_onsite_role_inside_onsite_region_passes(prefs):
