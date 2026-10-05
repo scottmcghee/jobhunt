@@ -139,6 +139,43 @@ def test_a_group_that_keeps_refusing_is_skipped_for_the_rest_of_the_run(caplog):
     assert "g: 5 boards in a row refused" in caplog.text and "skipping its other 3" in caplog.text
 
 
+def test_a_refusal_that_finishes_after_the_stop_does_not_trip_the_breaker(caplog):
+    caplog.set_level(logging.WARNING)
+    fifth_started, g_done = threading.Event(), threading.Event()
+
+    class Runner(BoardRunner):
+        def _worker(self, group):
+            try:
+                super()._worker(group)
+            finally:
+                if group == "g":
+                    g_done.set()
+
+    def work(item):
+        group, n = item
+        if group == "other":
+            assert fifth_started.wait(WAIT)
+            raise KeyboardInterrupt
+        if n == 4:
+            fifth_started.set()
+            assert runner._stop.wait(WAIT)  # the 5th refusal comes back after Ctrl-C
+        return "refused"
+
+    items = [("other", 0)] + [("g", n) for n in range(7)]
+    runner = Runner(
+        items,
+        work,
+        group_of=lambda item: item[0],
+        per_group=1,
+        refused=lambda r: r == "refused",
+        skip=lambda item: "skipped",
+    )
+    with pytest.raises(KeyboardInterrupt):
+        list(runner)
+    assert g_done.wait(WAIT)
+    assert "boards in a row refused" not in caplog.text
+
+
 def test_a_success_resets_the_breaker():
     def work(item):
         return "ok" if item == "g2" else "refused"

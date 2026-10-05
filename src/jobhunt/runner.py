@@ -123,11 +123,11 @@ class BoardRunner(Generic[T, R]):
                     self._results.put((index, self._skip(item)))  # type: ignore[misc]
                     continue
                 result = self._work(item)
+                if self._stop.is_set():  # finished after the stop: the run no longer wants it
+                    return
                 self._count(group, result)
             except BaseException as e:  # queued so iteration raises it rather than waiting forever
                 self._results.put((index, _Failed(e)))
-                return
-            if self._stop.is_set():  # finished after the stop: the run no longer wants it
                 return
             self._results.put((index, result))
 

@@ -5,12 +5,13 @@ Ashby, Workday, SmartRecruiters), drops those that fail the hard filters in
 config/preferences.yaml, has Claude score the rest 1-10 against config/profile.md, and assembles
 cover letters for the top scorers from the pre-written modules in config/kit/.
 
-    jobhunt fetch   [--company NAME] [--dry-run]     pull postings, filter, record new ones
+    jobhunt fetch   [--company NAME] [--dry-run] [--workers N] [--per-host N]
+                                                     pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
     jobhunt list    [--min-score N]                  show scored jobs and their keys
     jobhunt letter  [--min-score N] [--job KEY] [--force]
                                                      letters for high scorers that have none yet
-    jobhunt run                                      fetch -> score -> letter
+    jobhunt run     [--workers N] [--per-host N]     fetch -> score -> letter
 
 A job key is source:company_slug:external_id, e.g. greenhouse:huntress:7777533003.
 """
