@@ -96,6 +96,22 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
+_LETTER_HEADER = re.compile(r"<!-- (\S+) \|")
+
+
+def lettered_job_keys(output_dir: Path) -> set[str]:
+    """Job keys that already have a letter, read from each letter's header comment.
+
+    The filename can't tell: it comes from the company name, which may be the model's reading.
+    """
+    keys = set()
+    for path in output_dir.glob("*.md") if output_dir.is_dir() else []:
+        with path.open(encoding="utf-8") as f:
+            if m := _LETTER_HEADER.match(f.readline()):
+                keys.add(m.group(1))
+    return keys
+
+
 def write_letter(letter: Letter, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}.md"

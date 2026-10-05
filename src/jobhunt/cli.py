@@ -8,7 +8,8 @@ cover letters for the top scorers from the pre-written modules in config/kit/.
     jobhunt fetch   [--company NAME] [--dry-run]     pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
     jobhunt list    [--min-score N]                  show scored jobs and their keys
-    jobhunt letter  [--min-score N] [--job KEY]      generate letters for high scorers
+    jobhunt letter  [--min-score N] [--job KEY] [--force]
+                                                     letters for high scorers that have none yet
     jobhunt run                                      fetch -> score -> letter
 
 A job key is source:company_slug:external_id, e.g. greenhouse:huntress:7777533003.
@@ -175,14 +176,29 @@ def cmd_letter(
     if not targets:
         print(f"no jobs at or above {threshold}/10.")
         return 0
+    if not args.force:
+        done = storage.lettered_job_keys(output_dir)
+        if had := sum(s.job.key in done for s in targets):
+            print(f"{had} job(s) already have a letter; --force regenerates them.")
+        targets = [s for s in targets if s.job.key not in done]
+        if not targets:
+            return 0
 
     complete = complete or _completer()
     profile = config.load_profile()
     kit = config.load_kit()
+    skipped = 0
     for s in targets:
-        letter = generate_letter(s, profile, kit, complete)
+        try:
+            letter = generate_letter(s, profile, kit, complete)
+        except (ValueError, KeyError) as e:  # unusable model reply; the next run retries it
+            log.warning("%s: %s — skipped (%s: %s)", s.job.key, s.job.title, type(e).__name__, e)
+            skipped += 1
+            continue
         path = storage.write_letter(letter, output_dir)
         print(f"wrote {path}  (modules: {', '.join(letter.modules_used)})")
+    if skipped:
+        print(f"{skipped} letter(s) skipped; see the warnings above.")
     return 0
 
 
@@ -229,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_help = "show what would be recorded without recording it"
     limit_help = "score at most N jobs"
     rescore_help = "score jobs again even if they already have a score"
+    force_help = "write letters again for jobs that already have one in the output directory"
     min_score_help = "letter threshold (default: scoring.min_score_for_letter in preferences.yaml)"
     job_help = ("write a letter for one scored job, whatever its score. A job key is "
                 "source:company_slug:external_id, e.g. greenhouse:huntress:7777533003; "
@@ -248,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     le = sub.add_parser("letter", help="generate letters for high scorers")
     le.add_argument("--min-score", type=int, metavar="N", help=min_score_help)
     le.add_argument("--job", metavar="KEY", help=job_help)
+    le.add_argument("--force", action="store_true", help=force_help)
 
     r = sub.add_parser("run", help="fetch -> score -> letter")
     r.add_argument("--company", metavar="NAME", help=company_help)
@@ -256,6 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--rescore", action="store_true", help=rescore_help)
     r.add_argument("--min-score", type=int, metavar="N", help=min_score_help)
     r.add_argument("--job", metavar="KEY", help=job_help)
+    r.add_argument("--force", action="store_true", help=force_help)
     return p
 
 

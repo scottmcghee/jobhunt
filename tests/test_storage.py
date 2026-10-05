@@ -68,3 +68,12 @@ def test_failed_save_leaves_previous_file_intact(tmp_path, monkeypatch):
         pass
     reloaded = storage.SeenSet(p)
     assert "greenhouse:x:1" in reloaded and len(reloaded) == 1
+
+
+def test_lettered_job_keys_reads_letter_headers(tmp_path):
+    letter = Letter(job_key="greenhouse:acme:1", company="Acme", title="VP Eng", modules_used=["m"], text="Hi", model="t")
+    storage.write_letter(letter, tmp_path)
+    (tmp_path / "notes.md").write_text("no header here\n")
+    (tmp_path / "empty.md").write_text("")
+    assert storage.lettered_job_keys(tmp_path) == {"greenhouse:acme:1"}
+    assert storage.lettered_job_keys(tmp_path / "missing") == set()
