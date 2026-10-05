@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import _thread
+import logging
+import queue
 import threading
 
 import pytest
 
+from jobhunt import runner as runner_module
 from jobhunt.runner import BoardRunner
 
 WAIT = 5  # seconds; only reached if a test is broken
@@ -14,6 +17,19 @@ WAIT = 5  # seconds; only reached if a test is broken
 
 def _run(items, work, group_of=lambda item: item[0], **kw):
     return BoardRunner(items, work, group_of, **kw)
+
+
+class _Announcing(queue.Queue):
+    """A result queue that sets ``queued`` once the result at ``index`` is in it."""
+
+    def __init__(self, index):
+        super().__init__()
+        self.index, self.queued = index, threading.Event()
+
+    def put(self, entry, *args, **kwargs):
+        super().put(entry, *args, **kwargs)
+        if entry[0] == self.index:
+            self.queued.set()
 
 
 def test_results_come_back_in_input_order_even_when_later_ones_finish_first():
@@ -88,17 +104,14 @@ def test_ctrl_c_in_the_main_thread_stops_the_run():
 
 
 def test_boards_that_finished_out_of_order_are_kept_after_an_interrupt():
-    fast_done = threading.Event()
-
     def work(item):
         if item == "slow":
-            assert fast_done.wait(WAIT)
+            assert runner._results.queued.wait(WAIT)  # interrupt once fast's result is queued
             raise KeyboardInterrupt
-        if item == "fast":
-            fast_done.set()
         return item
 
     runner = BoardRunner(["slow", "fast"], work, group_of=lambda item: item, per_group=1)
+    runner._results = _Announcing(index=1)
     with pytest.raises(KeyboardInterrupt):
         list(runner)
     assert runner.finished_out_of_order() == ["fast"]
@@ -133,6 +146,101 @@ def test_a_success_resets_the_breaker():
     items = [f"g{i}" for i in range(8)]
     runner = _run(items, work, per_group=1, refused=lambda r: r == "refused", skip=lambda i: "skipped")
     assert "skipped" not in list(runner)  # never 5 refusals in a row
+
+
+def test_a_worker_that_raises_ends_the_run_with_that_error():
+    def work(item):
+        if item == "a1":
+            raise ValueError("boom")
+        return item
+
+    with pytest.raises(ValueError, match="boom"):
+        list(_run(["a1", "b1"], work, per_group=1))
+
+
+def test_a_skip_that_raises_ends_the_run_with_that_error():
+    runner = _run(
+        [f"g{i}" for i in range(7)],
+        lambda item: "refused",
+        per_group=1,
+        refused=lambda r: r == "refused",
+        skip=lambda item: 1 / 0,
+    )
+    with pytest.raises(ZeroDivisionError):
+        list(runner)
+
+
+def test_ctrl_c_while_workers_are_still_starting_stops_them(monkeypatch):
+    interrupted, release = threading.Event(), threading.Event()
+    started, worked = [], []
+
+    class Starting(threading.Thread):
+        def start(self):
+            started.append(self)
+            if len(started) == 2:
+                assert interrupted.wait(WAIT)  # Ctrl-C lands while this thread is being started
+            super().start()
+
+    def work(item):
+        if item == "a0":
+            _thread.interrupt_main()
+            interrupted.set()
+            assert release.wait(WAIT)
+        worked.append(item)
+        return item
+
+    monkeypatch.setattr(runner_module.threading, "Thread", Starting)
+    runner = _run(["a0", "a1", "b0"], work, per_group=1)
+    with pytest.raises(KeyboardInterrupt):
+        list(runner)
+    release.set()
+    for thread in started:
+        if thread.ident is not None:
+            thread.join(WAIT)
+    assert "a1" not in worked  # a's worker saw the stop and started nothing new
+
+
+def test_the_skip_count_in_the_log_matches_the_boards_skipped(caplog):
+    caplog.set_level(logging.WARNING)
+    g1_popped = threading.Event()
+
+    class Runner(BoardRunner):
+        def _next(self, group):
+            job = super()._next(group)
+            if job and job[1] == "g1":
+                g1_popped.set()
+                assert tripped.wait(WAIT)  # the breaker trips between g1's pop and its work
+            return job
+
+    def refused(result):
+        return result == "refused"
+
+    def work(item):
+        if item == "g0":
+            assert g1_popped.wait(WAIT)
+        return "refused"
+
+    tripped = threading.Event()
+    runner = Runner(
+        [f"g{i}" for i in range(4)],
+        work,
+        group_of=lambda item: "g",
+        per_group=2,
+        refused=refused,
+        skip=lambda item: "skipped",
+        breaker=1,
+    )
+    real_count = runner._count
+
+    def count(group, result):
+        real_count(group, result)
+        if group in runner._tripped:
+            tripped.set()
+
+    runner._count = count
+    results = list(runner)
+    assert results.count("skipped") == 2
+    assert "skipping its other 2" in caplog.text
 
 
 def test_no_items_no_results():

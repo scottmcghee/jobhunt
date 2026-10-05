@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import queue
+import threading
 
 import httpx
 import pytest
@@ -433,6 +435,15 @@ def test_concurrency_flags(cmd):
     assert (args.workers, args.per_host) == (1, 1)
 
 
+@pytest.mark.parametrize("cmd", ["fetch", "run"])
+@pytest.mark.parametrize("flag", ["--workers", "--per-host"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_concurrency_flags_must_be_at_least_one(cmd, flag, value, capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args([cmd, flag, value])
+    assert "must be at least 1" in capsys.readouterr().err
+
+
 @respx.mock
 def test_a_group_that_keeps_refusing_is_skipped(tmp_path, caplog):
     p = tmp_path / "companies.yaml"
@@ -448,8 +459,6 @@ def test_a_group_that_keeps_refusing_is_skipped(tmp_path, caplog):
 
 @respx.mock
 def test_interrupt_keeps_a_board_that_finished_out_of_order(tmp_path, fixture_json, monkeypatch, capsys):
-    import threading
-
     p = tmp_path / "companies.yaml"
     p.write_text(
         "companies:\n"
@@ -459,19 +468,112 @@ def test_interrupt_keeps_a_board_that_finished_out_of_order(tmp_path, fixture_js
     respx.get("https://api.lever.co/v0/postings/examplelever").mock(
         return_value=httpx.Response(200, json=fixture_json("lever_postings.json"))
     )
-    lever_done = threading.Event()
+    lever_queued = threading.Event()
     real = cli.fetch_company
+
+    class Runner(cli.BoardRunner):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._results = _Announcing(index=1, queued=lever_queued)
 
     def fetch(company, client, **kwargs):
         if company.slug == "slow":
-            assert lever_done.wait(5)
+            assert lever_queued.wait(5)
             raise KeyboardInterrupt  # Ctrl-C while the first board is still running
-        jobs = real(company, client, **kwargs)
-        lever_done.set()
-        return jobs
+        return real(company, client, **kwargs)
 
     monkeypatch.setattr(cli, "fetch_company", fetch)
+    monkeypatch.setattr(cli, "BoardRunner", Runner)
     assert _fetch(tmp_path, p) == 130
     out = capsys.readouterr().out
     assert "finished out of order" in out and "ExampleLever" in out
     assert [j.company for j in storage.load_jobs(tmp_path / "data")] == ["ExampleLever"]
+
+
+class _Announcing(queue.Queue):
+    """A runner result queue that sets ``queued`` once the result at ``index`` is in it."""
+
+    def __init__(self, index, queued):
+        super().__init__()
+        self.index, self.queued = index, queued
+
+    def put(self, entry, *args, **kwargs):
+        super().put(entry, *args, **kwargs)
+        if entry[0] == self.index:
+            self.queued.set()
+
+
+@respx.mock
+def test_a_board_still_running_after_an_interrupt_logs_nothing(tmp_path, monkeypatch, caplog):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - name: Slow\n    ats: greenhouse\n    slug: slow\n\n"
+        "  - name: Big\n    ats: lever\n    slug: big\n"
+    )
+    big_in, fetch_returned, big_finished = threading.Event(), threading.Event(), threading.Event()
+    real_board = cli._fetch_board
+
+    def fetch(company, client, **kwargs):
+        if company.slug == "slow":
+            assert big_in.wait(5)
+            raise KeyboardInterrupt
+        big_in.set()
+        assert fetch_returned.wait(5)  # a long board still going after the client was closed
+        client.get("https://api.lever.co/v0/postings/big")  # its next request
+
+    def board(company, *args, **kwargs):
+        try:
+            return real_board(company, *args, **kwargs)
+        finally:
+            if company.slug == "big":
+                big_finished.set()
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    monkeypatch.setattr(cli, "_fetch_board", board)
+    assert _fetch(tmp_path, p) == 130
+    fetch_returned.set()
+    assert big_finished.wait(5)
+    assert not [r for r in caplog.records if r.levelname == "WARNING" and "Big" in r.getMessage()]
+
+
+def _seven_boards(tmp_path, ats="greenhouse"):
+    p = tmp_path / "companies.yaml"
+    if ats == "workday":
+        boards = "".join(
+            f"  - name: B{i}\n    ats: workday\n    slug: t{i}/External\n    datacenter: wd5\n" for i in range(7)
+        )
+    else:
+        boards = "".join(f"  - name: B{i}\n    ats: greenhouse\n    slug: b{i}\n" for i in range(7))
+    p.write_text("companies:\n" + boards)
+    return p
+
+
+@respx.mock
+def test_a_closed_workday_site_is_not_a_refusal(tmp_path, caplog):
+    closed = {"errorCode": "S22", "httpStatus": 403, "message": "permission denied"}
+    route = respx.post(url__regex=r"https://t\d\.wd5\.myworkdayjobs\.com/wday/cxs/t\d/External/jobs").mock(
+        return_value=httpx.Response(403, json=closed)
+    )
+    assert _fetch(tmp_path, _seven_boards(tmp_path, "workday"), "--per-host", "1") == 0
+    assert route.call_count == 7  # a board-level 403 doesn't feed the breaker
+    assert "skipping" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(403, text="<html>Just a moment...</html>", headers={"Content-Type": "text/html"}),
+        httpx.Response(403, json={"message": "forbidden"}),
+        httpx.Response(429, headers={"Retry-After": "0"}),
+    ],
+    ids=["403-html", "403-json-without-errorCode", "429"],
+)
+@respx.mock
+def test_a_host_level_refusal_trips_the_breaker(tmp_path, monkeypatch, response):
+    monkeypatch.setattr(cli.throttle, "MAX_RETRIES", 0)  # one request per board
+    route = respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
+        return_value=response
+    )
+    assert _fetch(tmp_path, _seven_boards(tmp_path), "--per-host", "1") == 0
+    assert route.call_count == 5  # the breaker trips after five in a row

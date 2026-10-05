@@ -10,11 +10,14 @@ same as a serial run while work finishes in any order. Workers only call ``work`
 consumes results on its own thread, so all bookkeeping stays single-threaded.
 
 A circuit breaker protects hosts that push back: after ``breaker`` refusals in a row in one group
-(as judged by ``refused``), that group's remaining items get ``skip(item)`` instead of work.
+(as judged by ``refused``), that group's remaining items get ``skip(item)`` instead of work. Whether
+an item is skipped is decided when it is taken off the queue, so the logged count is exact.
 
 Ctrl-C, or a ``KeyboardInterrupt`` raised inside ``work``, stops the run: iteration raises
 ``KeyboardInterrupt``, workers start no new items, and ``finished_out_of_order()`` returns the
-results that were done but not yet released.
+results that were done but not yet released. Any other exception from ``work``, ``refused`` or
+``skip`` stops the run the same way and is re-raised by the iteration. ``stopping`` tells work
+still in flight that the run is over.
 """
 
 from __future__ import annotations
@@ -34,8 +37,11 @@ R = TypeVar("R")
 _POLL = 0.25  # seconds; how often the main thread wakes, so Ctrl-C is noticed promptly
 
 
-class _Interrupted:
-    """Sentinel a worker queues when ``work`` raised ``KeyboardInterrupt``."""
+class _Failed:
+    """Sentinel a worker queues when ``work``, ``refused`` or ``skip`` raised."""
+
+    def __init__(self, error: BaseException):
+        self.error = error
 
 
 class BoardRunner(Generic[T, R]):
@@ -62,19 +68,24 @@ class BoardRunner(Generic[T, R]):
         self._refusals: dict[Hashable, int] = {}
         self._tripped: set[Hashable] = set()
 
+    @property
+    def stopping(self) -> bool:
+        """True once the run has been interrupted or has failed."""
+        return self._stop.is_set()
+
     def __iter__(self) -> Iterator[R]:
-        for group, work_queue in self._queues.items():
-            for _ in range(min(self._per_group, len(work_queue))):
-                threading.Thread(target=self._worker, args=(group,), daemon=True).start()
         next_index = 0
         try:
+            for group, work_queue in self._queues.items():
+                for _ in range(min(self._per_group, len(work_queue))):
+                    threading.Thread(target=self._worker, args=(group,), daemon=True).start()
             while next_index < len(self._items):
                 try:
                     index, result = self._results.get(timeout=_POLL)
                 except queue.Empty:
                     continue
-                if isinstance(result, _Interrupted):
-                    raise KeyboardInterrupt
+                if isinstance(result, _Failed):
+                    raise result.error
                 self._pending[index] = result  # type: ignore[assignment]
                 while next_index in self._pending:
                     yield self._pending.pop(next_index)
@@ -90,27 +101,31 @@ class BoardRunner(Generic[T, R]):
                 index, result = self._results.get_nowait()
             except queue.Empty:
                 break
-            if not isinstance(result, _Interrupted):
+            if not isinstance(result, _Failed):
                 self._pending[index] = result  # type: ignore[assignment]
         return [self._pending.pop(i) for i in sorted(self._pending)]
 
-    def _next(self, group: Hashable) -> tuple[int, T] | None:
+    def _next(self, group: Hashable) -> tuple[int, T, bool] | None:
+        """The group's next item, and whether to skip it (decided under the lock with the pop)."""
         with self._lock:
             work_queue = self._queues[group]
-            return work_queue.popleft() if work_queue and not self._stop.is_set() else None
+            if not work_queue or self._stop.is_set():
+                return None
+            index, item = work_queue.popleft()
+            return index, item, group in self._tripped and self._skip is not None
 
     def _worker(self, group: Hashable) -> None:
         while (job := self._next(group)) is not None:
-            index, item = job
-            if group in self._tripped and self._skip is not None:
-                self._results.put((index, self._skip(item)))
-                continue
+            index, item, skip = job
             try:
+                if skip:
+                    self._results.put((index, self._skip(item)))  # type: ignore[misc]
+                    continue
                 result = self._work(item)
-            except KeyboardInterrupt:
-                self._results.put((index, _Interrupted()))
+                self._count(group, result)
+            except BaseException as e:  # queued so iteration raises it rather than waiting forever
+                self._results.put((index, _Failed(e)))
                 return
-            self._count(group, result)
             self._results.put((index, result))
 
     def _count(self, group: Hashable, result: R) -> None:
