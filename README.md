@@ -45,7 +45,7 @@ cp -R config.example config      # your own copy; config/ is gitignored
 | `anthropic` | Anthropic Python SDK | `ANTHROPIC_API_KEY` from the [Claude Console](https://platform.claude.com) (pay-as-you-go) | Automatic when `ANTHROPIC_API_KEY` is set |
 | `bedrock` | Anthropic Python SDK's [Amazon Bedrock](https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock) client, billed to your AWS account | `AWS_REGION`, plus a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` or your usual AWS credentials | `JOBHUNT_BACKEND=bedrock` only, never automatic |
 
-Force one with `JOBHUNT_BACKEND=claude-code`, `anthropic`, or `bedrock`. Override the model with `JOBHUNT_MODEL`: an alias like `sonnet` for the CLI, a full model ID for the SDK, or a Bedrock model ID such as `anthropic.claude-opus-5-5` for Bedrock.
+Force one with `JOBHUNT_BACKEND=claude-code`, `anthropic`, or `bedrock` (or `llm.backend` in `config/settings.yaml`). Override the model with `JOBHUNT_MODEL` (or `llm.model`): an alias like `sonnet` for the CLI, a full model ID for the SDK, or a Bedrock model ID such as `anthropic.claude-opus-5-5` for Bedrock.
 
 Both SDK backends default to Claude Sonnet 5.5 (`claude-sonnet-5-5`, or `anthropic.claude-sonnet-5-5` on Bedrock), with thinking turned off so its short answers fit their token limits. If a safety classifier declines a scoring request, that job is skipped with a warning naming the refusal category and retried on the next run. On the `anthropic` backend, [server-side fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) (beta) first retries the request on the model Anthropic recommends for that category, and a warning names the model that answered.
 
@@ -85,8 +85,11 @@ Everything personal lives in `config/`, which is gitignored and never committed.
 | `config/preferences.yaml` | The hard filters and the letter threshold. The template's lists are tuned for the fictional candidate; replace every one. |
 | `config/profile.md` | The candidate narrative the scorer reads. Facts here are fixed. Keep the `Target` and `Known gaps` headings: the scoring and letter prompts refer to them by name. |
 | `config/kit/` | Opening, closing, and proof modules with `use_when` keywords. |
+| `config/settings.yaml` | Optional. The tunable knobs in one place: model and backend, token budgets, fetch concurrency, timeouts, retries, the circuit breaker, 404 pruning, data and output directories. `config.example/settings.yaml` lists every one at its default. |
 
 To adapt this for yourself: rewrite `profile.md` and the Kit in your own voice, edit the filters, and point `companies.yaml` at the boards you care about. Nothing in `src/` is specific to one candidate.
+
+Every setting can also be overridden for one run with an environment variable named `JOBHUNT_<SECTION>_<KEY>`, for example `JOBHUNT_FETCH_WORKERS=16 jobhunt fetch` or `JOBHUNT_LLM_SCORE_MAX_TOKENS=2000 jobhunt score`. Precedence, highest first: a CLI flag (where one exists), the environment variable, `config/settings.yaml`, the built-in default. A bad value stops the command with a message naming where it came from.
 
 ### Finding boards
 

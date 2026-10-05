@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import httpx
 import yaml
 
-from jobhunt import config
+from jobhunt import config, settings
 from jobhunt.schema import ATSName, Company
 from jobhunt.sources import fetch_company
 
@@ -36,7 +36,6 @@ log = logging.getLogger("jobhunt.slugs")
 
 DEFAULT_INDEX = Path("data/commoncrawl.txt")
 DEFAULT_OUT = Path("data/companies.generated.yaml")
-CHECK_WORKERS = 4
 
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
 _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
@@ -169,11 +168,17 @@ def read_urls(path: Path) -> Iterator[str]:
 
 
 def _client() -> httpx.Client:
+    fetch = settings.load().fetch
     return httpx.Client(
-        timeout=20.0,
-        headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
+        timeout=fetch.timeout,
+        headers={"User-Agent": fetch.user_agent},
         follow_redirects=True,
     )
+
+
+def check_workers() -> int:
+    """Threads for --check (slugs.check_workers / JOBHUNT_SLUGS_CHECK_WORKERS)."""
+    return settings.load().slugs.check_workers
 
 
 def _has_jobs(company: Company, client: httpx.Client) -> bool:
@@ -197,7 +202,7 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
 
 def check(companies: list[Company], client: httpx.Client) -> list[Company]:
     """The boards that have open postings, in their original order."""
-    with ThreadPoolExecutor(CHECK_WORKERS) as pool:
+    with ThreadPoolExecutor(check_workers()) as pool:
         keep = list(pool.map(lambda c: _has_jobs(c, client), companies))
     return [c for c, k in zip(companies, keep, strict=True) if k]
 

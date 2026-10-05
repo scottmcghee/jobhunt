@@ -30,7 +30,7 @@ from pathlib import Path
 
 import httpx
 
-from jobhunt import config, storage, throttle
+from jobhunt import config, settings, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, make_completer
@@ -42,18 +42,28 @@ from jobhunt.sources import fetch_company, rate_group
 log = logging.getLogger("jobhunt")
 
 
-def _transport(workers: int = 32, per_host: int = 6) -> throttle.ThrottledTransport:
+def _transport(
+    fetch: settings.FetchSettings, workers: int, per_host: int
+) -> throttle.ThrottledTransport:
     # Polite by construction: per-group concurrency limits, and retries on 429 (see throttle.py).
     # `workers` caps requests in flight across all groups and sizes the connection pool to match.
     pool = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
-    return throttle.ThrottledTransport(ceiling=per_host, max_in_flight=workers, limits=pool)
+    return throttle.ThrottledTransport(
+        start=fetch.start_per_host,
+        ceiling=per_host,
+        max_in_flight=workers,
+        limits=pool,
+        max_retries=fetch.max_retries,
+        max_retry_after=fetch.max_retry_after,
+        cooldown=fetch.cooldown,
+    )
 
 
-def _client(transport: httpx.BaseTransport) -> httpx.Client:
+def _client(transport: httpx.BaseTransport, fetch: settings.FetchSettings) -> httpx.Client:
     return httpx.Client(
         transport=transport,
-        timeout=20.0,
-        headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
+        timeout=fetch.timeout,
+        headers={"User-Agent": fetch.user_agent},
         follow_redirects=True,
     )
 
@@ -186,13 +196,14 @@ def _record(
     dead: set[str],
     new_jobs: list[Job],
     verbose: bool,
+    prune_after: int = MAX_CONSECUTIVE_404S,
 ) -> None:
     """Fold one board's outcome into the run's books and print its line. Main thread only."""
     company = outcome.company
     if outcome.skipped:
         return
     if outcome.jobs is None:
-        if outcome.status == 404 and misses.miss(company.key) >= MAX_CONSECUTIVE_404S:
+        if outcome.status == 404 and misses.miss(company.key) >= prune_after:
             dead.add(company.key)
         return
     misses.clear(company.key)
@@ -223,11 +234,13 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     new_jobs: list[Job] = []
     dead: set[str] = set()
     interrupted = False
-    transport = _transport(args.workers, args.per_host)
+    fetch = args.settings.fetch
+    prune = fetch.prune_after_404s
+    transport = _transport(fetch, workers=args.workers, per_host=args.per_host)
     # Later pages and descriptions (Workday, SmartRecruiters) go to their group's pool; the
     # transport's per-host and global limits still decide how many are in flight.
     pools = _GroupPools(args.per_host)
-    with _client(transport) as client, _stop_on_exit(transport, pools):
+    with _client(transport, fetch) as client, _stop_on_exit(transport, pools):
         boards = BoardRunner(
             companies,
             lambda company: _fetch_board(
@@ -242,10 +255,11 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             per_group=args.per_host,
             refused=_refused,
             skip=lambda company: BoardOutcome(company, skipped=True),
+            breaker=fetch.breaker,
         )
         try:
             for outcome in boards:  # in companies.yaml order, whatever order they finish in
-                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
+                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose, prune)
         except KeyboardInterrupt:
             # Keep what the finished boards found; the next run picks up the rest.
             interrupted = True
@@ -254,7 +268,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             if any(o.jobs is not None and not o.skipped for o in late):  # only if a line follows
                 print("finished out of order:")
             for outcome in late:
-                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose)
+                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose, prune)
     if args.verbose:
         _print_stats(transport)
 
@@ -264,7 +278,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         return 130 if interrupted else 0
 
     for name in config.remove_companies(args.companies, dead) if dead else []:
-        print(f"removed {name} from {args.companies.name}: {MAX_CONSECUTIVE_404S} 404s in a row")
+        print(f"removed {name} from {args.companies.name}: {prune} 404s in a row")
     for key in dead:
         misses.clear(key)
     misses.save()
@@ -292,11 +306,12 @@ def cmd_score(args: argparse.Namespace, data_dir: Path, complete: Completer | No
         return 0
 
     complete = complete or _completer()
+    llm = args.settings.llm
     profile = config.load_profile()
     kit = config.load_kit()
     for j in todo:
         try:
-            sj = score_job(j, profile, kit, complete)
+            sj = score_job(j, profile, kit, complete, llm.score_max_tokens, llm.body_chars)
         except (ValueError, KeyError) as e:  # unusable model reply; stays unscored for next run
             log.warning("%s: %s — skipped (%s: %s)", j.key, j.title, type(e).__name__, e)
             continue
@@ -332,12 +347,15 @@ def cmd_letter(
             return 0
 
     complete = complete or _completer()
+    llm = args.settings.llm
     profile = config.load_profile()
     kit = config.load_kit()
     skipped = 0
     for s in targets:
         try:
-            letter = generate_letter(s, profile, kit, complete)
+            letter = generate_letter(
+                s, profile, kit, complete, llm.letter_max_tokens, llm.body_chars
+            )
         except (ValueError, KeyError) as e:  # unusable model reply; the next run retries it
             log.warning("%s: %s — skipped (%s: %s)", s.job.key, s.job.title, type(e).__name__, e)
             skipped += 1
@@ -386,11 +404,13 @@ def _at_least_one(value: str) -> int:
 
 
 def _concurrency_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--workers", type=_at_least_one, default=32, metavar="N",
-                   help="most requests in flight across all boards (default: 32)")
-    p.add_argument("--per-host", type=_at_least_one, default=6, metavar="N",
+    p.add_argument("--workers", type=_at_least_one, metavar="N",
+                   help="most requests in flight across all boards (default: fetch.workers in "
+                        "settings.yaml, 32)")
+    p.add_argument("--per-host", type=_at_least_one, metavar="N",
                    help="most in flight per Workday datacenter or API host; it adapts below this "
-                        "when a host answers 429 (default: 6). --workers 1 --per-host 1 is the "
+                        "when a host answers 429 (default: fetch.per_host in settings.yaml, 6). "
+                        "--workers 1 --per-host 1 is the "
                         "gentlest setting")
 
 
@@ -398,10 +418,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jobhunt", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-v", "--verbose", action="store_true", help="log progress and filter reasons")
-    p.add_argument("--data-dir", type=Path, default=storage.DEFAULT_DATA_DIR,
-                   help="runtime state: seen.json, jobs.jsonl, scores.jsonl (default: data/)")
-    p.add_argument("--output-dir", type=Path, default=storage.DEFAULT_OUTPUT_DIR,
-                   help="where letters are written (default: output/)")
+    p.add_argument("--data-dir", type=Path,
+                   help="runtime state: seen.json, jobs.jsonl, scores.jsonl (default: "
+                        "paths.data_dir in settings.yaml, else data/)")
+    p.add_argument("--output-dir", type=Path,
+                   help="where letters are written (default: paths.output_dir in settings.yaml, "
+                        "else output/)")
     p.add_argument("--companies", type=Path, default=config.DEFAULT_CONFIG_DIR / "companies.yaml",
                    help="boards to fetch (default: config/companies.yaml)")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
@@ -446,8 +468,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _resolve(args: argparse.Namespace, s: settings.Settings) -> argparse.Namespace:
+    """Fill what no flag set from settings (file, then env), else the built-in defaults."""
+    args.settings = s
+    args.data_dir = args.data_dir or s.paths.data_dir or storage.DEFAULT_DATA_DIR
+    args.output_dir = args.output_dir or s.paths.output_dir or storage.DEFAULT_OUTPUT_DIR
+    if hasattr(args, "workers"):  # fetch and run
+        args.workers = args.workers or s.fetch.workers
+        args.per_host = args.per_host or s.fetch.per_host
+    return args
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    try:
+        args = _resolve(args, settings.load())
+    except settings.SettingsError as e:
+        print(e, file=sys.stderr)
+        return 2
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",

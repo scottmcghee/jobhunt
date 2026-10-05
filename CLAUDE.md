@@ -31,6 +31,7 @@ config/               # personal, gitignored; same files as below
   companies.yaml      # company -> ATS type + board slug
   preferences.yaml    # filter rules: titles, locations, remote, keywords, min score
   profile.md          # the candidate narrative the scorer reads (facts are FIXED)
+  settings.yaml       # optional tunables (concurrency, timeouts, model, token budgets, paths)
   kit/                # Cover Letter Kit: opening.md, closing.md, modules/*.md
 src/jobhunt/
   schema.py           # Job, ScoredJob, Letter models
@@ -42,6 +43,7 @@ src/jobhunt/
   throttle.py         # polite HTTP for fetch: per-group concurrency limits, 429/Retry-After retries
   runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the ONLY module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
+  settings.py         # tunables: defaults < config/settings.yaml < JOBHUNT_<SECTION>_<KEY> env < CLI flags
   cli.py              # `jobhunt fetch | score | letter | run`
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
                       # offline, except --check, which fetches the first page of each new board via sources/
@@ -71,7 +73,8 @@ output/               # generated letters (gitignored)
 ## Conventions
 
 - Python 3.11+. `httpx` for HTTP, `pydantic` v2 for models, `pyyaml` for config, `anthropic` SDK for Claude.
-- Model and backend selection live in one place: `llm.py`. `JOBHUNT_BACKEND` picks `anthropic`, `claude-code`, or `bedrock` (never chosen automatically); `JOBHUNT_MODEL` overrides the model. Tests fake the `Completer`; never call a real backend in tests.
+- Model and backend selection live in one place: `llm.py`, which reads `llm.backend` and `llm.model` from settings (`JOBHUNT_BACKEND`/`JOBHUNT_MODEL` still work; Bedrock is never chosen automatically). Tests fake the `Completer`; never call a real backend in tests.
+- Tunables live in `settings.py`, not as module constants: add the field there with today's value as its default, document it in `config.example/settings.yaml` (a test checks the template lists every field at its default and names its env var), and pass the value down from `cli.py`. API constraints (page sizes, endpoints) stay constants.
 - Logging via `logging`, not `print`, except in `cli.py` output.
 - Dates are ISO 8601 strings in UTC.
 

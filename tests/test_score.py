@@ -93,3 +93,16 @@ def test_rubric_judges_level_against_the_target():
     # Golden assertion: level is measured against the profile's Target, not a fixed track.
     assert "IC" not in SYSTEM
     assert "wrong level (well below or far above the profile's Target)" in SYSTEM
+
+
+def test_score_budget_and_body_size_are_parameters(platform_director_job, profile, kit):
+    budgets = []
+
+    def complete(system, user, max_tokens):
+        budgets.append((max_tokens, user))
+        return '{"score": 5, "rationale": "ok", "strengths": [], "gaps": [], "suggested_modules": []}'
+
+    job = platform_director_job.model_copy(update={"body": "x" * 50 + "TAIL"})
+    score_job(job, profile, kit, complete, max_tokens=999, body_chars=50)
+    (max_tokens, user), = budgets
+    assert max_tokens == 999 and "x" * 50 in user and "TAIL" not in user

@@ -109,7 +109,14 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b\w[\w'’\-]*\b", text))
 
 
-def generate_letter(scored: ScoredJob, profile: str, kit: Kit, complete: Completer) -> Letter:
+def generate_letter(
+    scored: ScoredJob,
+    profile: str,
+    kit: Kit,
+    complete: Completer,
+    max_tokens: int = 800,
+    body_chars: int = 12000,
+) -> Letter:
     modules = choose_modules(scored, kit)
     user = f"""# CANDIDATE PROFILE
 {profile}
@@ -119,7 +126,7 @@ Company (as configured; may be a lowercase board slug): {scored.job.company}
 Title: {scored.job.title}
 URL: {scored.job.url}
 
-{scored.job.body[:12000]}
+{scored.job.body[:body_chars]}
 
 # SCORER'S NOTES
 Score: {scored.score.score}/10
@@ -129,7 +136,7 @@ Gaps: {'; '.join(scored.score.gaps) or 'none noted'}
 # PROOF PARAGRAPHS THAT WILL APPEAR IN THE LETTER
 {chr(10).join(f'[{m.id}] {m.text}' for m in modules)}
 """
-    data = extract_json(complete(SYSTEM, user, 800))
+    data = extract_json(complete(SYSTEM, user, max_tokens))
     company = company_display_name(scored.job, data.get("company_name"))
     text = assemble(
         scored,

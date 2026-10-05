@@ -331,3 +331,12 @@ def test_check_keeps_rate_limited_boards(caplog):
     with httpx.Client() as client:
         assert slugs.check([board], client) == [board]
     assert "busy: kept, could not check (HTTP 429)" in caplog.text
+
+
+def test_check_workers_and_client_come_from_settings(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "2")
+    monkeypatch.setenv("JOBHUNT_FETCH_TIMEOUT", "7")
+    monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
+    with slugs._client() as client:
+        assert client.timeout.read == 7 and client.headers["User-Agent"] == "test-agent/1"
+    assert slugs.check_workers() == 2

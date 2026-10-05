@@ -247,3 +247,38 @@ def test_no_fallback_log_when_the_fallback_model_declines_too(caplog):
     with pytest.raises(ValueError, match="cyber"):
         llm.anthropic_completer(client=client)("SYS", "USER", 100)
     assert "answered by fallback" not in caplog.text
+
+
+# ------------------------------------------------------------------ settings
+
+
+def test_backend_and_model_can_come_from_the_settings_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("JOBHUNT_BACKEND", raising=False)
+    monkeypatch.delenv("JOBHUNT_MODEL", raising=False)
+    (tmp_path / "settings.yaml").write_text("llm:\n  backend: claude-code\n  model: opus\n")
+    monkeypatch.setattr(llm.settings.config, "DEFAULT_CONFIG_DIR", tmp_path)
+    assert llm.backend_name() == "claude-code"
+    assert llm.model_name() == "opus"
+
+
+def test_the_long_env_names_work_for_backend_and_model(monkeypatch):
+    monkeypatch.delenv("JOBHUNT_MODEL", raising=False)
+    monkeypatch.setenv("JOBHUNT_LLM_BACKEND", "anthropic")
+    monkeypatch.setenv("JOBHUNT_LLM_MODEL", "claude-opus-5-5")
+    assert llm.backend_name() == "anthropic"
+    assert llm.model_name() == "claude-opus-5-5"
+    client = _fake_client()
+    llm.anthropic_completer(client=client)("SYS", "USER", 10)
+    assert client.messages.calls[0]["model"] == "claude-opus-5-5"
+
+
+def test_claude_code_timeout_comes_from_settings(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_LLM_CLAUDE_CODE_TIMEOUT", "42")
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["timeout"] = kw["timeout"]
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"result": "ok", "is_error": False}), stderr="")
+
+    llm.claude_code_completer(runner=fake_run)("SYS", "USER", 10)
+    assert seen["timeout"] == 42

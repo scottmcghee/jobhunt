@@ -418,3 +418,29 @@ def test_a_request_waiting_for_a_global_slot_is_not_sent_after_a_stop():
     assert not waiting.is_alive()
     assert [type(e) for e in raised] == [throttle.Stopped]
     assert len(sent) == 1
+
+
+@respx.mock
+def test_retry_limits_are_constructor_parameters():
+    clock = FakeClock()
+    route = respx.get(URL).mock(return_value=httpx.Response(429))
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0, max_retries=1)
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 429
+    assert route.call_count == 2
+
+    route.mock(return_value=httpx.Response(429, headers={"Retry-After": "30"}))
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, max_retry_after=10)
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 429
+    assert route.call_count == 3  # 30 s > the 10 s cap: not retried
+
+
+def test_cooldown_is_a_limiter_parameter():
+    clock = FakeClock()
+    lim = throttle.GroupLimiter(start=4, ceiling=6, clock=clock, sleep=clock.sleep, cooldown=0)
+    for _ in range(2):
+        lim.acquire()
+    lim.release(throttled=True)
+    lim.release(throttled=True)
+    assert lim.limit == 1  # no cooldown: both halvings count

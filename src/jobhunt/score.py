@@ -41,11 +41,11 @@ Respond with ONLY a JSON object:
 }"""
 
 
-def build_user_prompt(job: Job, profile: str, kit: Kit) -> str:
+def build_user_prompt(job: Job, profile: str, kit: Kit, body_chars: int = 12000) -> str:
     module_list = "\n".join(
         f"- {m.id}: {m.title} (use when: {', '.join(m.use_when)})" for m in kit.modules.values()
     )
-    body = job.body[:12000]  # keep prompt bounded; postings are rarely longer
+    body = job.body[:body_chars]  # keep prompt bounded; postings are rarely longer
     remote = job.remote if job.remote is not None else "unknown"
     return f"""# CANDIDATE PROFILE
 {profile}
@@ -63,8 +63,15 @@ URL: {job.url}
 """
 
 
-def score_job(job: Job, profile: str, kit: Kit, complete: Completer) -> ScoredJob:
-    raw = complete(SYSTEM, build_user_prompt(job, profile, kit), 1600)
+def score_job(
+    job: Job,
+    profile: str,
+    kit: Kit,
+    complete: Completer,
+    max_tokens: int = 1600,
+    body_chars: int = 12000,
+) -> ScoredJob:
+    raw = complete(SYSTEM, build_user_prompt(job, profile, kit, body_chars), max_tokens)
     data = extract_json(raw)
     # Only allow module ids that actually exist in the kit.
     mods = [m for m in data.get("suggested_modules", []) if m in kit.modules][:2]

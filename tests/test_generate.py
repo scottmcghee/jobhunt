@@ -130,3 +130,16 @@ def test_letter_prompt_takes_the_target_from_the_profile():
     # what the candidate wants comes from profile.md's Target section, not from the code
     assert "Director/VP" not in LETTER_SYSTEM and "infrastructure/platform" not in LETTER_SYSTEM
     assert "Target" in LETTER_SYSTEM
+
+
+def test_letter_budget_and_body_size_are_parameters(scored_job, profile, kit):
+    seen = []
+
+    def complete(system, user, max_tokens):
+        seen.append((max_tokens, user))
+        return '{"custom_opening_sentence": "Open.", "custom_closing_sentence": "Close."}'
+
+    job = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"body": "y" * 40 + "TAIL"})})
+    generate_letter(job, profile, kit, complete, max_tokens=321, body_chars=40)
+    (max_tokens, user), = seen
+    assert max_tokens == 321 and "TAIL" not in user

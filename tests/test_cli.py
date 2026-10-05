@@ -15,7 +15,7 @@ import respx
 
 from jobhunt import cli, storage, throttle
 from jobhunt.schema import Score, ScoredJob
-from tests.conftest import make_completer
+from tests.conftest import CONFIG_DIR, make_completer
 
 
 @respx.mock
@@ -431,9 +431,10 @@ def test_a_throttled_board_is_retried_not_skipped(tmp_path, fixture_json):
 
 @pytest.mark.parametrize("cmd", ["fetch", "run"])
 def test_concurrency_flags(cmd):
-    args = cli.build_parser().parse_args([cmd])
-    assert (args.workers, args.per_host) == (32, 6)
-    args = cli.build_parser().parse_args([cmd, "--workers", "1", "--per-host", "1"])
+    defaults = cli.settings.Settings()
+    args = cli._resolve(cli.build_parser().parse_args([cmd]), defaults)
+    assert (args.workers, args.per_host) == (32, 6)  # unset flags fall back to settings
+    args = cli._resolve(cli.build_parser().parse_args([cmd, "--workers", "1", "--per-host", "1"]), defaults)
     assert (args.workers, args.per_host) == (1, 1)
 
 
@@ -587,7 +588,7 @@ def test_a_404_that_comes_back_after_an_interrupt_is_not_counted(tmp_path, monke
 
 @respx.mock
 def test_no_out_of_order_header_when_no_late_board_prints_a_line(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli.throttle, "MAX_RETRIES", 0)
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RETRIES", "0")
     p = tmp_path / "companies.yaml"
     p.write_text(
         "companies:\n  - name: Slow\n    ats: lever\n    slug: slow\n"
@@ -650,7 +651,7 @@ def test_a_closed_workday_site_is_not_a_refusal(tmp_path, caplog):
 )
 @respx.mock
 def test_a_host_level_refusal_trips_the_breaker(tmp_path, monkeypatch, response):
-    monkeypatch.setattr(cli.throttle, "MAX_RETRIES", 0)  # one request per board
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RETRIES", "0")  # one request per board
     route = respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
         return_value=response
     )
@@ -700,7 +701,7 @@ def test_fetch_gives_each_rate_group_its_own_pool(tmp_path, fixture_json, monkey
 
 def _throttled_transport(handler):
     """Stands in for cli._transport: the real throttling, over a fake network."""
-    return lambda workers=32, per_host=6: throttle.ThrottledTransport(
+    return lambda fetch, workers=32, per_host=6: throttle.ThrottledTransport(
         inner=httpx.MockTransport(handler), ceiling=per_host, max_in_flight=workers
     )
 
@@ -792,3 +793,55 @@ def test_an_interrupt_stops_pooled_requests_waiting_out_a_429(tmp_path, monkeypa
         joiner.join(5)
         assert not joiner.is_alive()
     assert len(later_pages) == sent == 1
+
+
+# ------------------------------------------------------------------ settings reach the commands
+
+
+def _settings_file(monkeypatch, tmp_path, text):
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "settings.yaml").write_text(text)
+    for name in ("preferences.yaml", "profile.md"):
+        (cfg / name).write_text((CONFIG_DIR / name).read_text())
+    monkeypatch.setattr(cli.config, "DEFAULT_CONFIG_DIR", cfg)
+
+
+@respx.mock
+def test_fetch_concurrency_comes_from_settings_unless_a_flag_says_otherwise(tmp_path, monkeypatch, fixture_json):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    seen = []
+    real = cli._transport
+    monkeypatch.setattr(cli, "_transport", lambda fetch, **kw: seen.append((kw, fetch)) or real(fetch, **kw))
+    monkeypatch.setenv("JOBHUNT_FETCH_WORKERS", "7")
+    _settings_file(monkeypatch, tmp_path, "fetch:\n  per_host: 3\n")
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert seen[-1][0] == {"workers": 7, "per_host": 3}
+    assert _fetch(tmp_path, companies, "--dry-run", "--workers", "2") == 0
+    assert seen[-1][0] == {"workers": 2, "per_host": 3}
+
+
+@respx.mock
+def test_prune_threshold_comes_from_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_FETCH_PRUNE_AFTER_404S", "1")
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    companies = _two_company_config(tmp_path)
+    assert _fetch(tmp_path, companies) == 0
+    assert "Dead" not in companies.read_text()  # gone after one 404, not three
+
+
+def test_data_dir_comes_from_settings(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOBHUNT_PATHS_DATA_DIR", str(tmp_path / "elsewhere"))
+    assert cli.main(["list"]) == 0
+    assert "0 scored job(s)" in capsys.readouterr().out
+    args = cli.build_parser().parse_args(["list"])
+    assert cli._resolve(args, cli.settings.load()).data_dir == tmp_path / "elsewhere"
+
+
+def test_invalid_settings_are_a_friendly_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOBHUNT_FETCH_WORKERS", "lots")
+    assert cli.main(["--data-dir", str(tmp_path), "list"]) == 2
+    assert "JOBHUNT_FETCH_WORKERS" in capsys.readouterr().err

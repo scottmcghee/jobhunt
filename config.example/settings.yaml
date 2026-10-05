@@ -1,0 +1,49 @@
+# Tunable settings for jobhunt. Every key is optional, and every value below is the built-in
+# default, so this whole file can be deleted (or left as is) without changing anything.
+#
+# Precedence, highest first: a CLI flag (where one exists) > an environment variable
+# JOBHUNT_<SECTION>_<KEY> > this file > the built-in default.
+# Example: JOBHUNT_FETCH_WORKERS=16 jobhunt fetch
+#
+# Search preferences (titles, domains, locations, the letter threshold) live in preferences.yaml.
+
+llm:
+  # anthropic | claude-code | bedrock. null: auto (anthropic if ANTHROPIC_API_KEY is set, else
+  # claude-code if `claude` is on PATH). Bedrock is only ever chosen explicitly.
+  # Env: JOBHUNT_LLM_BACKEND, or the older JOBHUNT_BACKEND
+  backend: null
+  # null: the backend's own default (claude-sonnet-5-5; `sonnet` for claude-code;
+  # anthropic.claude-sonnet-5-5 for Bedrock). Env: JOBHUNT_LLM_MODEL, or the older JOBHUNT_MODEL
+  model: null
+  claude_code_timeout: 180  # seconds per `claude -p` call. Env: JOBHUNT_LLM_CLAUDE_CODE_TIMEOUT
+  score_max_tokens: 1600  # Env: JOBHUNT_LLM_SCORE_MAX_TOKENS
+  letter_max_tokens: 800  # Env: JOBHUNT_LLM_LETTER_MAX_TOKENS
+  body_chars: 12000  # characters of a posting sent to the model. Env: JOBHUNT_LLM_BODY_CHARS
+
+fetch:
+  workers: 32  # requests in flight across all hosts (`fetch --workers`). Env: JOBHUNT_FETCH_WORKERS
+  # Most requests in flight per Workday datacenter or API host (`fetch --per-host`).
+  # Env: JOBHUNT_FETCH_PER_HOST
+  per_host: 6
+  start_per_host: 2  # where each host's adaptive limit starts. Env: JOBHUNT_FETCH_START_PER_HOST
+  timeout: 20  # seconds per request. Env: JOBHUNT_FETCH_TIMEOUT
+  user_agent: "jobhunt/0.1 (+personal job search tool)"  # Env: JOBHUNT_FETCH_USER_AGENT
+  max_retries: 3  # retries on 429, or 503 with Retry-After. Env: JOBHUNT_FETCH_MAX_RETRIES
+  # A Retry-After longer than this (seconds) skips the board for this run instead of waiting.
+  # Env: JOBHUNT_FETCH_MAX_RETRY_AFTER
+  max_retry_after: 120
+  cooldown: 5  # seconds between two halvings of a host's limit. Env: JOBHUNT_FETCH_COOLDOWN
+  # Refusals (429, or a 403 block page) in a row before a host's other boards are skipped.
+  # Env: JOBHUNT_FETCH_BREAKER
+  breaker: 5
+  # HTTP 404s in a row before a board is removed from companies.yaml.
+  # Env: JOBHUNT_FETCH_PRUNE_AFTER_404S
+  prune_after_404s: 3
+
+paths:
+  data_dir: null  # null: the repo's data/ (`--data-dir`). Env: JOBHUNT_PATHS_DATA_DIR
+  output_dir: null  # null: the repo's output/ (`--output-dir`). Env: JOBHUNT_PATHS_OUTPUT_DIR
+
+slugs:
+  # Threads for `python -m jobhunt.slugs --check`. Env: JOBHUNT_SLUGS_CHECK_WORKERS
+  check_workers: 4
