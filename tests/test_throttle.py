@@ -246,6 +246,14 @@ def test_the_default_transport_uses_the_environment_https_proxy(monkeypatch):
     assert isinstance(inner._pool, httpcore.HTTPProxy)
 
 
+def test_the_default_transport_accepts_a_scheme_less_proxy(monkeypatch):
+    # httpx's own env handling prepends http:// to a bare host:port, so we do the same
+    _no_proxy_env(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "proxy.example:3128")
+    inner = throttle.ThrottledTransport()._inner
+    assert isinstance(inner._pool, httpcore.HTTPProxy)
+
+
 def test_the_default_transport_connects_directly_without_a_proxy(monkeypatch):
     _no_proxy_env(monkeypatch)
     inner = throttle.ThrottledTransport()._inner

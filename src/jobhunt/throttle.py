@@ -131,7 +131,10 @@ class ThrottledTransport(httpx.BaseTransport):
     ):
         if inner is None:
             proxies = urllib.request.getproxies()
-            inner = httpx.HTTPTransport(retries=1, proxy=proxies.get("https") or proxies.get("all"))
+            proxy = proxies.get("https") or proxies.get("all")
+            if proxy and "://" not in proxy:
+                proxy = f"http://{proxy}"  # as httpx does for a bare host:port
+            inner = httpx.HTTPTransport(retries=1, proxy=proxy)
         self._inner = inner
         self._start, self._ceiling = start, ceiling
         self._clock, self._sleep, self._jitter = clock, sleep, jitter
