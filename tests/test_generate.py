@@ -111,3 +111,14 @@ def test_display_name_treats_workday_tenant_as_a_placeholder(slug_named_job):
         update={"source": "workday", "company": "axios", "company_slug": "axios/External"}
     )
     assert company_display_name(job, "Axios") == "Axios"
+
+
+def test_letter_leaves_room_for_the_reply(scored_job, profile, kit):
+    budgets = []
+
+    def complete(system, user, max_tokens):
+        budgets.append(max_tokens)
+        return '{"custom_opening_sentence": "Open.", "custom_closing_sentence": "Close."}'
+
+    generate_letter(scored_job, profile, kit, complete)
+    assert budgets == [800]
