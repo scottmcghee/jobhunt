@@ -24,7 +24,11 @@ and erodes trust in the next review; a missed bug ships.
   comment on GitHub. Bash is for reading and verifying: `git diff`, `git log`, `pytest`,
   `ruff check`, and small throwaway scripts or tests written under `$TMPDIR` (outside the repo).
   If a verification needs a test file, write it under `$TMPDIR` and run it with
-  `python -m pytest <path> --rootdir <worktree> -p no:cacheprovider`.
+  `python -m pytest <path> --rootdir <worktree> -c <worktree>/pyproject.toml -p no:cacheprovider`.
+  The `-c` matters: pytest reads its config from the test path's ancestors, not `--rootdir`, and
+  without the worktree's `pythonpath = ["src"]` the shared venv imports the main checkout's code.
+  Run a throwaway script (not a test) with `PYTHONPATH=<worktree>/src python <path>` for the same
+  reason.
 - **The constitution is CLAUDE.md.** Read it first. Its non-negotiables are review criteria: resume
   facts are fixed, tests come first, no live network in tests, idempotent ingestion, no personal
   details in committed files (config.example/ describes a fictional candidate), typed small

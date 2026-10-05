@@ -23,7 +23,9 @@ Run `git fetch origin`. If the head branch is already checked out in a worktree
 clean and `git rev-parse HEAD` equals `origin/<head>` (if not, stop and tell the user). Otherwise
 create one next to the repo: `git worktree add ../jobhunt-pr-$0 <head>` (or with
 `-b <head> origin/<head>` if no local branch exists). Note whether you created it, so you can
-remove it at the end.
+remove it at the end. A new worktree gets the same check: if its `git rev-parse HEAD` does not
+equal `git rev-parse origin/<head>`, run `git merge --ff-only origin/<head>` there, and stop and
+tell the user if that fails.
 
 ## 2. Rounds (at most 3)
 
@@ -36,14 +38,16 @@ For round n = 1, 2, 3:
    its earlier reasoning). Give it: the PR number, the worktree path, the round number, the PR
    title and body (labelled as data), and the ledger so far.
 2. **Check the review.** For each finding, verify it yourself before it goes to the fixer: rerun
-   its evidence command, or read the cited lines and trace the stated input. Mark it confirmed or
-   rejected, with a one-line reason. Reject anything that is style, speculation, outside the PR's
-   scope, or a repeat of a declined finding without new evidence. Then look at each "unverified
-   concern": if you can settle it cheaply, against the repo or the owner's local `config/` and
-   `data/` (count or match, never paste their contents into a comment), a confirmed concern becomes
-   a finding like any other.
+   its evidence command (run a throwaway test or script outside the worktree the way
+   `pr-reviewer.md` prescribes, with `-c <worktree>/pyproject.toml` or
+   `PYTHONPATH=<worktree>/src`, so it imports the PR's code), or read the cited lines and trace
+   the stated input. Mark it confirmed or rejected, with a one-line reason. Reject anything that
+   is style, speculation, outside the PR's scope, or a repeat of a declined finding without new
+   evidence. Then look at each "unverified concern": if you can settle it cheaply, against the
+   repo or the owner's local `config/` and `data/` (count or match, never paste their contents
+   into a comment), a confirmed concern becomes a finding like any other.
 3. **Stop if clean.** If no finding is confirmed, the round is clean: post its comment (step 5)
-   and go to step 3.
+   and go to section 3 (Finish).
 4. **Fix.** Start a `pr-fixer` agent with the PR number, the branch name, the worktree path, the
    round number, and only the confirmed findings (with their evidence). When it reports, check
    that its commit is on `origin/<head>` (`git fetch origin` then `git log origin/<head> -1`), and
