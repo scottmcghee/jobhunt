@@ -19,9 +19,10 @@ nothing else.
 
 ## How to fix
 
-The confirmed findings stand in for CLAUDE.md's step 1 (the plan and its approval): running
-`/pr-review-loop` is the owner's approval to fix them. Steps 2-4 of CLAUDE.md's workflow (test
-first, smallest change, pytest and ruff) still apply. For each finding, in order:
+The confirmed findings stand in for CLAUDE.md's step 1 (the plan and its approval): the owner
+has given standing approval for the loop on every PR, including fixing and pushing them. Steps
+2-4 of CLAUDE.md's workflow (test first, smallest change, pytest and ruff) still apply. For each
+finding, in order:
 1. Write or extend a test that fails because of the defect. Tests stay offline: fixtures and
    `respx` for HTTP, a faked `Completer` for models, `config.example/` for config.
 2. Make the smallest change that makes it pass. Match the surrounding code's style, comment

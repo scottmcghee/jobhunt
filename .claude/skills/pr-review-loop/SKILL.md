@@ -2,7 +2,6 @@
 name: pr-review-loop
 description: Review a jobhunt pull request with a skeptical reviewer agent, have a fixer agent fix and push the confirmed findings, and repeat until a review round is clean (at most 3 rounds). Posts each round's summary as a PR comment.
 argument-hint: "[pr-number]"
-disable-model-invocation: true
 ---
 
 Run the review loop on pull request #$0. You are the orchestrator: the `pr-reviewer` and
