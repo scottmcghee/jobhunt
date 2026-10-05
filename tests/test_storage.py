@@ -23,7 +23,7 @@ def test_jobs_jsonl_roundtrip(tmp_path, platform_director_job):
     assert len(jobs) == 1 and jobs[0].key == platform_director_job.key
 
 
-def test_write_letter_names_file_by_company_and_title(tmp_path):
+def test_write_letter_names_file_by_company_title_and_posting(tmp_path):
     letter = Letter(
         job_key="greenhouse:x:1",
         company="Example Corp",
@@ -33,7 +33,7 @@ def test_write_letter_names_file_by_company_and_title(tmp_path):
         model="t",
     )
     path = storage.write_letter(letter, tmp_path)
-    assert path.name == "example-corp__director-platform-engineering.md"
+    assert path.name == "example-corp__director-platform-engineering__1.md"
     assert "greenhouse:x:1" in path.read_text()
 
 
@@ -75,5 +75,6 @@ def test_lettered_job_keys_reads_letter_headers(tmp_path):
     storage.write_letter(letter, tmp_path)
     (tmp_path / "notes.md").write_text("no header here\n")
     (tmp_path / "empty.md").write_text("")
+    (tmp_path / "latin1.md").write_bytes(b"caf\xe9 notes\n")  # not UTF-8; must not crash
     assert storage.lettered_job_keys(tmp_path) == {"greenhouse:acme:1"}
     assert storage.lettered_job_keys(tmp_path / "missing") == set()

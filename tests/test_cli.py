@@ -350,6 +350,24 @@ def test_letter_skips_jobs_that_already_have_one(tmp_path, scored_job, monkeypat
     assert _letter(tmp_path, "--force") == 0 and len(calls) == 4
 
 
+def test_letter_keeps_one_letter_per_posting_with_the_same_title(tmp_path, scored_job, monkeypatch):
+    # The same company and title posted twice (e.g. two locations) must not share a file.
+    second = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"external_id": "2002"})})
+    for s in (scored_job, second):
+        storage.append_jsonl(tmp_path / "data" / "scores.jsonl", s.model_dump())
+    calls = []
+
+    def complete(system, user, max_tokens):
+        calls.append(user)
+        return LETTER_REPLY
+
+    monkeypatch.setattr(cli, "_completer", lambda: complete)
+    assert _letter(tmp_path) == 0 and len(calls) == 2
+    assert len(list((tmp_path / "out").glob("*.md"))) == 2
+    assert storage.lettered_job_keys(tmp_path / "out") == {scored_job.job.key, second.job.key}
+    assert _letter(tmp_path) == 0 and len(calls) == 2  # nothing regenerated
+
+
 def test_letter_for_one_job_respects_existing_letters(tmp_path, scored_job, monkeypatch, capsys):
     first, _ = _two_scored_jobs(tmp_path, scored_job)
     monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)

@@ -92,8 +92,8 @@ def load_scores(data_dir: Path) -> list[ScoredJob]:
     return [ScoredJob.model_validate(r) for r in read_jsonl(data_dir / "scores.jsonl")]
 
 
-def _slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
+def _slug(s: str, limit: int | None = 60) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:limit]
 
 
 _LETTER_HEADER = re.compile(r"<!-- (\S+) \|")
@@ -106,7 +106,7 @@ def lettered_job_keys(output_dir: Path) -> set[str]:
     """
     keys = set()
     for path in output_dir.glob("*.md") if output_dir.is_dir() else []:
-        with path.open(encoding="utf-8") as f:
+        with path.open(encoding="utf-8", errors="replace") as f:  # headers are ASCII
             if m := _LETTER_HEADER.match(f.readline()):
                 keys.add(m.group(1))
     return keys
@@ -114,7 +114,9 @@ def lettered_job_keys(output_dir: Path) -> set[str]:
 
 def write_letter(letter: Letter, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}.md"
+    # The posting's external id keeps two postings with the same company and title apart.
+    posting = _slug(letter.job_key.split(":", 2)[-1], limit=None)
+    path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}__{posting}.md"
     header = (
         f"<!-- {letter.job_key} | modules: {', '.join(letter.modules_used)} | "
         f"{letter.model} | {letter.generated_at} -->\n\n"
