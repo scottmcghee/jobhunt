@@ -52,8 +52,9 @@ concerns" with what you would need to confirm it. Unverified concerns are not ac
 
 ## Before you report
 
-Run the checks the repo requires and report their results: `python -m pytest -q -p no:cacheprovider`
-and `ruff check .`, both from the worktree. A failure is a finding (with the output as evidence).
+Run the checks the repo requires and report their results: `python -m pytest -p no:cacheprovider`
+(no `-q`: pyproject.toml already adds it, and a second one hides the pass/fail summary line) and
+`ruff check .`, both from the worktree. A failure is a finding (with the output as evidence).
 
 ## Report format (your final message)
 

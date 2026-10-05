@@ -29,7 +29,8 @@ For each finding, in order:
    declined and say why.
 
 Then, from the worktree:
-- `python -m pytest -q -p no:cacheprovider` and `ruff check .` must both pass. If they do not,
+- `python -m pytest -p no:cacheprovider` and `ruff check .` must both pass. Leave out `-q`:
+  pyproject.toml already adds it, and a second one hides the summary line you report. If they do not,
   fix your change; never weaken or delete an existing test to get them green.
 
 ## Commit and push
