@@ -305,3 +305,88 @@ def test_fetch_interrupted_dry_run_writes_nothing(tmp_path, fixture_json, monkey
     _failing_for("broken", KeyboardInterrupt(), monkeypatch)
     assert _fetch(tmp_path, _two_boards(tmp_path), "--dry-run") == 130
     assert not (tmp_path / "data").exists()
+
+
+def _two_scored_jobs(tmp_path, scored_job):
+    second = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"external_id": "2002", "title": "VP of Infrastructure"})})
+    for s in (scored_job, second):
+        storage.append_jsonl(tmp_path / "data" / "scores.jsonl", s.model_dump())
+    return scored_job, second
+
+
+def _letter(tmp_path, *extra):
+    return cli.main(["--data-dir", str(tmp_path / "data"), "--output-dir", str(tmp_path / "out"), "letter", *extra])
+
+
+LETTER_REPLY = '{"custom_opening_sentence": "Open.", "custom_closing_sentence": "Close."}'
+
+
+def test_letter_skips_an_unusable_reply_and_keeps_going(tmp_path, scored_job, monkeypatch, caplog, capsys):
+    first, second = _two_scored_jobs(tmp_path, scored_job)
+    replies = iter(["I cannot write this one.", LETTER_REPLY])
+    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: next(replies))
+
+    assert _letter(tmp_path) == 0
+    assert storage.lettered_job_keys(tmp_path / "out") == {second.job.key}
+    assert first.job.key in caplog.text  # no letter, so the next run tries it again
+    assert "1 letter(s) skipped" in capsys.readouterr().out
+
+
+def test_letter_skips_jobs_that_already_have_one(tmp_path, scored_job, monkeypatch, capsys):
+    _two_scored_jobs(tmp_path, scored_job)
+    calls = []
+
+    def complete(system, user, max_tokens):
+        calls.append(user)
+        return LETTER_REPLY
+
+    monkeypatch.setattr(cli, "_completer", lambda: complete)
+    assert _letter(tmp_path) == 0 and len(calls) == 2
+    capsys.readouterr()
+
+    assert _letter(tmp_path) == 0 and len(calls) == 2  # nothing regenerated
+    assert "2 job(s) already have a letter" in capsys.readouterr().out
+
+    assert _letter(tmp_path, "--force") == 0 and len(calls) == 4
+
+
+def test_letter_keeps_one_letter_per_posting_with_the_same_title(tmp_path, scored_job, monkeypatch):
+    # The same company and title posted twice (e.g. two locations) must not share a file.
+    second = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"external_id": "2002"})})
+    for s in (scored_job, second):
+        storage.append_jsonl(tmp_path / "data" / "scores.jsonl", s.model_dump())
+    calls = []
+
+    def complete(system, user, max_tokens):
+        calls.append(user)
+        return LETTER_REPLY
+
+    monkeypatch.setattr(cli, "_completer", lambda: complete)
+    assert _letter(tmp_path) == 0 and len(calls) == 2
+    assert len(list((tmp_path / "out").glob("*.md"))) == 2
+    assert storage.lettered_job_keys(tmp_path / "out") == {scored_job.job.key, second.job.key}
+    assert _letter(tmp_path) == 0 and len(calls) == 2  # nothing regenerated
+
+
+def test_letter_skips_a_lettered_job_whose_key_has_a_space(tmp_path, scored_job, monkeypatch):
+    spaced = scored_job.model_copy(update={"job": scored_job.job.model_copy(update={"source": "ashby", "company_slug": "Some Co"})})
+    storage.append_jsonl(tmp_path / "data" / "scores.jsonl", spaced.model_dump())
+    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)
+    assert _letter(tmp_path) == 0
+    monkeypatch.setattr(cli, "_completer", lambda: pytest.fail)  # must not be called
+    assert _letter(tmp_path) == 0
+
+
+def test_letter_for_one_job_respects_existing_letters(tmp_path, scored_job, monkeypatch, capsys):
+    first, _ = _two_scored_jobs(tmp_path, scored_job)
+    monkeypatch.setattr(cli, "_completer", lambda: lambda system, user, max_tokens: LETTER_REPLY)
+    _letter(tmp_path, "--job", first.job.key)
+    capsys.readouterr()
+    monkeypatch.setattr(cli, "_completer", lambda: pytest.fail)  # must not be called
+    assert _letter(tmp_path, "--job", first.job.key) == 0
+    assert "already have a letter" in capsys.readouterr().out
+
+
+def test_run_accepts_force():
+    args = cli.build_parser().parse_args(["run", "--force"])
+    assert args.force is True

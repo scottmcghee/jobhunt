@@ -64,7 +64,7 @@ jobhunt fetch --dry-run          # what would be recorded, without recording it
 jobhunt fetch -v                 # record new postings; -v shows why each rejected one was rejected
 jobhunt score                    # score everything not yet scored
 jobhunt list --min-score 7       # the shortlist
-jobhunt letter                   # write letters for the shortlist into output/
+jobhunt letter                   # write letters for the shortlist into output/ (skips jobs that have one; --force rewrites)
 jobhunt run                      # all of the above
 ```
 

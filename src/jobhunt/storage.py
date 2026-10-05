@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -96,9 +97,29 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
 
 
+# Up to write_letter's " | modules: " separator, not the first space: Ashby slugs keep spaces.
+_LETTER_HEADER = re.compile(r"<!-- (.+?) \| modules: ")
+
+
+def lettered_job_keys(output_dir: Path) -> set[str]:
+    """Job keys that already have a letter, read from each letter's header comment.
+
+    The filename can't tell: it comes from the company name, which may be the model's reading.
+    """
+    keys = set()
+    for path in output_dir.glob("*.md") if output_dir.is_dir() else []:
+        with path.open(encoding="utf-8", errors="replace") as f:  # headers are ASCII
+            if m := _LETTER_HEADER.match(f.readline()):
+                keys.add(m.group(1))
+    return keys
+
+
 def write_letter(letter: Letter, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}.md"
+    # A short hash of the job key keeps two postings with the same company and title apart
+    # (even one requisition on two boards of a tenant) and keeps the name a bounded length.
+    key_hash = hashlib.sha1(letter.job_key.encode()).hexdigest()[:10]
+    path = output_dir / f"{_slug(letter.company)}__{_slug(letter.title)}__{key_hash}.md"
     header = (
         f"<!-- {letter.job_key} | modules: {', '.join(letter.modules_used)} | "
         f"{letter.model} | {letter.generated_at} -->\n\n"
