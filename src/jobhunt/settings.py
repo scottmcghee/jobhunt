@@ -62,7 +62,12 @@ class PathSettings(_Section):
     @classmethod
     def _from_repo(cls, value: Path | None) -> Path | None:
         """``~`` expands; a relative path is under the repo, like the defaults, from any cwd."""
-        return None if value is None else storage.DEFAULT_DATA_DIR.parent / value.expanduser()
+        if value is None:
+            return None
+        try:
+            return storage.DEFAULT_DATA_DIR.parent / value.expanduser()
+        except RuntimeError:  # e.g. ~nosuchuser; pydantic only reports ValueError
+            raise ValueError(f"can't expand '~' in {value}: no such home directory") from None
 
 
 class SlugsSettings(_Section):
@@ -105,6 +110,8 @@ def load(path: Path | None = None, environ: Mapping[str, str] | None = None) -> 
         raw: Any = yaml.safe_load(path.read_text()) if path.exists() else None
     except yaml.YAMLError as e:
         raise SettingsError(f"{path}: not valid YAML: {e}") from None
+    except (OSError, UnicodeDecodeError) as e:
+        raise SettingsError(f"{path}: can't be read: {e}") from None
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):

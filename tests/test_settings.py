@@ -134,3 +134,24 @@ def test_paths_expand_home_and_resolve_relative_ones_against_the_repo(tmp_path, 
     assert s.paths.output_dir == repo / "letters"
     s = settings.load(p, environ={"JOBHUNT_PATHS_OUTPUT_DIR": "/abs/out"})
     assert s.paths.output_dir == Path("/abs/out")
+
+
+def test_a_home_dir_that_cant_be_found_names_the_variable_or_the_key(tmp_path):
+    bad = "~nosuchuser_zz/data"
+    with pytest.raises(settings.SettingsError, match="JOBHUNT_PATHS_DATA_DIR"):
+        settings.load(tmp_path / "nope.yaml", environ={"JOBHUNT_PATHS_DATA_DIR": bad})
+    p = tmp_path / "settings.yaml"
+    p.write_text(f"paths:\n  output_dir: {bad}\n")
+    with pytest.raises(settings.SettingsError, match=r"settings\.yaml.*paths\.output_dir"):
+        settings.load(p, environ={})
+
+
+def test_a_file_that_cant_be_read_names_the_file(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_bytes(b"llm:\n  model: caf\xe9\n")  # not UTF-8
+    with pytest.raises(settings.SettingsError, match=r"settings\.yaml"):
+        settings.load(p, environ={})
+    d = tmp_path / "dir" / "settings.yaml"
+    d.mkdir(parents=True)  # a directory where the file should be
+    with pytest.raises(settings.SettingsError, match=r"settings\.yaml"):
+        settings.load(d, environ={})
