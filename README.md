@@ -47,7 +47,9 @@ cp -R config.example config      # your own copy; config/ is gitignored
 
 Force one with `JOBHUNT_BACKEND=claude-code`, `anthropic`, or `bedrock`. Override the model with `JOBHUNT_MODEL`: an alias like `sonnet` for the CLI, a full model ID for the SDK, or a Bedrock model ID such as `anthropic.claude-opus-5-5` for Bedrock.
 
-For Bedrock, enable access to the model in the AWS console first; the default is Claude Sonnet 5.5 (`anthropic.claude-sonnet-5-5`), with thinking turned off so its short answers fit their token limits. A Bedrock API key works with the base install. To sign with regular AWS credentials (environment variables, a profile, SSO, or a role), also install the AWS signing libraries:
+Both SDK backends default to Claude Sonnet 5.5 (`claude-sonnet-5-5`, or `anthropic.claude-sonnet-5-5` on Bedrock), with thinking turned off so its short answers fit their token limits. If a safety classifier declines a scoring request, that job is skipped with a warning naming the refusal category and retried on the next run. On the `anthropic` backend, [server-side fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) (beta) first retries the request on the model Anthropic recommends for that category, and a warning names the model that answered.
+
+For Bedrock, enable access to the model in the AWS console first. A Bedrock API key works with the base install. To sign with regular AWS credentials (environment variables, a profile, SSO, or a role), also install the AWS signing libraries:
 
 ```bash
 pip install -e ".[bedrock]"

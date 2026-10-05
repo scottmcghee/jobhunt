@@ -84,16 +84,19 @@ def test_claude_code_completer_raises_on_is_error():
 class FakeMessages:
     """Records the request; answers like the SDK: a list of typed content blocks."""
 
-    def __init__(self, blocks):
-        self.blocks, self.calls = blocks, []
+    def __init__(self, blocks, **response):
+        self.blocks, self.calls, self.response = blocks, [], response
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(content=self.blocks)
+        fields = {"stop_reason": "end_turn", "stop_details": None, "usage": SimpleNamespace(iterations=None)}
+        return SimpleNamespace(content=self.blocks, **{**fields, **self.response})
 
 
-def _fake_client(*blocks):
-    return SimpleNamespace(messages=FakeMessages(list(blocks) or [SimpleNamespace(type="text", text="ok")]))
+def _fake_client(*blocks, **response):
+    messages = FakeMessages(list(blocks) or [SimpleNamespace(type="text", text="ok")], **response)
+    # the SDK serves beta requests from client.beta.messages; one recorder covers both
+    return SimpleNamespace(messages=messages, beta=SimpleNamespace(messages=messages))
 
 
 def test_bedrock_is_only_chosen_explicitly(monkeypatch):
@@ -152,7 +155,7 @@ def test_make_completer_builds_a_bedrock_client(monkeypatch):
 
 @pytest.mark.parametrize(
     ("backend", "expected"),
-    [("anthropic", "claude-sonnet-4-5"), ("claude-code", "sonnet"), ("bedrock", "anthropic.claude-sonnet-5-5")],
+    [("anthropic", "claude-sonnet-5-5"), ("claude-code", "sonnet"), ("bedrock", "anthropic.claude-sonnet-5-5")],
 )
 def test_model_name_reports_each_backends_default(monkeypatch, backend, expected):
     monkeypatch.setenv("JOBHUNT_BACKEND", backend)
@@ -177,3 +180,70 @@ def test_bedrock_api_key_needs_no_boto3(monkeypatch):
     monkeypatch.setattr(llm.importlib.util, "find_spec", lambda name: None)
     monkeypatch.setattr(anthropic, "AnthropicBedrockMantle", lambda **kw: _fake_client())
     assert llm.bedrock_completer()("SYS", "USER", 10) == "ok"
+
+
+
+def test_anthropic_completer_defaults_to_sonnet_5_5_with_fallback(monkeypatch):
+    monkeypatch.delenv("JOBHUNT_MODEL", raising=False)
+    client = _fake_client(SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text="answer"))
+    complete = llm.anthropic_completer(client=client)
+
+    assert complete("SYS", "USER", 1600) == "answer"
+    (call,) = client.messages.calls
+    assert call["model"] == "claude-sonnet-5-5"
+    assert call["system"] == "SYS" and call["max_tokens"] == 1600
+    assert call["messages"] == [{"role": "user", "content": "USER"}]
+    assert call["thinking"] == {"type": "between_tools"}
+    assert call["fallbacks"] == "default"
+    assert call["betas"] == ["server-side-fallback-2026-07-01"]
+
+
+def test_anthropic_completer_sends_fallback_only_where_supported(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_MODEL", "claude-haiku-4-5")
+    client = _fake_client()
+    llm.anthropic_completer(client=client)("SYS", "USER", 100)
+    (call,) = client.messages.calls
+    assert call["model"] == "claude-haiku-4-5"
+    assert "fallbacks" not in call and "betas" not in call and "thinking" not in call
+
+
+def test_anthropic_completer_fallback_without_thinking_off_for_opus(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_MODEL", "claude-opus-5-5")
+    client = _fake_client()
+    llm.anthropic_completer(client=client)("SYS", "USER", 100)
+    (call,) = client.messages.calls
+    assert call["fallbacks"] == "default" and "thinking" not in call
+
+
+@pytest.mark.parametrize("make", [llm.anthropic_completer, llm.bedrock_completer])
+def test_a_refusal_raises_a_clear_error(make):
+    messages = FakeMessages([], stop_reason="refusal", stop_details=SimpleNamespace(category="cyber"))
+    client = SimpleNamespace(messages=messages, beta=SimpleNamespace(messages=messages))
+    with pytest.raises(ValueError, match="declined.*cyber"):
+        make(client=client)("SYS", "USER", 100)
+
+
+def test_an_uncategorized_refusal_still_says_so():
+    messages = FakeMessages([], stop_reason="refusal", stop_details=SimpleNamespace(category=None))
+    client = SimpleNamespace(messages=messages, beta=SimpleNamespace(messages=messages))
+    with pytest.raises(ValueError, match="declined.*uncategorized"):
+        llm.anthropic_completer(client=client)("SYS", "USER", 100)
+
+
+def test_a_fallback_answer_is_logged(caplog):
+    iterations = [SimpleNamespace(type="message"), SimpleNamespace(type="fallback_message")]
+    client = _fake_client(model="claude-opus-4-8", usage=SimpleNamespace(iterations=iterations))
+    assert llm.anthropic_completer(client=client)("SYS", "USER", 100) == "ok"
+    assert "answered by fallback model claude-opus-4-8" in caplog.text
+
+
+def test_no_fallback_log_when_the_fallback_model_declines_too(caplog):
+    iterations = [SimpleNamespace(type="message"), SimpleNamespace(type="fallback_message")]
+    messages = FakeMessages(
+        [], stop_reason="refusal", stop_details=SimpleNamespace(category="cyber"),
+        model="claude-opus-4-8", usage=SimpleNamespace(iterations=iterations),
+    )
+    client = SimpleNamespace(messages=messages, beta=SimpleNamespace(messages=messages))
+    with pytest.raises(ValueError, match="cyber"):
+        llm.anthropic_completer(client=client)("SYS", "USER", 100)
+    assert "answered by fallback" not in caplog.text

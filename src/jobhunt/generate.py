@@ -129,7 +129,7 @@ Gaps: {'; '.join(scored.score.gaps) or 'none noted'}
 # PROOF PARAGRAPHS THAT WILL APPEAR IN THE LETTER
 {chr(10).join(f'[{m.id}] {m.text}' for m in modules)}
 """
-    data = extract_json(complete(SYSTEM, user, 400))
+    data = extract_json(complete(SYSTEM, user, 800))
     company = company_display_name(scored.job, data.get("company_name"))
     text = assemble(
         scored,

@@ -64,7 +64,7 @@ URL: {job.url}
 
 
 def score_job(job: Job, profile: str, kit: Kit, complete: Completer) -> ScoredJob:
-    raw = complete(SYSTEM, build_user_prompt(job, profile, kit), 800)
+    raw = complete(SYSTEM, build_user_prompt(job, profile, kit), 1600)
     data = extract_json(raw)
     # Only allow module ids that actually exist in the kit.
     mods = [m for m in data.get("suggested_modules", []) if m in kit.modules][:2]

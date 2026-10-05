@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -27,7 +28,9 @@ import subprocess
 from collections.abc import Callable
 from typing import Any
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
+log = logging.getLogger(__name__)
+
+DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_CLI_MODEL = "sonnet"  # Claude Code accepts aliases; cheaper than the default opus
 DEFAULT_BEDROCK_MODEL = "anthropic.claude-sonnet-5-5"  # Bedrock IDs carry an "anthropic." prefix
 _DEFAULT_MODELS = {
@@ -70,38 +73,73 @@ def make_completer() -> Completer:
     )
 
 
-# --------------------------------------------------------------------------- anthropic
+# --------------------------------------------------------------------------- shared
 
 
-def anthropic_completer(model: str | None = None) -> Completer:
-    """Build a completer backed by the Anthropic SDK. Imported lazily."""
-    import anthropic  # local import so tests never need the key
-
-    client = anthropic.Anthropic()
-    use_model = model or model_name()
-
-    def complete(system: str, user: str, max_tokens: int = 1500) -> str:
-        msg = client.messages.create(
-            model=use_model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return "".join(getattr(block, "text", "") for block in msg.content)
-
-    return complete
-
-
-# --------------------------------------------------------------------------- bedrock
-
-
-def _bedrock_thinking(model: str) -> dict[str, str] | None:
+def _thinking_off(model: str) -> dict[str, str] | None:
     """Thinking off for the default model, so the callers' small ``max_tokens`` go to the answer.
 
     ``between_tools`` is how Claude Sonnet 5.5 turns thinking off, and only it accepts the value.
     Any other model keeps its own default; one that thinks needs a larger ``max_tokens``.
     """
     return {"type": "between_tools"} if model.endswith("claude-sonnet-5-5") else None
+
+
+def _answer(msg: Any) -> str:
+    """The reply's text. A safety-classifier refusal raises, so callers skip the job."""
+    if msg.stop_reason == "refusal":
+        category = getattr(msg.stop_details, "category", None) or "uncategorized"
+        raise ValueError(f"the model declined this request (refusal: {category})")
+    return "".join(block.text for block in msg.content if block.type == "text")
+
+
+# --------------------------------------------------------------------------- anthropic
+
+# Server-side fallback (beta, Claude API only): when a classifier declines, the API retries the
+# same request on the model Anthropic recommends for that refusal category, in the same call.
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Model families that accept ``fallbacks``; prefixes, so point releases (opus-5-5) match too.
+_FALLBACK_MODELS = ("claude-sonnet-5-5", "claude-opus-5", "claude-fable-5")
+
+
+def _fell_back(msg: Any) -> bool:
+    iterations = getattr(msg.usage, "iterations", None) or []
+    return any(getattr(i, "type", None) == "fallback_message" for i in iterations)
+
+
+def anthropic_completer(model: str | None = None, client: Any = None) -> Completer:
+    """Build a completer backed by the Anthropic SDK. Imported lazily; ``client`` is injectable."""
+    if client is None:
+        import anthropic  # local import so tests never need the key
+
+        client = anthropic.Anthropic()
+    use_model = model or os.environ.get("JOBHUNT_MODEL", DEFAULT_MODEL)
+    thinking = _thinking_off(use_model)
+    fallback = use_model.startswith(_FALLBACK_MODELS)
+
+    def complete(system: str, user: str, max_tokens: int = 1500) -> str:
+        request: dict[str, Any] = {
+            "model": use_model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if thinking:
+            request["thinking"] = thinking
+        if fallback:
+            msg = client.beta.messages.create(**request, fallbacks="default", betas=[FALLBACK_BETA])
+        else:
+            msg = client.messages.create(**request)
+        text = _answer(msg)  # raises if the fallback model declined too
+        if _fell_back(msg):
+            # recorded scores still name the configured model; this is the only trace
+            log.warning("%s declined; answered by fallback model %s", use_model, msg.model)
+        return text
+
+    return complete
+
+
+# --------------------------------------------------------------------------- bedrock
 
 
 _BEDROCK_API_KEY_VARS = ("AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY")
@@ -131,7 +169,7 @@ def bedrock_completer(model: str | None = None, client: Any = None) -> Completer
         _check_bedrock_auth()
         client = anthropic.AnthropicBedrockMantle()
     use_model = model or os.environ.get("JOBHUNT_MODEL", DEFAULT_BEDROCK_MODEL)
-    thinking = _bedrock_thinking(use_model)
+    thinking = _thinking_off(use_model)
 
     def complete(system: str, user: str, max_tokens: int = 1500) -> str:
         extra = {"thinking": thinking} if thinking else {}
@@ -142,7 +180,7 @@ def bedrock_completer(model: str | None = None, client: Any = None) -> Completer
             messages=[{"role": "user", "content": user}],
             **extra,
         )
-        return "".join(block.text for block in msg.content if block.type == "text")
+        return _answer(msg)
 
     return complete
 

@@ -69,3 +69,15 @@ def test_extract_json_keeps_nested_objects():
 def test_extract_json_no_object(text):
     with pytest.raises(ValueError):
         extract_json(text)
+
+
+def test_score_leaves_room_for_the_reply(platform_director_job, profile, kit):
+    # replies run up to ~700 tokens on the newer tokenizer; 800 was too close
+    budgets = []
+
+    def complete(system, user, max_tokens):
+        budgets.append(max_tokens)
+        return '{"score": 5, "rationale": "ok", "strengths": [], "gaps": [], "suggested_modules": []}'
+
+    score_job(platform_director_job, profile, kit, complete)
+    assert budgets == [1600]
