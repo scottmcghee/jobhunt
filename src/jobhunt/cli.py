@@ -56,6 +56,7 @@ def _transport(
         max_retries=fetch.max_retries,
         max_retry_after=fetch.max_retry_after,
         cooldown=fetch.cooldown,
+        transient_retries=fetch.transient_retries,
     )
 
 
@@ -81,7 +82,7 @@ def _print_stats(transport: throttle.ThrottledTransport) -> None:
 # --------------------------------------------------------------------------- commands
 
 
-# A board that 404s this many fetches in a row is removed from companies.yaml.
+# A board found gone (see _board_gone) this many fetches in a row is removed from companies.yaml.
 MAX_CONSECUTIVE_404S = 3
 
 
@@ -94,6 +95,7 @@ class BoardOutcome:
     status: int | None = None
     skipped: bool = False  # not fetched: its group's circuit breaker had tripped
     refused: bool = False  # the host pushed back (429, or a 403 that isn't about this board)
+    gone: bool = False  # the board itself no longer exists (see _board_gone)
 
 
 def _host_refused(response: httpx.Response) -> bool:
@@ -107,6 +109,31 @@ def _host_refused(response: httpx.Response) -> bool:
     except ValueError:  # an HTML block page, say
         return True
     return not (isinstance(body, dict) and "errorCode" in body)
+
+
+def _board_gone(company: Company, response: httpx.Response) -> bool:
+    """A 404; for Workday also a 422 (the site was removed) or a 403 "S22" (the site is closed)."""
+    if response.status_code == 404:
+        return True
+    if company.ats != "workday" or response.status_code not in (403, 422):
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    code = body.get("errorCode") if isinstance(body, dict) else None
+    return code == "HTTP_422" if response.status_code == 422 else code == "S22"
+
+
+def _label(company: Company) -> str:
+    """The company's name, plus its slug if that differs, so a tenant's sites can be told apart."""
+    if company.slug.lower() == company.name.lower():
+        return company.name
+    return f"{company.name} ({company.slug})"
+
+
+def _one_line(error: BaseException) -> str:
+    return " ".join(str(error).split())
 
 
 class _GroupPools:
@@ -177,14 +204,20 @@ def _fetch_board(
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
         if not stopping():
-            log.warning("%s: HTTP %s — check slug/ATS", company.name, status)
-        return BoardOutcome(company, status=status, refused=_host_refused(e.response))
+            log.warning("%s: HTTP %s — check slug/ATS", _label(company), status)
+        return BoardOutcome(
+            company,
+            status=status,
+            refused=_host_refused(e.response),
+            gone=_board_gone(company, e.response),
+        )
     except httpx.HTTPError as e:
         if not stopping():
-            log.warning("%s: %s", company.name, e)
+            log.warning("%s: %s", _label(company), _one_line(e))
     except Exception as e:  # malformed data from one board; the rest of the run still counts
         if not stopping():
-            log.warning("%s: skipped, %s: %s", company.name, type(e).__name__, e, exc_info=verbose)
+            kind, message = type(e).__name__, _one_line(e)
+            log.warning("%s: skipped, %s: %s", _label(company), kind, message, exc_info=verbose)
     return BoardOutcome(company)
 
 
@@ -203,7 +236,7 @@ def _record(
     if outcome.skipped:
         return
     if outcome.jobs is None:
-        if outcome.status == 404 and misses.miss(company.key) >= prune_after:
+        if outcome.gone and misses.miss(company.key) >= prune_after:
             dead.add(company.key)
         return
     misses.clear(company.key)
@@ -277,8 +310,9 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             print(f"  + {j.company}: {j.title} ({j.location}) {j.url}")
         return 130 if interrupted else 0
 
-    for name in config.remove_companies(args.companies, dead) if dead else []:
-        print(f"removed {name} from {args.companies.name}: {prune} 404s in a row")
+    for company in config.remove_companies(args.companies, dead) if dead else []:
+        where = args.companies.name
+        print(f"removed {_label(company)} from {where}: gone {prune} fetches in a row")
     for key in dead:
         misses.clear(key)
     misses.save()

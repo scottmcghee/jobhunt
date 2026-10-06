@@ -19,6 +19,12 @@ from jobhunt.schema import Score, ScoredJob
 from tests.conftest import CONFIG_DIR, make_completer
 
 
+@pytest.fixture(autouse=True)
+def _no_transient_backoff(monkeypatch):
+    """Transient retries still happen here, without their real 1-2 s waits (test_throttle checks those)."""
+    monkeypatch.setattr(throttle.ThrottledTransport, "_backoff", lambda self, attempt: None)
+
+
 @respx.mock
 def test_fetch_then_score_then_letter(tmp_path, fixture_json, monkeypatch):
     # Point the CLI at a one-company config so the test is hermetic.
@@ -160,6 +166,101 @@ def test_other_errors_neither_count_nor_reset(tmp_path, fixture_json):
     dead.mock(side_effect=httpx.ConnectTimeout("slow"))
     _fetch(tmp_path, companies)
     assert _misses(tmp_path).counts == {"greenhouse:dead": 1}
+
+
+WD = "https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/{}/jobs"
+
+
+def _workday_config(tmp_path):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - name: acme\n    ats: workday\n    slug: acme/Open\n    datacenter: wd5\n\n"
+        "  - name: acme\n    ats: workday\n    slug: acme/Gone\n    datacenter: wd5\n"
+    )
+    return p
+
+
+def _workday_error(status, code):
+    return httpx.Response(status, json={"errorCode": code, "httpStatus": status, "message": ""})
+
+
+@pytest.mark.parametrize(
+    "response",
+    [_workday_error(422, "HTTP_422"), _workday_error(403, "S22")],
+    ids=["422-removed-site", "403-S22-closed-site"],
+)
+@respx.mock
+def test_a_dead_workday_site_counts_like_a_404(tmp_path, capsys, response):
+    companies = _workday_config(tmp_path)
+    respx.post(WD.format("Open")).mock(return_value=httpx.Response(200, json={"total": 0, "jobPostings": []}))
+    respx.post(WD.format("Gone")).mock(return_value=response)
+    for expected in (1, 2):
+        _fetch(tmp_path, companies)
+        assert _misses(tmp_path).counts == {"workday:acme/Gone": expected}
+    _fetch(tmp_path, companies)
+    assert [c.slug for c in cli.config.load_companies(companies)] == ["acme/Open"]
+    out = capsys.readouterr().out
+    assert "removed acme (acme/Gone) from companies.yaml: gone 3 fetches in a row" in out
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _workday_error(403, "S99"),  # a 403 about something else
+        httpx.Response(403, text="<html>blocked</html>"),  # a block page: the host, not the site
+        _workday_error(400, "HTTP_400"),
+    ],
+)
+@respx.mock
+def test_other_workday_errors_dont_count(tmp_path, response):
+    companies = _workday_config(tmp_path)
+    respx.post(WD.format("Open")).mock(return_value=httpx.Response(200, json={"total": 0, "jobPostings": []}))
+    respx.post(WD.format("Gone")).mock(return_value=response)
+    _fetch(tmp_path, companies)
+    assert _misses(tmp_path).counts == {}
+
+
+@respx.mock
+def test_a_422_from_another_ats_doesnt_count(tmp_path):
+    companies = _two_company_config(tmp_path)
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(422, json={"errorCode": "x"}))
+    _fetch(tmp_path, companies)
+    assert _misses(tmp_path).counts == {}
+
+
+@respx.mock
+def test_warnings_name_the_board_and_fit_on_one_line(tmp_path, caplog):
+    companies = _workday_config(tmp_path)
+    respx.post(WD.format("Open")).mock(side_effect=httpx.ConnectError("boom\nFor more information: x"))
+    respx.post(WD.format("Gone")).mock(return_value=_workday_error(500, "HTTP_500"))
+    _fetch(tmp_path, companies)
+    lines = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "acme (acme/Open): boom For more information: x" in lines
+    assert "acme (acme/Gone): HTTP 500 — check slug/ATS" in lines
+
+
+@respx.mock
+def test_a_board_whose_slug_is_its_name_is_named_once(tmp_path, caplog):
+    companies = _two_company_config(tmp_path)
+    companies.write_text(companies.read_text().replace("name: Dead", "name: dead"))
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    _fetch(tmp_path, companies)
+    assert "dead: HTTP 404 — check slug/ATS" in [r.getMessage() for r in caplog.records]
+
+
+@respx.mock
+def test_a_transient_failure_is_retried_before_the_board_is_skipped(tmp_path, fixture_json):
+    companies = _two_company_config(tmp_path)
+    respx.get(GH.format("live")).mock(
+        side_effect=[httpx.ConnectError("[Errno 9] Bad file descriptor"),
+                     httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))]
+    )
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    assert _fetch(tmp_path, companies) == 0
+    assert len(storage.load_jobs(tmp_path / "data")) == 1
 
 
 @respx.mock
@@ -855,7 +956,7 @@ def test_fetch_tuning_comes_from_settings(tmp_path, monkeypatch, fixture_json):
     companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
     route = respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
     for key, value in {"START_PER_HOST": "1", "MAX_RETRY_AFTER": "7", "COOLDOWN": "0.5", "BREAKER": "2",
-                       "TIMEOUT": "9", "USER_AGENT": "test-agent/1"}.items():
+                       "TIMEOUT": "9", "USER_AGENT": "test-agent/1", "TRANSIENT_RETRIES": "1"}.items():
         monkeypatch.setenv(f"JOBHUNT_FETCH_{key}", value)
     transports, runners = [], []
     real_transport, real_runner = throttle.ThrottledTransport, cli.BoardRunner
@@ -864,6 +965,7 @@ def test_fetch_tuning_comes_from_settings(tmp_path, monkeypatch, fixture_json):
     assert _fetch(tmp_path, companies, "--dry-run") == 0
     (kw,) = transports
     assert (kw["start"], kw["max_retry_after"], kw["cooldown"]) == (1, 7, 0.5)
+    assert kw["transient_retries"] == 1
     assert runners[0]["breaker"] == 2
     request = route.calls.last.request
     assert request.headers["User-Agent"] == "test-agent/1"
