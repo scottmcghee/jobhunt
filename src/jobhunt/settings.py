@@ -60,11 +60,11 @@ class FetchSettings(_Section):
     # Most requests sent per second, per rate group: the group names `fetch -v` stats print
     # ("workable", "lever", "workday:wd5"); an Eightfold board's group is its careers host, and an
     # Oracle board's its tenant host (eeho.fa.us2.oraclecloud.com); case-sensitive. Setting the
-    # map replaces it whole, so keep "workable" and "apply.careers.microsoft.com" in it to keep
-    # their caps. Workable's Cloudflare bans an IP
-    # for a burst of about 50 requests in 10 s; Microsoft's careers site 429s at 1 per second.
+    # map replaces it whole, so keep "workable", "apply.careers.microsoft.com" and "apple" in it
+    # to keep their caps. Workable's Cloudflare bans an IP for a burst of about 50 requests in
+    # 10 s; Microsoft's careers site 429s at 1 per second; Apple's pages are ~300 KB each.
     max_rate: dict[str, float] = Field(
-        default_factory=lambda: {"workable": 2.0, "apply.careers.microsoft.com": 0.5}
+        default_factory=lambda: {"workable": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0}
     )
 
     @field_validator("max_rate", mode="before")
