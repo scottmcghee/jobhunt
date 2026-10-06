@@ -572,7 +572,17 @@ def test_fetch_board_only_reports_and_record_keeps_the_books(tmp_path):
 
 
 @respx.mock
-def test_a_throttled_board_is_retried_not_skipped(tmp_path, fixture_json):
+def test_a_throttled_board_is_retried_not_skipped(tmp_path, fixture_json, monkeypatch):
+    # the real throttling on a fake clock, so its 1 s backoff takes no time (test_throttle
+    # checks the waits themselves)
+    now = [0.0]
+
+    def instant(fetch, workers, per_host):
+        return throttle.ThrottledTransport(
+            clock=lambda: now[0], sleep=lambda s: now.__setitem__(0, now[0] + s), jitter=lambda: 0.0
+        )
+
+    monkeypatch.setattr(cli, "_transport", instant)
     companies = tmp_path / "companies.yaml"
     companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
     route = respx.get(GH.format("examplecorp")).mock(
@@ -1013,7 +1023,8 @@ def test_fetch_tuning_comes_from_settings(tmp_path, monkeypatch, fixture_json):
     companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
     route = respx.get(GH.format("examplecorp")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
     for key, value in {"START_PER_HOST": "1", "MAX_RETRY_AFTER": "7", "COOLDOWN": "0.5", "BREAKER": "2",
-                       "TIMEOUT": "9", "USER_AGENT": "test-agent/1", "TRANSIENT_RETRIES": "1"}.items():
+                       "TIMEOUT": "9", "USER_AGENT": "test-agent/1", "TRANSIENT_RETRIES": "1",
+                       "MAX_RATE": '{"greenhouse": 4}'}.items():
         monkeypatch.setenv(f"JOBHUNT_FETCH_{key}", value)
     transports, runners = [], []
     real_transport, real_runner = throttle.ThrottledTransport, cli.BoardRunner
@@ -1023,6 +1034,7 @@ def test_fetch_tuning_comes_from_settings(tmp_path, monkeypatch, fixture_json):
     (kw,) = transports
     assert (kw["start"], kw["max_retry_after"], kw["cooldown"]) == (1, 7, 0.5)
     assert kw["transient_retries"] == 1
+    assert kw["max_rate"] == {"greenhouse": 4.0}
     assert runners[0]["breaker"] == 2
     request = route.calls.last.request
     assert request.headers["User-Agent"] == "test-agent/1"

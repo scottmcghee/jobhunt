@@ -63,6 +63,50 @@ def test_a_burst_of_throttles_halves_once_per_cooldown():
     assert lim.limit == 2
 
 
+def test_a_rate_spaces_request_starts():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
+    for _ in range(3):
+        lim.acquire()  # slots are free, and the gap isn't taken here
+    assert clock.slept == []
+    for _ in range(3):
+        lim.space()  # only the rate holds them back
+    assert clock.slept == [0.5, 0.5]
+    clock.now += 10  # idle time isn't banked as a burst
+    lim.space()
+    lim.space()
+    assert clock.slept == [0.5, 0.5, 0.5]
+
+
+def test_a_stop_while_spacing_raises_stopped():
+    import threading
+
+    stop = threading.Event()
+    lim = throttle.GroupLimiter(rate=0.01, stop=stop)  # a 100 s gap
+    lim.space()
+    stop.set()
+    with pytest.raises(throttle.Stopped):
+        lim.space()
+
+
+def test_space_reports_a_pause_that_began_while_it_slept():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
+    assert lim.space() is True
+    lim.pause_until = clock.now + 5  # as a 429 elsewhere sets it during the 0.5 s gap
+    assert lim.space() is False
+    clock.now += 10
+    assert lim.space() is True
+
+
+def test_without_a_rate_requests_start_at_once():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6)
+    for _ in range(3):
+        lim.acquire()
+    assert clock.slept == []
+
+
 def test_acquire_waits_out_a_pause():
     clock = FakeClock()
     lim = _limiter(clock, start=2, ceiling=6)
@@ -123,6 +167,36 @@ def test_429_without_retry_after_backs_off_exponentially_then_gives_up():
         assert client.get(URL).status_code == 429  # the caller's raise_for_status takes it from here
     assert route.call_count == 1 + throttle.MAX_RETRIES
     assert clock.slept == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+def test_a_429_with_retry_after_zero_backs_off_like_one_without():
+    # Cloudflare's rate-limit ban (error 1015) says "Retry-After: 0"; retrying at once only
+    # spends the retries inside the ban
+    clock = FakeClock()
+    route = respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "0"}))
+    with _client(clock) as client:
+        assert client.get(URL).status_code == 429
+    assert route.call_count == 1 + throttle.MAX_RETRIES
+    assert clock.slept == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+def test_max_rate_caps_one_group_and_leaves_the_others_alone():
+    clock = FakeClock()
+    other = "https://api.lever.co/v0/postings/acme"
+    respx.get(URL).mock(return_value=httpx.Response(200))
+    respx.get(other).mock(return_value=httpx.Response(200))
+    transport = throttle.ThrottledTransport(
+        start=6, clock=clock, sleep=clock.sleep, max_rate={"greenhouse": 2.0}
+    )
+    with httpx.Client(transport=transport) as client:
+        for _ in range(3):
+            client.get(other)
+        assert clock.slept == []
+        for _ in range(3):
+            client.get(URL)
+    assert clock.slept == [0.5, 0.5]
 
 
 @respx.mock
@@ -462,6 +536,83 @@ def test_max_in_flight_caps_requests_across_groups():
         client.get("https://api.lever.co/v0/postings/acme")
         first.join()
     assert overlapped == [False]
+
+
+def test_max_rate_spaces_sends_while_the_global_cap_is_full():
+    # with every global slot taken, rate-capped requests used to queue there and then go out
+    # together; the gap is now taken after the global slot, just before the send
+    import threading
+    import time
+
+    lever_in = threading.Event()
+    sends: list[float] = []
+
+    class Inner(httpx.BaseTransport):
+        def handle_request(self, request):
+            if "lever" in request.url.host:
+                lever_in.set()
+                time.sleep(0.4)
+            else:
+                sends.append(time.monotonic())
+            return httpx.Response(200, request=request)
+
+    transport = throttle.ThrottledTransport(
+        inner=Inner(), start=6, ceiling=6, max_in_flight=1, max_rate={"workable": 10.0}
+    )
+    workable = "https://apply.workable.com/api/v1/widget/accounts/acme"
+    with httpx.Client(transport=transport) as client:
+        first = threading.Thread(target=client.get, args=("https://api.lever.co/v0/postings/acme",))
+        first.start()
+        assert lever_in.wait(5)
+        threads = [threading.Thread(target=client.get, args=(workable,)) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads + [first]:
+            t.join(5)
+    assert len(sends) == 4
+    gaps = [b - a for a, b in zip(sends, sends[1:], strict=False)]
+    assert min(gaps) >= 0.09, gaps
+
+
+@pytest.mark.parametrize("max_in_flight", [32, None])  # with and without the global slots
+def test_a_pause_set_while_spacing_holds_back_the_spaced_sends(max_in_flight):
+    # requests sleeping in space() when a 429 paused the group used to go out inside the pause
+    import threading
+    import time
+
+    lock = threading.Lock()
+    sends: list[float] = []
+    paused_at: list[float] = []
+
+    class Inner(httpx.BaseTransport):
+        def handle_request(self, request):
+            with lock:
+                sends.append(time.monotonic())
+                first = len(sends) == 1
+            if first:
+                time.sleep(0.3)
+                paused_at.append(time.monotonic())
+                return httpx.Response(429, headers={"retry-after": "1"}, request=request)
+            return httpx.Response(200, request=request)
+
+    transport = throttle.ThrottledTransport(
+        inner=Inner(), start=6, ceiling=6, max_in_flight=max_in_flight, max_rate={"workable": 2.0}
+    )
+    workable = "https://apply.workable.com/api/v1/widget/accounts/acme"
+    with httpx.Client(transport=transport) as client:
+        threads = [threading.Thread(target=client.get, args=(workable,)) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+    assert len(sends) == 5  # the 429 is retried once; the waits aren't retries
+    pause_end = paused_at[0] + 1.0
+    assert min(sends[1:]) >= pause_end - 0.02, [round(s - sends[0], 2) for s in sends]
+    assert transport.stats()["workable"]["throttles"] == 1
+    assert transport.stats()["workable"]["requests"] == 5
+    # the held-back sends gave their group slot back, neutrally: one 429 halved 6 to 3, then 4 successes
+    assert transport.limiter("workable").in_flight == 0
+    assert transport.limiter("workable").limit == pytest.approx(4.164, abs=0.01)
 
 
 def test_limits_size_the_connection_pool(monkeypatch):

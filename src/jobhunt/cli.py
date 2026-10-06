@@ -45,19 +45,8 @@ log = logging.getLogger("jobhunt")
 def _transport(
     fetch: settings.FetchSettings, workers: int, per_host: int
 ) -> throttle.ThrottledTransport:
-    # Polite by construction: per-group concurrency limits, and retries on 429 (see throttle.py).
-    # `workers` caps requests in flight across all groups and sizes the connection pool to match.
-    pool = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
-    return throttle.ThrottledTransport(
-        start=fetch.start_per_host,
-        ceiling=per_host,
-        max_in_flight=workers,
-        limits=pool,
-        max_retries=fetch.max_retries,
-        max_retry_after=fetch.max_retry_after,
-        cooldown=fetch.cooldown,
-        transient_retries=fetch.transient_retries,
-    )
+    # Polite by construction: per-group concurrency limits and rate caps, and retries on 429.
+    return throttle.from_settings(fetch, workers=workers, per_host=per_host)
 
 
 def _client(transport: httpx.BaseTransport, fetch: settings.FetchSettings) -> httpx.Client:

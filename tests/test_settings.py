@@ -23,6 +23,7 @@ def test_defaults_are_todays_values():
     assert f.user_agent == "jobhunt/0.1 (+personal job search tool)"
     assert (f.max_retries, f.max_retry_after, f.cooldown, f.breaker, f.prune_after_404s) == (3, 120.0, 5.0, 5, 3)
     assert f.transient_retries == 2
+    assert f.max_rate == {"workable": 2.0}  # Cloudflare bans bursts of about 50 in 10 s
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
     assert s.slugs.check_workers == 4
 
@@ -163,3 +164,31 @@ def test_an_empty_path_in_the_file_means_the_default(tmp_path):
     p.write_text('paths:\n  data_dir: ""\n  output_dir: ""\n')
     s = settings.load(p, environ={})
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # not the repo root
+
+
+def test_max_rate_from_the_file_and_from_json_in_the_environment(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_text("fetch:\n  max_rate:\n    workable: 1.5\n    bamboohr: 4\n")
+    assert settings.load(p, environ={}).fetch.max_rate == {"workable": 1.5, "bamboohr": 4.0}
+    env = {"JOBHUNT_FETCH_MAX_RATE": '{"workable": 3}'}
+    assert settings.load(p, environ=env).fetch.max_rate == {"workable": 3.0}
+    p.write_text("fetch:\n  max_rate: {}\n")
+    assert settings.load(p, environ={}).fetch.max_rate == {}  # no caps at all
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["{\"workable\": 0}", "{\"workable\": -1}", "fast", "[2]",
+     "{\"workable\": NaN}", "{\"workable\": Infinity}"],
+)
+def test_a_bad_max_rate_names_the_variable(tmp_path, value):
+    with pytest.raises(settings.SettingsError, match="JOBHUNT_FETCH_MAX_RATE"):
+        settings.load(tmp_path / "nope.yaml", environ={"JOBHUNT_FETCH_MAX_RATE": value})
+
+
+def test_a_nan_max_rate_in_the_file_is_rejected(tmp_path):
+    # NaN would pass a "<= 0" check and silently turn the cap off
+    p = tmp_path / "settings.yaml"
+    p.write_text("fetch:\n  max_rate:\n    workable: .nan\n")
+    with pytest.raises(settings.SettingsError, match="fetch.max_rate"):
+        settings.load(p, environ={})
