@@ -101,6 +101,8 @@ python -m jobhunt.slugs urls.txt --companies config/companies.yaml --check
 
 It writes the boards it finds to `data/companies.generated.yaml`, ready to review and paste into `companies.yaml`, leaving out any already listed there. `--check` fetches the first page of each new board and drops those with no open postings; without it, the harvester makes no network calls.
 
+To find big employers' boards, `python scripts/survey_careers.py` surveys the S&P 500. For each company it looks up the website (Wikidata), tries a few likely careers pages, and records which hiring platform each uses (Workday, Eightfold, Oracle, iCIMS, SuccessFactors, ...). Boards on a supported source go to `data/sp500/companies.generated.yaml` under the company's real name, and a table of every company and its platform goes to `data/sp500/survey.md`. It sends one request a second and honours robots.txt, so a full run takes about an hour and a half; it saves as it goes, and a rerun picks up where it stopped (`--limit N` and `--only TICKER ...` narrow it). Review the generated file, then paste it into `companies.yaml`; the boards come from the companies' own careers pages, and `fetch` prunes any that turn out to be gone.
+
 ## Develop
 
 ```bash

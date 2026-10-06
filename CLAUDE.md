@@ -51,6 +51,7 @@ tests/
   fixtures/           # real-shaped ATS responses, anonymized
 scripts/
   bench_fetch.py      # times fetch on a stratified sample of boards, to tune --workers/--per-host
+  survey_careers.py   # S&P 500 careers sites: which hiring platform each uses, and new boards
 data/                 # runtime state (gitignored)
 output/               # generated letters (gitignored)
 ```
@@ -104,6 +105,7 @@ Agreed future work, in rough priority order. Each item still follows the workflo
    - **Apple** *(done)*: `sources/apple.py`. Not JSON: each server-rendered page embeds `window.__staticRouterHydrationData = JSON.parse("...")`. A board is `slug: <location filter>` (e.g. `united-states-USA`); `fetch` searches per term (a multi-word term as a quoted phrase, since Apple otherwise matches any word), 20 a page, and reads a job page for each wanted description. `fetch.max_rate` caps it at 1 page/s.
    - **Planned, in order:** Eightfold tenants on the older interface (`/api/pcsx` answers 403, `/api/apply/v2/jobs` works; 14 of 61 harvested boards); then an S&P 500 survey script that finds each constituent's careers platform.
    - **Off-limits:** Google (robots.txt disallows its job pages), Meta (its terms forbid automated collection without written permission), classic iCIMS portals (`Disallow: /`).
+   - **S&P 500 survey** *(done)*: `scripts/survey_careers.py`. Constituents from Wikipedia, websites from Wikidata; it tries `www.<host>/careers`, `<host>/careers`, `careers.<host>`, `jobs.<host>`, then up to two careers links from the homepage, honouring robots.txt, one request at a time. Each page is fingerprinted for its platform and its URLs go through `slugs.board_from_url`, so supported boards come out under the company's real name. Oracle sites on a company's own domain (e.g. `jobs.akamai.com/en/sites/CX_1`) are detected but not usable: the API answers 403 there.
    - **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.
    - **Fit the existing pipeline.** Output must still be `Job` models so filter, score, and letter stay unchanged.
    - **Stay a CLI.** No scheduler or database (see below).
