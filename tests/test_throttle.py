@@ -89,6 +89,16 @@ def test_a_stop_while_spacing_raises_stopped():
         lim.space()
 
 
+def test_space_reports_a_pause_that_began_while_it_slept():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
+    assert lim.space() is True
+    lim.pause_until = clock.now + 5  # as a 429 elsewhere sets it during the 0.5 s gap
+    assert lim.space() is False
+    clock.now += 10
+    assert lim.space() is True
+
+
 def test_without_a_rate_requests_start_at_once():
     clock = FakeClock()
     lim = _limiter(clock, start=6, ceiling=6)
@@ -562,6 +572,43 @@ def test_max_rate_spaces_sends_while_the_global_cap_is_full():
     assert len(sends) == 4
     gaps = [b - a for a, b in zip(sends, sends[1:], strict=False)]
     assert min(gaps) >= 0.09, gaps
+
+
+def test_a_pause_set_while_spacing_holds_back_the_spaced_sends():
+    # requests sleeping in space() when a 429 paused the group used to go out inside the pause
+    import threading
+    import time
+
+    lock = threading.Lock()
+    sends: list[float] = []
+    paused_at: list[float] = []
+
+    class Inner(httpx.BaseTransport):
+        def handle_request(self, request):
+            with lock:
+                sends.append(time.monotonic())
+                first = len(sends) == 1
+            if first:
+                time.sleep(0.3)
+                paused_at.append(time.monotonic())
+                return httpx.Response(429, headers={"retry-after": "1"}, request=request)
+            return httpx.Response(200, request=request)
+
+    transport = throttle.ThrottledTransport(
+        inner=Inner(), start=6, ceiling=6, max_in_flight=32, max_rate={"workable": 2.0}
+    )
+    workable = "https://apply.workable.com/api/v1/widget/accounts/acme"
+    with httpx.Client(transport=transport) as client:
+        threads = [threading.Thread(target=client.get, args=(workable,)) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+    assert len(sends) == 5  # the 429 is retried once; the waits aren't retries
+    pause_end = paused_at[0] + 1.0
+    assert min(sends[1:]) >= pause_end - 0.02, [round(s - sends[0], 2) for s in sends]
+    assert transport.stats()["workable"]["throttles"] == 1
+    assert transport.stats()["workable"]["requests"] == 5
 
 
 def test_limits_size_the_connection_pool(monkeypatch):

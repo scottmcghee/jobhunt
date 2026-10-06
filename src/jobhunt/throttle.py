@@ -5,7 +5,8 @@ Every request goes through ``ThrottledTransport``. It finds the request's rate-l
 
 - waits for a free slot in that group's ``GroupLimiter`` and out any pause a 429 set; then, for a
   group with a rate cap (``max_rate``), after taking a global slot (``max_in_flight``), until
-  the cap allows the next send, so requests that queued for a global slot don't go out together;
+  the cap allows the next send, so requests that queued for a global slot don't go out together
+  (one that a 429 paused the group meanwhile gives its slots back and waits out the pause);
 - retries a 429, or a 503 that carries Retry-After, after Retry-After seconds or a 1/2/4 s
   backoff, up to ``MAX_RETRIES`` times (a Retry-After under a second, like Cloudflare's "0" on a
   rate-limit ban, counts as none, so it gets the backoff rather than instant retries); the last
@@ -129,10 +130,11 @@ class GroupLimiter:
                     continue
             self._sleep(wait)  # outside the lock, so releases aren't blocked meanwhile
 
-    def space(self) -> None:
+    def space(self) -> bool:
         """Wait until the rate cap allows the next send; raises ``Stopped`` on ``stop``.
 
-        Called just before the send, so the gap holds between actual sends.
+        Called just before the send, so the gap holds between actual sends. False: a 429 paused
+        the group during the wait, so don't send; release neutrally and ``acquire`` again.
         """
         if self.rate:
             with self._cond:
@@ -143,6 +145,11 @@ class GroupLimiter:
                 self._sleep(start - now)  # outside the lock, so others can reserve meanwhile
         if self._stop.is_set():
             raise Stopped
+        with self._cond:
+            if self.pause_until > self._clock():
+                self.requests -= 1  # not sent; acquire() counts it again
+                return False
+            return True
 
     def release(self, throttled: bool = False, retry_after: float = 0.0, neutral: bool = False):
         """Free a slot. A success grows the limit, a throttle shrinks it, ``neutral`` neither."""
@@ -250,12 +257,17 @@ class ThrottledTransport(httpx.BaseTransport):
             response = None
             try:
                 if self._slots is None:
-                    limiter.space()
+                    if not limiter.space():  # paused meanwhile: wait it out in acquire()
+                        limiter.release(neutral=True)
+                        continue
                     response = self._send(request)
                     response.read()  # a body that stalls or drops fails here, so it is retried
                 else:
                     with self._slots:
-                        limiter.space()  # after the global slot, so queued requests don't bunch
+                        # after the global slot, so queued requests don't bunch
+                        if not limiter.space():  # paused meanwhile: wait it out in acquire()
+                            limiter.release(neutral=True)
+                            continue
                         response = self._send(request)
                         response.read()
                 throttled = _throttled(response)
