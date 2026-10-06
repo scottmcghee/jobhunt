@@ -928,9 +928,11 @@ def test_oracle_remote(code, location, title, expected):
 
 
 def test_oracle_a_blank_code_with_a_remote_body_passes_the_location_filter(oracle_company, prefs):
-    raw = {"Id": "1", "Title": "Director, Platform Engineering", "PrimaryLocation": "United States", "WorkplaceTypeCode": None}
+    # Austin is outside onsite_accept_any, so only the remote body can let it through.
+    raw = {"Id": "1", "Title": "Director, Platform Engineering", "PrimaryLocation": "Austin, TX, United States", "WorkplaceTypeCode": None}
     detail = {"ExternalDescriptionStr": "<p>Lead our cloud platform team. Position is remote.</p>"}
     assert check_location(oracle.normalize(oracle_company, raw, detail), prefs) is None
+    assert check_location(oracle.normalize(oracle_company, raw, None), prefs) is not None
 
 
 @respx.mock
