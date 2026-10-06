@@ -368,3 +368,14 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
     monkeypatch.setattr(slugs, "check_workers", lambda: pytest.fail("settings loaded again"))
     assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(tmp_path / "o"), "--check"]) == 0
     assert seen == {"agent": "test-agent/1", "workers": 3}
+
+
+def test_check_pool_size_comes_from_the_argument_or_settings(monkeypatch):
+    sizes = []
+    real = slugs.ThreadPoolExecutor
+    monkeypatch.setattr(slugs, "ThreadPoolExecutor", lambda n: sizes.append(n) or real(n))
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
+    with httpx.Client() as client:
+        slugs.check([], client, workers=2)
+        slugs.check([], client)
+    assert sizes == [2, 3]

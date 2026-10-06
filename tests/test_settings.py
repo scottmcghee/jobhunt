@@ -155,3 +155,10 @@ def test_a_file_that_cant_be_read_names_the_file(tmp_path):
     d.mkdir(parents=True)  # a directory where the file should be
     with pytest.raises(settings.SettingsError, match=r"settings\.yaml"):
         settings.load(d, environ={})
+
+
+def test_an_empty_path_in_the_file_means_the_default(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_text('paths:\n  data_dir: ""\n  output_dir: ""\n')
+    s = settings.load(p, environ={})
+    assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # not the repo root

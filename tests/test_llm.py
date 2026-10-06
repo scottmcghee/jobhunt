@@ -304,3 +304,10 @@ def test_settings_passed_in_are_used_without_reading_the_file(tmp_path, monkeypa
         assert client.messages.calls[0]["model"] == "opus"
     monkeypatch.setattr(llm, "claude_code_completer", lambda llm_settings: llm_settings)
     assert llm.make_completer(s) is s
+
+
+def test_make_completer_passes_its_settings_to_every_backend(monkeypatch):
+    for backend, factory in (("anthropic", "anthropic_completer"), ("bedrock", "bedrock_completer")):
+        s = llm.settings.LLMSettings(backend=backend, model="x")
+        monkeypatch.setattr(llm, factory, lambda llm_settings: llm_settings)
+        assert llm.make_completer(s) is s

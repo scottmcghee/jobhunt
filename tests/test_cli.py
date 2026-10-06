@@ -930,3 +930,20 @@ def test_a_settings_edit_mid_run_does_not_change_the_recorded_model(tmp_path, pl
     assert cli.main(["--data-dir", str(tmp_path), "score"]) == 0
     assert given[0].model == "opus"  # the completer is built from the run's settings
     assert [s.score.model for s in storage.load_scores(tmp_path)] == ["claude-code:opus"] * 2
+
+
+def test_a_settings_edit_mid_run_does_not_change_the_letters_model(tmp_path, scored_job, monkeypatch):
+    _settings_file(monkeypatch, tmp_path, "llm:\n  backend: claude-code\n  model: opus\n")
+    _two_scored_jobs(tmp_path, scored_job)
+    # the user edits settings.yaml for the next run while this one is still writing letters
+    edits = iter(["llm:\n  backend: claude-code\n  model: haiku\n", "llm:\n  model: [oops\n"])
+
+    def complete(system, user, max_tokens):
+        (tmp_path / "cfg" / "settings.yaml").write_text(next(edits))
+        return LETTER_REPLY
+
+    monkeypatch.setattr(cli, "_completer", lambda llm_settings: complete)
+    assert _letter(tmp_path) == 0
+    headers = [p.read_text().splitlines()[0] for p in (tmp_path / "out").glob("*.md")]
+    assert len(headers) == 2
+    assert all(" | claude-code:opus | " in h for h in headers)

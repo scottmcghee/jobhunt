@@ -58,6 +58,12 @@ class PathSettings(_Section):
     data_dir: Path | None = None  # None: the repo's data/
     output_dir: Path | None = None  # None: the repo's output/
 
+    @field_validator("data_dir", "output_dir", mode="before")
+    @classmethod
+    def _empty_is_default(cls, value: Any) -> Any:
+        """``""`` means the default, as an empty environment variable does, not the repo root."""
+        return None if value == "" else value
+
     @field_validator("data_dir", "output_dir")
     @classmethod
     def _from_repo(cls, value: Path | None) -> Path | None:

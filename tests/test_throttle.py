@@ -444,3 +444,14 @@ def test_cooldown_is_a_limiter_parameter():
     lim.release(throttled=True)
     lim.release(throttled=True)
     assert lim.limit == 1  # no cooldown: both halvings count
+
+
+@respx.mock
+def test_the_transport_gives_its_limiters_its_cooldown():
+    clock = FakeClock()
+    respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "0"}))
+    transport = throttle.ThrottledTransport(start=4, clock=clock, sleep=clock.sleep, max_retries=1, cooldown=0)
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 429
+    (stats,) = transport.stats().values()
+    assert stats["limit"] == 1  # two 429s, no cooldown: halved twice
