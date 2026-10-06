@@ -10,8 +10,10 @@ import httpx
 import pytest
 import respx
 
+from jobhunt.filter import check_location
 from jobhunt.schema import Company
 from jobhunt.sources import (
+    amazon,
     ashby,
     bamboohr,
     fetch_company,
@@ -526,6 +528,187 @@ def test_fetch_company_passes_wants_body_to_bamboohr(bamboohr_company, fixture_j
         assert detail.call_count == 3
 
 
+# ------------------------------------------------------------------ Amazon (search, not a full listing)
+
+AZ = "https://www.amazon.jobs/en/search.json"
+
+
+@respx.mock
+def test_amazon_searches_each_term_and_normalizes(amazon_company, fixture_json):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json=fixture_json("amazon_search.json")))
+    with httpx.Client() as client:
+        jobs = amazon.fetch(amazon_company, client, ["director", "senior manager"])
+    assert route.call_count == 2  # one page each: 3 hits fit in one page
+    params = [call.request.url.params for call in route.calls]
+    assert [p["base_query"] for p in params] == ["director", "senior manager"]
+    assert all(p["normalized_country_code[]"] == "USA" and p["result_limit"] == "100" for p in params)
+    assert all(p["sort"] == "recent" for p in params)  # roughly newest first, so a capped term keeps mostly new ones
+    assert [j.external_id for j in jobs] == ["10000001", "10000002", "10000003", "10000004"]  # deduped
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("amazon", "Amazon", "USA")
+    assert first.title == "Director, Platform Engineering"
+    assert first.location == "Seattle, Washington, USA"
+    assert first.url == "https://www.amazon.jobs/en/jobs/10000001/director-platform-engineering"
+    assert first.posted_at == "2026-10-06"  # "October  6, 2026"
+    assert first.body.startswith("Lead our platform & infrastructure org.")
+    assert "Basic qualifications" in first.body and "Experience with AWS" in first.body
+    assert "Preferred qualifications" in first.body
+    assert first.remote is None
+    assert jobs[1].remote is True  # "US, Virtual"
+    assert jobs[3].location == "Austin, Texas, USA; Seattle, Washington, USA"  # every location
+    assert jobs[3].remote is False  # every location is ONSITE
+
+
+def test_amazon_a_secondary_seattle_location_passes_the_location_filter(amazon_company, fixture_json, prefs):
+    raw = fixture_json("amazon_search.json")["jobs"][3]
+    job = amazon.normalize(amazon_company, raw)
+    assert check_location(job, prefs) is None
+    alone = amazon.normalize(amazon_company, {**raw, "locations": raw["locations"][:1]})
+    assert check_location(alone, prefs) is not None  # Austin on its own doesn't pass
+
+
+def _az_loc(city: str, kind: str | None) -> str:
+    entry = {"normalizedLocation": f"{city}, USA", "city": city}
+    return json.dumps(entry | ({"type": kind} if kind else {}))
+
+
+@pytest.mark.parametrize(
+    ("locations", "location", "remote"),
+    [
+        ([_az_loc("Austin", "ONSITE"), _az_loc("Virtual", "VIRTUAL")], "Austin, USA; Virtual, USA", True),
+        ([_az_loc("Austin", "ONSITE"), _az_loc("Austin", "ONSITE")], "Austin, USA", False),  # deduped
+        ([_az_loc("Austin", "ONSITE"), _az_loc("Dallas", None)], "Austin, USA; Dallas, USA", None),
+        ([{"normalizedLocation": "Austin, USA", "type": "VIRTUAL"}], "Austin, USA", True),  # a dict, not a string
+        (["{not json", 7, None, json.dumps(["a list"])], "US, TX, Austin", None),  # falls back to location
+        ([], "US, TX, Austin", None),
+    ],
+)
+def test_amazon_locations_and_remote_come_from_every_location(amazon_company, locations, location, remote):
+    raw = {"id": "u1", "title": "Director", "location": "US, TX, Austin", "locations": locations}
+    job = amazon.normalize(amazon_company, raw)
+    assert (job.location, job.remote) == (location, remote)
+
+
+@pytest.mark.parametrize(
+    ("raw", "remote"),
+    [
+        ({"location": "US, Virtual"}, True),
+        ({"normalized_location": "Remote, USA"}, True),
+        ({"location": "US, TX, Austin", "title": "Director, Remote Operations"}, True),  # remote in the title
+        ({"location": "US, TX, Austin", "title": "Director, Virtual Care"}, True),
+        ({"location": "US, TX, Austin", "title": "Director"}, None),
+        ({"location": "US, Virtual", "locations": ["{bad"]}, True),  # unreadable locations: the text decides
+    ],
+)
+def test_amazon_remote_falls_back_to_the_location_and_title_text(amazon_company, raw, remote):
+    assert amazon.normalize(amazon_company, {"id": "u1", "title": "Director"} | raw).remote is remote
+
+
+@respx.mock
+def test_amazon_pages_until_the_hits_are_in(amazon_company):
+    def page(request):
+        offset = int(request.url.params["offset"])
+        n = max(0, min(100, 250 - offset))
+        jobs = [{"id": f"u{offset + i}", "id_icims": str(offset + i), "title": "Director", "location": "US, WA, Seattle",
+                 "job_path": f"/en/jobs/{offset + i}/x", "description": ""} for i in range(n)]
+        return httpx.Response(200, json={"error": None, "hits": 250, "jobs": jobs})
+
+    route = respx.get(AZ).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = amazon.fetch(amazon_company, client, ["director"])
+        assert len(jobs) == 250 and route.call_count == 3
+        assert len(amazon.fetch(amazon_company, client, ["director"], max_pages=1)) == 100
+
+
+@respx.mock
+def test_amazon_a_broad_term_stops_at_the_cap_and_says_so(amazon_company, caplog):
+    def page(request):
+        offset = int(request.url.params["offset"])
+        jobs = [{"id": f"u{offset + i}", "id_icims": str(offset + i), "title": "Manager", "job_path": "/x"}
+                for i in range(100)]
+        return httpx.Response(200, json={"error": None, "hits": 5883, "jobs": jobs})
+
+    route = respx.get(AZ).mock(side_effect=page)
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        jobs = amazon.fetch(amazon_company, client, ["manager"])
+    assert route.call_count == 20 and len(jobs) == 2000
+    assert "amazon USA: manager has 5883 hits; kept the first 2000 in Amazon's 'recent' order (not strictly by posting date)" in caplog.messages
+
+
+@respx.mock
+def test_amazon_the_first_posting_seen_wins_across_terms(amazon_company):
+    def page(request):
+        title = request.url.params["base_query"].title()
+        return httpx.Response(200, json={"error": None, "hits": 1, "jobs": [{"id": "u1", "title": title}]})
+
+    respx.get(AZ).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = amazon.fetch(amazon_company, client, ["director", "head of"])
+    assert [j.title for j in jobs] == ["Director"]
+
+
+@respx.mock
+def test_amazon_warns_about_a_board_with_no_postings(amazon_company, caplog):
+    respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": None, "hits": 0, "jobs": []}))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        assert amazon.fetch(amazon_company, client, ["director", "vp"]) == []
+    assert caplog.messages == ["amazon USA: 0 postings — check the country code (ISO alpha-3, e.g. USA)"]
+
+
+@respx.mock
+def test_amazon_warns_once_per_wildcard_term(amazon_company, caplog):
+    respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": None, "hits": 0, "jobs": []}))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        amazon.fetch(amazon_company, client, ["recruit*", "Recruit* ", "director"])
+    wildcard = [m for m in caplog.messages if "prefix" in m]
+    assert wildcard == ["amazon can't search by prefix; searching 'recruit' only for 'recruit*'"]
+
+
+@respx.mock
+def test_amazon_an_empty_page_ends_the_listing(amazon_company):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": None, "hits": 5000, "jobs": []}))
+    with httpx.Client() as client:
+        assert amazon.fetch(amazon_company, client, ["director"]) == []
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("terms", "queries"),
+    [
+        ([], [""]),  # no terms: one unfiltered search (slugs --check)
+        (["director", "Director ", "recruit*", "  "], ["director", "recruit"]),
+    ],
+)
+@respx.mock
+def test_amazon_search_terms_are_cleaned_up(amazon_company, terms, queries):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": None, "hits": 0, "jobs": []}))
+    with httpx.Client() as client:
+        amazon.fetch(amazon_company, client, terms)
+    assert [call.request.url.params["base_query"] for call in route.calls] == queries
+
+
+@respx.mock
+def test_amazon_reports_an_error_in_the_payload(amazon_company):
+    respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": "bad query", "hits": 0, "jobs": []}))
+    with httpx.Client() as client, pytest.raises(ValueError, match="bad query"):
+        amazon.fetch(amazon_company, client, ["director"])
+
+
+@pytest.mark.parametrize("raw", ["", "not a date", None])
+def test_amazon_an_unreadable_date_is_left_out(raw):
+    assert amazon._posted(raw) is None
+
+
+@respx.mock
+def test_fetch_company_passes_search_terms_only_to_search_sources(amazon_company, gh_company, fixture_json):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json=fixture_json("amazon_search.json")))
+    respx.get(GH_JOBS_URL).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    with httpx.Client() as client:
+        fetch_company(amazon_company, client, search=["vice president"])
+        assert route.calls.last.request.url.params["base_query"] == "vice president"
+        assert len(fetch_company(gh_company, client, search=["vice president"])) == 4  # ignored
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
@@ -538,6 +721,7 @@ SOURCES_WITH_IDS = [
     (smartrecruiters, "smartrecruiters_company", "GET", SR, "smartrecruiters_postings.json", "content", "id"),
     (workable, "workable_company", "GET", WK, "workable_account.json", "jobs", "shortcode"),
     (bamboohr, "bamboohr_company", "GET", BH + "/list", "bamboohr_list.json", "result", "id"),
+    (amazon, "amazon_company", "GET", AZ, "amazon_search.json", "jobs", "id"),
 ]
 
 
@@ -585,6 +769,7 @@ def _requests_made(company, mocks):
         ("smartrecruiters_company", [("GET", SR + "/", "smartrecruiters_posting.json"), ("GET", SR, "smartrecruiters_postings.json")]),
         ("workable_company", [("GET", WK, "workable_account.json")]),
         ("bamboohr_company", [("GET", BH + "/list", "bamboohr_list.json"), ("GET", BH + "/", "bamboohr_job.json")]),
+        ("amazon_company", [("GET", AZ, "amazon_search.json")]),
     ],
 )
 def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
@@ -602,6 +787,7 @@ def test_rate_groups():
     # every BambooHR tenant has its own host, but they are one service
     assert request_group(httpx.URL("https://acme.bamboohr.com/careers/list")) == "bamboohr"
     assert request_group(httpx.URL("https://apply.workable.com/api/v1/widget/accounts/a")) == "workable"
+    assert request_group(httpx.URL("https://www.amazon.jobs/en/search.json")) == "amazon"
     assert request_group(httpx.URL("https://www.bamboohr.com.evil.example/x")) == "www.bamboohr.com.evil.example"
 
 

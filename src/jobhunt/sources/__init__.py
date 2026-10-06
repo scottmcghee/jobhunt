@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Executor
 
 import httpx
 
 from jobhunt.schema import ATSName, Company, Job
-from jobhunt.sources import ashby, bamboohr, greenhouse, lever, smartrecruiters, workable, workday
+from jobhunt.sources import (
+    amazon,
+    ashby,
+    bamboohr,
+    greenhouse,
+    lever,
+    smartrecruiters,
+    workable,
+    workday,
+)
 
 Fetcher = Callable[[Company, httpx.Client], list[Job]]
 BodyCheck = Callable[[Job], bool]
@@ -30,12 +39,20 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
 }
 
 
+# Single-company sites too big to list in full: they run one search per term instead.
+SearchFetcher = Callable[[Company, httpx.Client, Sequence[str], int | None], list[Job]]
+SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
+    "amazon": amazon.fetch,
+}
+
+
 def fetch_company(
     company: Company,
     client: httpx.Client,
     wants_body: BodyCheck = lambda job: True,
     max_pages: int | None = None,
     pool: Executor | None = None,
+    search: Sequence[str] = (),
 ) -> list[Job]:
     """Dispatch to the right ATS adapter for this company.
 
@@ -44,10 +61,16 @@ def fetch_company(
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
-    ``max_pages`` stops paged listings (Workday, SmartRecruiters) early; the others are one request.
+    ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
+    source) early; the others are one request.
+
+    ``search`` matters only for sites too big to list (Amazon): they run one search per term
+    instead (``fetch`` passes the title filter's target-level words). Others ignore it.
     With ``pool``, Workday, SmartRecruiters and BambooHR fetch later pages and descriptions
     concurrently on it (BambooHR has only descriptions).
     """
+    if company.ats in SEARCH_FETCHERS:
+        return SEARCH_FETCHERS[company.ats](company, client, search, max_pages)
     if company.ats in ON_DEMAND_FETCHERS:
         return ON_DEMAND_FETCHERS[company.ats](company, client, wants_body, max_pages, pool)
     return FETCHERS[company.ats](company, client)
@@ -62,6 +85,7 @@ _API_HOSTS: dict[str, str] = {
     "api.ashbyhq.com": "ashby",
     "api.smartrecruiters.com": "smartrecruiters",
     "apply.workable.com": "workable",
+    "www.amazon.jobs": "amazon",
 }
 _WORKDAY_HOST = re.compile(r"[a-z0-9-]+\.(wd\d+)\.myworkdayjobs\.com")
 _BAMBOOHR_HOST = re.compile(r"[a-z0-9-]+\.bamboohr\.com")

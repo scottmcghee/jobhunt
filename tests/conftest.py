@@ -76,6 +76,11 @@ def bamboohr_company() -> Company:
 
 
 @pytest.fixture
+def amazon_company() -> Company:
+    return Company(name="Amazon", ats="amazon", slug="USA")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

@@ -321,6 +321,24 @@ def test_a_transient_failure_is_retried_before_the_board_is_skipped(tmp_path, fi
 
 
 @respx.mock
+def test_fetch_passes_the_title_terms_as_search_terms(tmp_path, monkeypatch, fixture_json):
+    companies = _two_company_config(tmp_path)
+    seen = []
+    real = cli.fetch_company
+
+    def fetch(company, client, **kw):
+        seen.append(kw.get("search"))
+        return real(company, client, **kw)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    terms = cli.config.load_preferences().title.must_include_any
+    assert seen and all(s == terms for s in seen)
+
+
+@respx.mock
 def test_dry_run_does_not_count_404s(tmp_path, fixture_json):
     companies = _two_company_config(tmp_path)
     respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
