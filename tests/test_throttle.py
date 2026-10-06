@@ -574,7 +574,8 @@ def test_max_rate_spaces_sends_while_the_global_cap_is_full():
     assert min(gaps) >= 0.09, gaps
 
 
-def test_a_pause_set_while_spacing_holds_back_the_spaced_sends():
+@pytest.mark.parametrize("max_in_flight", [32, None])  # with and without the global slots
+def test_a_pause_set_while_spacing_holds_back_the_spaced_sends(max_in_flight):
     # requests sleeping in space() when a 429 paused the group used to go out inside the pause
     import threading
     import time
@@ -595,7 +596,7 @@ def test_a_pause_set_while_spacing_holds_back_the_spaced_sends():
             return httpx.Response(200, request=request)
 
     transport = throttle.ThrottledTransport(
-        inner=Inner(), start=6, ceiling=6, max_in_flight=32, max_rate={"workable": 2.0}
+        inner=Inner(), start=6, ceiling=6, max_in_flight=max_in_flight, max_rate={"workable": 2.0}
     )
     workable = "https://apply.workable.com/api/v1/widget/accounts/acme"
     with httpx.Client(transport=transport) as client:
@@ -609,6 +610,9 @@ def test_a_pause_set_while_spacing_holds_back_the_spaced_sends():
     assert min(sends[1:]) >= pause_end - 0.02, [round(s - sends[0], 2) for s in sends]
     assert transport.stats()["workable"]["throttles"] == 1
     assert transport.stats()["workable"]["requests"] == 5
+    # the held-back sends gave their group slot back, neutrally: one 429 halved 6 to 3, then 4 successes
+    assert transport.limiter("workable").in_flight == 0
+    assert transport.limiter("workable").limit == pytest.approx(4.164, abs=0.01)
 
 
 def test_limits_size_the_connection_pool(monkeypatch):
