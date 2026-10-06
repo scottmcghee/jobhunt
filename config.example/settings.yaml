@@ -50,8 +50,10 @@ fetch:
   # a burst of about 50 requests in 10 s. Setting the map (here or in the environment) replaces
   # it whole, so keep workable in it to keep that cap; {} removes every cap.
   # Env: JOBHUNT_FETCH_MAX_RATE as JSON, e.g. '{"workable": 3}'
+  # Microsoft's careers site (Eightfold) answered 429 to requests one second apart.
   max_rate:
     workable: 2.0
+    apply.careers.microsoft.com: 0.5
 
 paths:
   # ~ expands, and a relative path is under the repo (like the defaults), whatever directory

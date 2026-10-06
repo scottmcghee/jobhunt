@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from concurrent.futures import Executor
 from datetime import datetime
 
 import httpx
@@ -28,6 +29,7 @@ import httpx
 from jobhunt.schema import Company, Job
 from jobhunt.sources._html import to_text
 from jobhunt.sources._postings import with_ids
+from jobhunt.sources._search import terms
 
 log = logging.getLogger(__name__)
 
@@ -35,17 +37,6 @@ BASE = "https://www.amazon.jobs/en/search.json"
 SITE = "https://www.amazon.jobs"
 PAGE_SIZE = 100  # the most the API returns per page
 MAX_PER_TERM = 2000  # runaway guard; the API itself stops at 10,000 hits
-
-
-def _terms(search: Iterable[str]) -> list[str]:
-    """Cleaned, unique search terms; a trailing filter wildcard ("recruit*") is dropped."""
-    raw = list(dict.fromkeys(t.strip().lower() for t in search))
-    for term in raw:
-        if term.endswith("*") and (stem := term.rstrip("*").strip()):
-            # Amazon matches whole words, so "recruit" won't find "Recruiter".
-            log.warning("amazon can't search by prefix; searching %r only for %r", stem, term)
-    terms = [t.rstrip("*").strip() for t in raw]
-    return list(dict.fromkeys(t for t in terms if t)) or [""]
 
 
 def _posted(raw: str | None) -> str | None:
@@ -130,10 +121,12 @@ def fetch(
     client: httpx.Client,
     search: Iterable[str] = (),
     max_pages: int | None = None,
+    wants_body: Callable[[Job], bool] | None = None,  # descriptions come in the results
+    pool: Executor | None = None,  # pages are fetched in order; nothing to spread
 ) -> list[Job]:
     """Every posting any of the search terms finds, in the board's country."""
     found: dict[str, Job] = {}
-    for term in _terms(search):
+    for term in terms(search, source="amazon"):
         offset = pages = 0
         while offset < MAX_PER_TERM and (max_pages is None or pages < max_pages):
             postings, hits = _page(company, client, term, offset)

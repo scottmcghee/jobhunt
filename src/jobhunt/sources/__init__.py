@@ -13,6 +13,7 @@ from jobhunt.sources import (
     amazon,
     ashby,
     bamboohr,
+    eightfold,
     greenhouse,
     lever,
     smartrecruiters,
@@ -40,9 +41,12 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
 
 
 # Single-company sites too big to list in full: they run one search per term instead.
-SearchFetcher = Callable[[Company, httpx.Client, Sequence[str], int | None], list[Job]]
+SearchFetcher = Callable[
+    [Company, httpx.Client, Sequence[str], int | None, BodyCheck, Executor | None], list[Job]
+]
 SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "amazon": amazon.fetch,
+    "eightfold": eightfold.fetch,
 }
 
 
@@ -64,13 +68,13 @@ def fetch_company(
     ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
     source) early; the others are one request.
 
-    ``search`` matters only for sites too big to list (Amazon): they run one search per term
+    ``search`` matters only for sites too big to list (Amazon, Eightfold): they search per term
     instead (``fetch`` passes the title filter's target-level words). Others ignore it.
     With ``pool``, Workday, SmartRecruiters and BambooHR fetch later pages and descriptions
     concurrently on it (BambooHR has only descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
-        return SEARCH_FETCHERS[company.ats](company, client, search, max_pages)
+        return SEARCH_FETCHERS[company.ats](company, client, search, max_pages, wants_body, pool)
     if company.ats in ON_DEMAND_FETCHERS:
         return ON_DEMAND_FETCHERS[company.ats](company, client, wants_body, max_pages, pool)
     return FETCHERS[company.ats](company, client)
@@ -93,7 +97,11 @@ _BAMBOOHR_HOST = re.compile(r"[a-z0-9-]+\.bamboohr\.com")
 
 def rate_group(company: Company) -> str:
     """The rate-limit group a board's requests belong to, e.g. ``workday:wd5`` or ``lever``."""
-    return f"workday:{company.datacenter}" if company.ats == "workday" else company.ats
+    if company.ats == "workday":
+        return f"workday:{company.datacenter}"
+    if company.ats == "eightfold":  # a careers site's own host; limits seen so far are per host
+        return company.slug.lower()
+    return company.ats
 
 
 def request_group(url: httpx.URL) -> str:

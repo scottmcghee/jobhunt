@@ -59,6 +59,9 @@ _WORKABLE_OWN = {
 _NOT_WORKABLE_ACCOUNTS = {"j", "api"}  # apply.workable.com/j/<code> is a short link, no account
 # <tenant>.bamboohr.com/careers/... or /jobs/...; BambooHR's own sites are other subdomains.
 _BAMBOOHR_HOST = re.compile(r"([a-z0-9-]+)\.bamboohr\.com")
+# <tenant>.eightfold.ai/careers/...; a company on its own host (Microsoft) can't be found this way.
+_EIGHTFOLD_HOST = re.compile(r"([a-z0-9-]+)\.eightfold\.ai")
+_EIGHTFOLD_OWN = {"www", "app", "community", "learn", "blog", "docs", "help", "status", "api"}
 _BAMBOOHR_OWN = {
     "www", "app", "api", "documentation", "help", "marketplace", "partners", "status", "newsroom"
 }
@@ -107,6 +110,10 @@ def _workable_or_bamboohr(host: str, segments: list[str]) -> Company | None:
         return None if first in _NOT_WORKABLE_ACCOUNTS else _named("workable", first)
     if (m := _WORKABLE_ACCOUNT_HOST.fullmatch(host)) and m.group(1) not in _WORKABLE_OWN:
         return _named("workable", m.group(1)) if first in ("jobs", "j") else None
+    if (m := _EIGHTFOLD_HOST.fullmatch(host)) and m.group(1) not in _EIGHTFOLD_OWN:
+        if first != "careers" or not _SLUG.fullmatch(m.group(1)):
+            return None
+        return Company(name=m.group(1), ats="eightfold", slug=host)
     if (m := _BAMBOOHR_HOST.fullmatch(host)) and m.group(1) not in _BAMBOOHR_OWN:
         return _named("bamboohr", m.group(1)) if first in ("careers", "jobs") else None
     return None
@@ -178,6 +185,7 @@ def render(companies: Iterable[Company]) -> str:
         f"    ats: {c.ats}\n"
         f"    slug: {_scalar(c.slug)}\n"
         + (f"    datacenter: {c.datacenter}\n" if c.datacenter else "")
+        + (f"    location: {_scalar(c.location)}\n" if c.location else "")
         + f"    tags: [{', '.join(_scalar(t) for t in c.tags)}]\n"
         for c in companies
     )
