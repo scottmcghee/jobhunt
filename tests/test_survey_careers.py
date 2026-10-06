@@ -33,6 +33,11 @@ Some intro.
 | {{NyseSymbol|BRK.B}} || [[Berkshire Hathaway]] || Financials || Multi-Sector Holdings
 |-
 | {{NyseSymbol|HWM}} || [[Howmet Aerospace|Howmet]] || Industrials || Aerospace & Defense
+|-
+|| {{NyseSymbol|RMD}}
+|| [[ResMed]]|
+|| Health Care
+|| Health Care Equipment
 |}
 {| class="wikitable" id="changes"
 |-
@@ -59,7 +64,9 @@ def test_constituents_come_from_the_first_table_only():
         ("AAPL", "Apple Inc.", "Information Technology"),
         ("BRK.B", "Berkshire Hathaway", "Financials"),
         ("HWM", "Howmet", "Industrials"),  # a piped link shows its label
+        ("RMD", "ResMed", "Health Care"),  # a stray "|" after the link is not part of the name
     ]
+    assert [c.article for c in rows] == ["3M", "Apple Inc.", "Berkshire Hathaway", "Howmet Aerospace", "ResMed"]
 
 
 def test_sites_are_keyed_by_ticker():
@@ -214,6 +221,7 @@ def test_new_boards_leave_out_known_ones_and_repeats():
 def test_main_surveys_writes_outputs_and_resumes(tmp_path, monkeypatch):
     monkeypatch.setattr(survey, "fetch_constituents", lambda client: survey.parse_constituents(WIKITEXT))
     monkeypatch.setattr(survey, "fetch_sites", lambda client: survey.parse_sites(SPARQL))
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {})
     monkeypatch.setattr(survey.time, "sleep", lambda s: None)
     for host in ("www.3m.com", "3m.com", "careers.3m.com", "jobs.3m.com", "www.apple.com", "apple.com",
                  "careers.apple.com", "jobs.apple.com", "www.howmet.com", "howmet.com", "careers.howmet.com",
@@ -247,3 +255,287 @@ def test_main_surveys_writes_outputs_and_resumes(tmp_path, monkeypatch):
     assert [(g["name"], g["ats"], g["slug"]) for g in generated] == [
         ("Howmet", "oracle", "fa-x.fa.ocs.oraclecloud.com/CX_1")
     ]
+
+
+# ------------------------------------------------------------------ websites by Wikipedia title
+
+ENTITIES = {
+    "entities": {
+        "Q63327": {
+            "id": "Q63327",
+            "claims": {"P856": [{"mainsnak": {"datavalue": {"value": "https://www.airbnb.com/"}}},
+                                {"mainsnak": {"datavalue": {"value": "https://www.airbnb.fr/"}}}]},
+            "sitelinks": {"enwiki": {"site": "enwiki", "title": "Airbnb"}},
+        },
+        "Q1": {"id": "Q1", "claims": {"P856": [{"mainsnak": {"snaktype": "novalue"}}]},
+               "sitelinks": {"enwiki": {"site": "enwiki", "title": "No Site Co"}}},
+        "-1": {"site": "enwiki", "title": "Missing Page", "missing": ""},
+    }
+}
+
+
+def test_title_sites_take_the_first_official_website():
+    assert survey.parse_title_sites(ENTITIES) == {"Airbnb": "https://www.airbnb.com/"}
+
+
+@respx.mock
+def test_title_sites_are_fetched_fifty_titles_a_call_with_mediawiki_titles():
+    route = respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json=ENTITIES))
+    titles = ["airbnb", "Airbnb", "Johnson_&_Johnson", *(f"Co {i}" for i in range(60))]
+    with httpx.Client() as client:
+        sites = survey.fetch_title_sites(client, titles)
+    assert sites == {"Airbnb": "https://www.airbnb.com/"}
+    assert route.call_count == 2
+    first = route.calls[0].request.url.params
+    assert (first["action"], first["sites"], first["props"]) == ("wbgetentities", "enwiki", "claims|sitelinks")
+    asked = [t for call in route.calls for t in call.request.url.params["titles"].split("|")]
+    assert asked[:2] == ["Airbnb", "Johnson & Johnson"] and len(asked) == 62
+    assert len(first["titles"].split("|")) == 50
+
+
+@respx.mock
+def test_main_finds_a_website_by_title_when_the_ticker_lookup_has_none(tmp_path, monkeypatch):
+    abnb = survey.Constituent("ABNB", "Airbnb", "Consumer Discretionary", "Airbnb")
+    nosite = survey.Constituent("NSC", "No Site Co", "Energy", "No Site Co")
+    monkeypatch.setattr(survey, "fetch_constituents", lambda client: [abnb, nosite])
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})  # the SPARQL map misses both
+    monkeypatch.setattr(survey.time, "sleep", lambda s: None)
+    respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json=ENTITIES))
+    respx.get("https://www.airbnb.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://www.airbnb.com/careers").mock(
+        return_value=httpx.Response(200, text="https://jobs.lever.co/airbnb")
+    )
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+    report = (out / "survey.md").read_text()
+    assert "| ABNB | Airbnb | lever | lever airbnb |" in report
+    assert "| NSC | No Site Co | no website found |  |" in report
+
+
+# ------------------------------------------------------------------ robots.txt
+
+UA = "jobhunt/0.1 (+personal job search tool)"
+WORKDAY = "https://acme.wd5.myworkdayjobs.com/External"
+
+
+def _no_other_hosts():
+    for host in ("https://acme.com", "https://careers.acme.com", "https://jobs.acme.com"):
+        respx.get(host + "/robots.txt").mock(return_value=httpx.Response(404))
+        respx.get(url__startswith=host + "/").mock(return_value=httpx.Response(404))
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [500, 503])
+def test_robots_txt_server_error_disallows_everything(status):
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(status))
+    page = respx.get(ACME + "/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    home = respx.get(ACME + "/").mock(return_value=httpx.Response(200, text="home"))
+    _no_other_hosts()
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert page.call_count == 0 and home.call_count == 0
+    assert ACME + "/careers" in result.skipped_by_robots
+
+
+@respx.mock
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("slow"), httpx.ConnectError("refused")])
+def test_unreachable_robots_txt_disallows_everything(error):
+    respx.get(ACME + "/robots.txt").mock(side_effect=error)
+    page = respx.get(ACME + "/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    _no_other_hosts()
+    respx.get(ACME + "/").mock(return_value=httpx.Response(200, text="home"))
+    with _client() as client:
+        survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert page.call_count == 0
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_robots_txt_client_error_allows_everything(status):
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(status))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert result.platforms == ["workday"]
+
+
+@respx.mock
+def test_a_robots_txt_that_allows_the_page():
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /private\n"))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert result.platforms == ["workday"] and result.skipped_by_robots == []
+
+
+@respx.mock
+def test_a_robots_txt_group_for_jobhunt_is_honoured():
+    rules = "User-agent: jobhunt\nDisallow: /\n\nUser-agent: *\nAllow: /\n"
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(200, text=rules))
+    page = respx.get(ACME + "/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    _no_other_hosts()
+    respx.get(ACME + "/").mock(return_value=httpx.Response(200, text="home"))
+    with httpx.Client(headers={"User-Agent": UA}) as client:
+        survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert page.call_count == 0
+
+
+@respx.mock
+def test_a_disallowed_homepage_is_not_fetched():
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /\n"))
+    home = respx.get(ACME + "/").mock(return_value=httpx.Response(200, text='<a href="/careers">Careers</a>'))
+    _no_other_hosts()
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert home.call_count == 0
+    assert ACME + "/" in result.skipped_by_robots
+
+
+@respx.mock
+def test_a_redirect_to_a_disallowed_host_stops_there():
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(301, headers={"Location": "https://careers.partner.com/acme"}))
+    respx.get("https://careers.partner.com/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nDisallow: /\n")
+    )
+    target = respx.get("https://careers.partner.com/acme").mock(return_value=httpx.Response(200, text=WORKDAY))
+    _no_other_hosts()
+    respx.get(ACME + "/").mock(return_value=httpx.Response(200, text="home"))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert target.call_count == 0
+    assert "https://careers.partner.com/acme" in result.skipped_by_robots
+
+
+@respx.mock
+def test_an_allowed_redirect_is_followed_with_a_delay_per_hop(monkeypatch):
+    slept = []
+    monkeypatch.setattr(survey.time, "sleep", slept.append)
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(302, headers={"Location": "/en/careers"}))
+    respx.get(ACME + "/en/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=1)
+    assert result.pages == [ACME + "/en/careers"]
+    assert len(slept) == 3  # robots.txt, /careers, /en/careers
+
+
+@respx.mock
+def test_redirects_stop_after_five_hops():
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    for i in range(10):
+        respx.get(f"{ACME}/r{i}").mock(return_value=httpx.Response(302, headers={"Location": f"/r{i + 1}"}))
+    loop = respx.get(ACME + "/careers").mock(return_value=httpx.Response(302, headers={"Location": "/r0"}))
+    _no_other_hosts()
+    respx.get(ACME + "/").mock(return_value=httpx.Response(200, text="home"))
+    with _client() as client:
+        survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert loop.call_count == 1
+    assert respx.get(f"{ACME}/r4").call_count == 1 and respx.get(f"{ACME}/r5").call_count == 0
+
+
+# ------------------------------------------------------------------ excluded, unreachable, --only
+
+
+@respx.mock
+@pytest.mark.parametrize("ticker", ["META", "GOOGL", "GOOG"])
+def test_excluded_companies_make_no_requests(ticker):
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent(ticker, "Off Limits", "X"), "https://www.meta.com/", client)
+    assert len(respx.calls) == 0
+    assert result.status.startswith("excluded: ")
+    assert f"| {ticker} | Off Limits | {result.status} |  |" in survey.report([result], [])
+
+
+@respx.mock
+def test_network_outage_is_unreachable_and_a_rerun_retries_it(tmp_path, monkeypatch):
+    acme = survey.Constituent("ACM", "Acme", "X", "Acme")
+    monkeypatch.setattr(survey, "fetch_constituents", lambda client: [acme])
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {"ACM": ACME})
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {})
+    monkeypatch.setattr(survey.time, "sleep", lambda s: None)
+    route = respx.route().mock(side_effect=httpx.ConnectError("network is down"))
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+    assert "| ACM | Acme | unreachable |  |" in (out / "survey.md").read_text()
+    saved = json.loads((out / "results.json").read_text())
+    assert saved[0]["errors"] and all("ConnectError" in e for e in saved[0]["errors"])
+
+    route.mock(return_value=httpx.Response(200, text=WORKDAY))
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+    saved = json.loads((out / "results.json").read_text())
+    assert [(r["ticker"], r["platforms"]) for r in saved] == [("ACM", ["workday"])]
+
+
+@respx.mock
+def test_only_resurveys_done_tickers_in_place(tmp_path, monkeypatch):
+    rows = [survey.Constituent(t, t.title(), "X", t) for t in ("AAA", "BBB", "CCC")]
+    monkeypatch.setattr(survey, "fetch_constituents", lambda client: rows)
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {"BBB": "https://www.bbb.com"})
+    monkeypatch.setattr(survey.time, "sleep", lambda s: None)
+    respx.get("https://www.bbb.com/robots.txt").mock(return_value=httpx.Response(404))
+    careers = respx.get("https://www.bbb.com/careers").mock(return_value=httpx.Response(200, text="none here"))
+    respx.route().mock(return_value=httpx.Response(404))
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+    assert "| BBB | Bbb | none found |  |" in (out / "survey.md").read_text()
+
+    careers.mock(return_value=httpx.Response(200, text=WORKDAY))
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0", "--only", "BBB"]) == 0
+    saved = json.loads((out / "results.json").read_text())
+    assert [(r["ticker"], r["platforms"]) for r in saved] == [("AAA", []), ("BBB", ["workday"]), ("CCC", [])]
+
+
+def test_report_says_none_found_when_a_site_has_no_platform():
+    result = survey.Result("BET", "Beta Inc", "Financials", "https://beta.com", [], [], [], [])
+    assert "| BET | Beta Inc | none found |  |" in survey.report([result], [])
+
+
+# ------------------------------------------------------------------ homepage links and page URLs
+
+
+@respx.mock
+def test_survey_stops_at_the_first_homepage_link_that_finds_something():
+    for host in ("https://www.acme.com", "https://acme.com", "https://careers.acme.com", "https://jobs.acme.com"):
+        respx.get(host + "/robots.txt").mock(return_value=httpx.Response(404))
+    for url in (ACME + "/careers", "https://acme.com/careers", "https://careers.acme.com/", "https://jobs.acme.com/"):
+        respx.get(url).mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/").mock(
+        return_value=httpx.Response(200, text='<a href="/en/careers">Careers</a> <a href="/en/jobs">Jobs</a>')
+    )
+    respx.get(ACME + "/en/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    second = respx.get(ACME + "/en/jobs").mock(return_value=httpx.Response(200, text="https://boards.greenhouse.io/acme"))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert second.call_count == 0
+    assert result.pages == [ACME + "/en/careers"]
+
+
+@respx.mock
+def test_urls_in_page_text_lose_trailing_punctuation():
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(200, text="Apply at https://jobs.lever.co/acme."))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert [(b.ats, b.slug) for b in result.boards] == [("lever", "acme")]
+
+
+@pytest.mark.parametrize("href", ["https://[object Object]/careers", "http://[::1/careers"])
+def test_career_links_skip_hrefs_that_do_not_parse(href):
+    page = f'<a href="{href}">Careers</a> <a href="/careers">Careers</a>'
+    assert survey.career_links(page, "https://www.acme.com/") == ["https://www.acme.com/careers"]
+
+
+def test_career_links_skip_job_sites_and_social_networks():
+    page = """<a href="https://www.linkedin.com/company/acme/jobs">LinkedIn</a>
+              <a href="https://www.glassdoor.com/Jobs/acme-jobs">Glassdoor</a>
+              <a href="https://x.com/acmecareers">X</a> <a href="https://careers.facebook.com/acme">FB</a>
+              <a href="https://jobs.acme.com/">Jobs</a>"""
+    assert survey.career_links(page, "https://www.acme.com/") == ["https://jobs.acme.com/"]

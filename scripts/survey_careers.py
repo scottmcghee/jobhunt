@@ -3,7 +3,8 @@
     python scripts/survey_careers.py [OUT_DIR] [--companies PATH] [--delay 1.0] [--limit N]
                                      [--only TICKER ...]
 
-For each constituent (Wikipedia's list), it looks up the company's website (Wikidata), then tries
+For each constituent (Wikipedia's list), it looks up the company's website (Wikidata, by the
+row's Wikipedia article, else by ticker), then tries
 a few likely careers pages: www.<host>/careers, <host>/careers, careers.<host>, jobs.<host>. If
 none of them names a hiring platform, it follows up to two careers links from the homepage. Every
 page it reads is checked for platform fingerprints (Workday, Eightfold, Oracle, iCIMS,
@@ -11,8 +12,10 @@ SuccessFactors, ...), and every URL in it goes through ``jobhunt.slugs.board_fro
 board on a source jobhunt supports becomes a companies.yaml entry under the company's real name.
 
 It is polite: one request at a time, ``--delay`` seconds apart, and it honours each host's
-robots.txt. Results are saved after every company, so an interrupted run picks up where it
-stopped. Outputs, in OUT_DIR (default data/sp500):
+robots.txt, redirect by redirect (RFC 9309: a robots.txt that answers 5xx or can't be fetched
+disallows everything). Companies in EXCLUDED get no requests at all. Results are saved after every
+company, so an interrupted run picks up where it stopped; companies that were unreachable are
+tried again, and ``--only`` re-surveys the given tickers. Outputs, in OUT_DIR (default data/sp500):
 
     survey.md                  platform counts, and one row per company
     companies.generated.yaml   boards not in companies.yaml yet; review, then paste
@@ -41,12 +44,23 @@ from jobhunt.schema import Company
 DEFAULT_OUT = Path("data/sp500")
 WIKI_URL = "https://en.wikipedia.org/w/index.php"
 SPARQL_URL = "https://query.wikidata.org/sparql"
+WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 # Constituents still in the index (no end date), with their website and ticker.
 SPARQL = """SELECT ?cLabel ?site ?tick WHERE {
   ?c p:P361 ?st . ?st ps:P361 wd:Q242345 . FILTER NOT EXISTS { ?st pq:P582 ?end }
   OPTIONAL { ?c wdt:P856 ?site } OPTIONAL { ?c p:P414 ?ex . ?ex pq:P249 ?tick }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }"""
 MAX_PAGE = 2_000_000  # characters of a page to scan
+MAX_REDIRECTS = 5
+# Companies this survey leaves alone, and why.
+EXCLUDED = {
+    "META": "Meta's terms forbid automated collection",
+    "GOOGL": "Google's robots.txt disallows its job pages",
+    "GOOG": "Google's robots.txt disallows its job pages",
+}
+# Job sites and social networks: a homepage link to one says nothing about the company's platform.
+_ELSEWHERE = ("linkedin.com", "glassdoor.com", "indeed.com", "ziprecruiter.com", "facebook.com",
+              "x.com", "twitter.com", "instagram.com", "youtube.com")
 
 # Hiring platforms and how their pages give them away. Not all are sources jobhunt supports.
 PLATFORMS = {
@@ -81,6 +95,7 @@ class Constituent:
     ticker: str
     name: str
     sector: str
+    article: str = ""  # the row's Wikipedia link target
 
 
 @dataclass
@@ -93,6 +108,8 @@ class Result:
     platforms: list[str]
     boards: list[Company]
     skipped_by_robots: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)  # "<url>: <exception type>"
+    status: str = ""  # "", "unreachable" (no response at all), or "excluded: <reason>"
 
 
 # ------------------------------------------------------------------ inputs
@@ -101,6 +118,12 @@ class Result:
 def _link_text(cell: str) -> str:
     """[[target|label]] -> label, [[target]] -> target."""
     return re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]*)\]\]", r"\1", cell).strip()
+
+
+def _link_target(cell: str) -> str:
+    """[[target|label]] -> target."""
+    m = re.search(r"\[\[([^|\]]*)", cell)
+    return m.group(1).strip() if m else ""
 
 
 def parse_constituents(wikitext: str) -> list[Constituent]:
@@ -112,12 +135,13 @@ def parse_constituents(wikitext: str) -> list[Constituent]:
         lines = [line for line in row.strip().splitlines() if line.strip()]
         if not lines or lines[0].startswith("!"):
             continue
-        cells = [c.strip() for c in " ".join(lines).lstrip("|").split("||")]
+        cells = [c.strip(" |") for c in " ".join(lines).lstrip("|").split("||")]
         if len(cells) < 3:
             continue
         m = re.search(r"\{\{[^|}]*\|([^|}]+)\}\}", cells[0])
         ticker = (m.group(1) if m else cells[0]).strip()
-        rows.append(Constituent(ticker, _link_text(cells[1]), _link_text(cells[2])))
+        name, sector, article = _link_text(cells[1]), _link_text(cells[2]), _link_target(cells[1])
+        rows.append(Constituent(ticker, name, sector, article))
     return rows
 
 
@@ -128,6 +152,38 @@ def parse_sites(sparql: dict) -> dict[str, str]:
         tick, site = row.get("tick", {}).get("value"), row.get("site", {}).get("value")
         if tick and site:
             sites.setdefault(tick, site)
+    return sites
+
+
+def _title(article: str) -> str:
+    """A link target as MediaWiki stores it: spaces, not underscores; first letter upper case."""
+    title = " ".join(article.replace("_", " ").split())
+    return title[:1].upper() + title[1:]
+
+
+def parse_title_sites(entities: dict) -> dict[str, str]:
+    """English Wikipedia title -> official website (the first), from a wbgetentities response."""
+    sites: dict[str, str] = {}
+    for entity in entities.get("entities", {}).values():
+        title = entity.get("sitelinks", {}).get("enwiki", {}).get("title")
+        values = [c.get("mainsnak", {}).get("datavalue", {}).get("value")
+                  for c in entity.get("claims", {}).get("P856", [])]
+        if title and (site := next((v for v in values if v), None)):
+            sites[title] = site
+    return sites
+
+
+def fetch_title_sites(client: httpx.Client, articles: Iterable[str]) -> dict[str, str]:
+    """Websites by Wikipedia article, 50 titles a call (the API's limit)."""
+    titles = list(dict.fromkeys(_title(a) for a in articles if a))
+    sites: dict[str, str] = {}
+    for i in range(0, len(titles), 50):
+        batch = "|".join(titles[i : i + 50])
+        params = {"action": "wbgetentities", "sites": "enwiki", "titles": batch,
+                  "props": "claims|sitelinks", "format": "json"}
+        resp = client.get(WIKIDATA_API, params=params)
+        resp.raise_for_status()
+        sites.update(parse_title_sites(resp.json()))
     return sites
 
 
@@ -166,11 +222,17 @@ def career_links(page: str, base: str, limit: int = 2) -> list[str]:
     """Up to ``limit`` distinct links on a page that look like careers or jobs pages."""
     links: list[str] = []
     for href in _HREF.findall(page):
-        url = urljoin(base, href.strip())
-        parts = urlsplit(url)
+        try:
+            url = urljoin(base, href.strip())
+            parts = urlsplit(url)
+            host = parts.hostname or ""
+        except ValueError:  # e.g. "https://[object Object]/careers"
+            continue
         if parts.scheme not in ("http", "https") or url in links:
             continue
-        if _CAREERS.search(parts.path) or (parts.hostname or "").startswith(("jobs.", "careers.")):
+        if any(host == d or host.endswith("." + d) for d in _ELSEWHERE):
+            continue
+        if _CAREERS.search(parts.path) or host.startswith(("jobs.", "careers.")):
             links.append(url)
             if len(links) == limit:
                 break
@@ -182,50 +244,74 @@ class _Polite:
 
     def __init__(self, client: httpx.Client, delay: float):
         self.client, self.delay = client, delay
-        self.robots: dict[str, RobotFileParser | None] = {}
+        self.robots: dict[str, RobotFileParser] = {}
+        self.skipped: list[str] = []  # URLs robots.txt kept us from
+        self.errors: list[str] = []  # requests that got no response
+        self.responses = 0
 
-    def get(self, url: str) -> httpx.Response | None:
+    def _fetch(self, url: str, follow_redirects: bool) -> httpx.Response | None:
         time.sleep(self.delay)
         try:
-            return self.client.get(url)
-        except httpx.HTTPError:
+            resp = self.client.get(url, follow_redirects=follow_redirects)
+        except httpx.HTTPError as e:
+            self.errors.append(f"{url}: {type(e).__name__}")
             return None
+        self.responses += 1
+        return resp
+
+    def get(self, url: str) -> httpx.Response | None:
+        """GET within robots.txt, following redirects by hand so each hop is checked too."""
+        for _ in range(MAX_REDIRECTS + 1):
+            if not self.allowed(url):
+                self.skipped.append(url)
+                return None
+            resp = self._fetch(url, follow_redirects=False)
+            if resp is None or not resp.is_redirect:
+                return resp
+            url = urljoin(url, resp.headers["location"])
+        self.errors.append(f"{url}: too many redirects")
+        return None
 
     def allowed(self, url: str) -> bool:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         if origin not in self.robots:
-            resp = self.get(f"{origin}/robots.txt")
-            rules = None
-            if resp is not None and resp.status_code == 200:
-                rules = RobotFileParser()
+            resp = self._fetch(f"{origin}/robots.txt", follow_redirects=True)
+            rules = RobotFileParser()
+            if resp is None or resp.status_code >= 500:
+                rules.disallow_all = True  # RFC 9309: unreachable means disallow everything
+            elif resp.status_code >= 400:
+                rules.allow_all = True  # no robots.txt (or a 401/403): everything is allowed
+            else:
                 rules.parse(resp.text.splitlines())
-            self.robots[origin] = rules  # no robots.txt: everything is allowed
-        rules = self.robots[origin]
+            self.robots[origin] = rules
         agent = str(self.client.headers.get("user-agent", "*"))
-        return rules is None or rules.can_fetch(agent, url)
+        return self.robots[origin].can_fetch(agent, url)
 
 
 def _read(page: httpx.Response, company: Constituent) -> tuple[set[str], list[Company]]:
     text = page.text[:MAX_PAGE]
     found = platforms(f"{text} {page.url}")
     boards = []
-    for url in [str(page.url), *_URL.findall(text)]:
+    for url in [str(page.url), *map(slugs._trim, _URL.findall(text))]:
         if board := slugs.board_from_url(url):
             boards.append(board.model_copy(update={"name": company.name}))
     return found, boards
 
 
 def survey_company(
-    company: Constituent, site: str, client: httpx.Client, delay: float = 1.0
+    company: Constituent, site: str | None, client: httpx.Client, delay: float = 1.0
 ) -> Result:
-    polite = _Polite(client, delay)
     result = Result(company.ticker, company.name, company.sector, site, [], [], [])
+    if reason := EXCLUDED.get(company.ticker):
+        result.status = f"excluded: {reason}"
+        return result
+    if site is None:
+        return result
+    polite = _Polite(client, delay)
+    result.skipped_by_robots, result.errors = polite.skipped, polite.errors
 
     def visit(url: str) -> bool:
-        if not polite.allowed(url):
-            result.skipped_by_robots.append(url)
-            return False
         page = polite.get(url)
         if page is None or page.status_code >= 400:
             return False
@@ -241,12 +327,13 @@ def survey_company(
                 result.boards.append(board)
         return True
 
-    if any(visit(url) for url in candidate_urls(site)):
-        return result
-    if polite.allowed(site) and (home := polite.get(site)) is not None and home.status_code < 400:
-        for url in career_links(home.text[:MAX_PAGE], str(home.url)):
-            if visit(url):
-                break
+    if not any(visit(url) for url in candidate_urls(site)):
+        if (home := polite.get(site)) is not None and home.status_code < 400:
+            for url in career_links(home.text[:MAX_PAGE], str(home.url)):
+                if visit(url):
+                    break
+    if polite.errors and not polite.responses:
+        result.status = "unreachable"
     return result
 
 
@@ -281,7 +368,8 @@ def report(results: Sequence[Result], known: Iterable[Company]) -> str:
         "|---|---|---|---|",
     ]
     for r in results:
-        where = ", ".join(r.platforms) or ("no website found" if r.site is None else "none found")
+        where = ", ".join(r.platforms) or r.status
+        where = where or ("no website found" if r.site is None else "none found")
         boards = "; ".join(
             f"{b.ats} {b.slug}" + (" (in config)" if slugs._dedupe_key(b) in known_keys else "")
             for b in r.boards
@@ -321,21 +409,24 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     saved = args.out / "results.json"
     results = _load(saved)
-    done = {r.ticker for r in results}
+    done = {r.ticker for r in results if r.status != "unreachable"}  # unreachable: try again
     headers = {"User-Agent": fetch.user_agent}
     with httpx.Client(headers=headers, timeout=fetch.timeout, follow_redirects=True) as client:
         constituents = fetch_constituents(client)
+        by_title = fetch_title_sites(client, [c.article for c in constituents])
         sites = fetch_sites(client)
-        todo = [c for c in constituents if c.ticker not in done]
-        if args.only:
-            todo = [c for c in todo if c.ticker in set(args.only)]
+        if args.only:  # these, even if done before
+            todo = [c for c in constituents if c.ticker in set(args.only)]
+        else:
+            todo = [c for c in constituents if c.ticker not in done]
         for company in todo[: args.limit]:
-            site = sites.get(company.ticker) or sites.get(company.ticker.replace(".", ""))
-            if site:
-                result = survey_company(company, site, client, args.delay)
+            site = by_title.get(_title(company.article)) or sites.get(company.ticker)
+            result = survey_company(company, site, client, args.delay)
+            rows = [r.ticker for r in results]
+            if company.ticker in rows:
+                results[rows.index(company.ticker)] = result
             else:
-                result = Result(company.ticker, company.name, company.sector, None, [], [], [])
-            results.append(result)
+                results.append(result)
             _save(results, saved)
             found = ", ".join(result.platforms) or "-"
             print(f"{company.ticker:<6} {company.name[:40]:<40} {found}")
