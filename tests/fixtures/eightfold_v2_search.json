@@ -1,0 +1,60 @@
+{
+  "domain": "example.com",
+  "user": {},
+  "count": 2,
+  "positions": [
+    {
+      "id": 800000000001,
+      "name": "Director, Platform Engineering",
+      "posting_name": "Director, Platform Engineering",
+      "location": "Seattle, WA, United States",
+      "locations": [
+        "Seattle, WA, United States"
+      ],
+      "hot": 0,
+      "department": "Engineering",
+      "business_unit": "Engineering (B100)",
+      "t_update": 1790000000,
+      "t_create": 1790000000,
+      "ats_job_id": "R800000000001",
+      "display_job_id": "R800000000001",
+      "type": "ATS",
+      "id_locale": "R800000000001-en_US",
+      "job_description": "",
+      "locale": "en_US",
+      "stars": 0.0,
+      "medallionProgram": null,
+      "location_flexibility": null,
+      "work_location_option": "remote_local",
+      "canonicalPositionUrl": "https://example.eightfold.ai/careers/job/800000000001",
+      "isPrivate": false
+    },
+    {
+      "id": 800000000002,
+      "name": "Director, Field Operations",
+      "posting_name": "Director, Field Operations",
+      "location": "Windsor, UK Office (WINDSOR)",
+      "locations": [
+        "Windsor, UK Office (WINDSOR)",
+        "Munich, Germany Office (MUNICH)"
+      ],
+      "hot": 0,
+      "department": "Engineering",
+      "business_unit": "Engineering (B100)",
+      "t_update": 1789000000,
+      "t_create": 1789000000,
+      "ats_job_id": "R800000000002",
+      "display_job_id": "R800000000002",
+      "type": "ATS",
+      "id_locale": "R800000000002-en_US",
+      "job_description": "",
+      "locale": "en_US",
+      "stars": 0.0,
+      "medallionProgram": null,
+      "location_flexibility": null,
+      "work_location_option": "onsite",
+      "canonicalPositionUrl": "https://example.eightfold.ai/careers/job/800000000002",
+      "isPrivate": false
+    }
+  ]
+}
