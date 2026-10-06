@@ -37,6 +37,8 @@ from jobhunt.schema import Company
         ("https://Evolve.bamboohr.com/careers/46?source=x", ("bamboohr", "evolve")),
         ("https://acme.bamboohr.com/jobs/view.php?id=12", ("bamboohr", "acme")),
         ("https://acme.bamboohr.com/careers/list", ("bamboohr", "acme")),
+        ("https://eaton.eightfold.ai/careers/job/687239400802", ("eightfold", "eaton.eightfold.ai")),
+        ("https://Eaton.eightfold.ai/careers?query=director&pid=1", ("eightfold", "eaton.eightfold.ai")),
         ("https://350.bamboohr.com/careers/32", ("bamboohr", "350")),  # all-digit names are real
         ("https://apply.workable.com/1871", ("workable", "1871")),
         ("https://apply.workable.com/12345/j/A1B2C3D4E5", ("workable", "12345")),
@@ -79,6 +81,12 @@ from jobhunt.schema import Company
         ("https://acme.bamboohr.com/", None),
         ("https://workablelifesolutions.com/careers", None),
         ("https://acme.bamboohr.com.evil.example/careers", None),
+        ("https://eightfold.ai/careers", None),  # Eightfold's own site
+        ("https://www.eightfold.ai/careers", None),
+        ("https://app.eightfold.ai/careers", None),
+        ("https://community.eightfold.ai/careers", None),
+        ("https://eaton.eightfold.ai/events/candidate/landing", None),  # not the careers site
+        ("https://eaton.eightfold.ai/", None),
         ("http://[bad", None),
     ],
 )
@@ -297,6 +305,50 @@ def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
 
 
 @respx.mock
+def test_check_drops_a_board_it_cannot_read_and_carries_on(caplog):
+    # an Eightfold careers page with no domain raises ValueError: unfetchable as configured
+    respx.get("https://gone.eightfold.ai/careers").mock(return_value=httpx.Response(200, text="<html>no config</html>"))
+    respx.get(GH.format("live")).mock(
+        return_value=httpx.Response(200, json={"jobs": [{"id": 1, "title": "x", "absolute_url": "https://x", "location": {"name": "y"}}]})
+    )
+    boards = [
+        Company(name="gone", ats="eightfold", slug="gone.eightfold.ai"),
+        Company(name="live", ats="greenhouse", slug="live"),
+    ]
+    with httpx.Client() as client:
+        kept = slugs.check(boards, client, workers=1)
+    assert [c.slug for c in kept] == ["live"]
+    assert "no Eightfold domain" in caplog.text
+
+
+@respx.mock
+def test_check_keeps_a_board_that_answers_with_a_page_that_is_not_json(caplog):
+    # a gateway or proxy page served with 200: the board can't be checked right now, not dead
+    respx.get(GH.format("proxied")).mock(
+        return_value=httpx.Response(200, text="<html>502 Bad Gateway</html>", headers={"content-type": "text/html"})
+    )
+    boards = [Company(name="proxied", ats="greenhouse", slug="proxied")]
+    with httpx.Client() as client:
+        assert slugs.check(boards, client, workers=1) == boards
+    assert "proxied: kept, could not check (not JSON" in caplog.text
+
+
+@respx.mock
+def test_check_keeps_a_board_that_answers_with_a_page_that_is_neither_json_nor_utf8(caplog):
+    # httpx's .json() raises UnicodeDecodeError here, not JSONDecodeError
+    page = "<html>Passerelle indisponible - réessayez</html>"
+    respx.get(GH.format("latin")).mock(
+        return_value=httpx.Response(
+            200, content=page.encode("latin-1"), headers={"content-type": "text/html; charset=iso-8859-1"}
+        )
+    )
+    boards = [Company(name="latin", ats="greenhouse", slug="latin")]
+    with httpx.Client() as client:
+        assert slugs.check(boards, client, workers=1) == boards
+    assert "latin: kept, could not check (not JSON" in caplog.text
+
+
+@respx.mock
 def test_check_keeps_boards_it_could_not_reach(caplog):
     respx.get(GH.format("flaky")).mock(return_value=httpx.Response(503))
     respx.get(GH.format("slow")).mock(side_effect=httpx.ConnectTimeout("timed out"))
@@ -423,3 +475,11 @@ def test_check_pool_size_comes_from_the_argument_or_settings(monkeypatch):
         slugs.check([], client, workers=2)
         slugs.check([], client)
     assert sizes == [2, 3]
+
+
+def test_render_writes_an_eightfold_location():
+    board = Company(name="eaton", ats="eightfold", slug="eaton.eightfold.ai", location="United States")
+    text = slugs.render([board])
+    assert "    location: United States\n" in text
+    loaded = yaml.safe_load("companies:\n" + text)["companies"][0]
+    assert Company.model_validate(loaded) == board

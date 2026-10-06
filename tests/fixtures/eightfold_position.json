@@ -1,0 +1,16 @@
+{
+  "status": 200,
+  "error": {},
+  "data": {
+    "id": 900000000001,
+    "name": "Director, Platform Engineering",
+    "locations": [
+      "Seattle, Washington, United States"
+    ],
+    "postedTs": 1790000000,
+    "jobDescription": "<p>Lead our <strong>platform</strong> &amp; developer experience teams.</p>",
+    "workLocationOption": "hybrid",
+    "positionUrl": "/careers/job/900000000001",
+    "publicUrl": "https://example.eightfold.ai/careers/job/900000000001"
+  }
+}

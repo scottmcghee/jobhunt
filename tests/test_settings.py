@@ -23,7 +23,8 @@ def test_defaults_are_todays_values():
     assert f.user_agent == "jobhunt/0.1 (+personal job search tool)"
     assert (f.max_retries, f.max_retry_after, f.cooldown, f.breaker, f.prune_after_404s) == (3, 120.0, 5.0, 5, 3)
     assert f.transient_retries == 2
-    assert f.max_rate == {"workable": 2.0}  # Cloudflare bans bursts of about 50 in 10 s
+    # Workable's Cloudflare bans bursts of about 50 in 10 s; Microsoft's Eightfold site 429s at 1/s
+    assert f.max_rate == {"workable": 2.0, "apply.careers.microsoft.com": 0.5}
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
     assert s.slugs.check_workers == 4
 

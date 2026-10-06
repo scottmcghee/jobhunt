@@ -16,6 +16,7 @@ from jobhunt.sources import (
     amazon,
     ashby,
     bamboohr,
+    eightfold,
     fetch_company,
     greenhouse,
     lever,
@@ -26,6 +27,7 @@ from jobhunt.sources import (
     workday,
 )
 from jobhunt.sources._html import to_text
+from tests.conftest import FIXTURES
 
 
 def test_to_text_strips_tags_and_entities():
@@ -709,6 +711,165 @@ def test_fetch_company_passes_search_terms_only_to_search_sources(amazon_company
         assert len(fetch_company(gh_company, client, search=["vice president"])) == 4  # ignored
 
 
+# ------------------------------------------------------------------ Eightfold (search; a platform)
+
+EF = "https://example.eightfold.ai"
+
+
+def _eightfold_routes(fixture_json, careers_html=None):
+    page = (careers_html or (FIXTURES / "eightfold_careers.html").read_text())
+    careers = respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text=page))
+    search = respx.get(EF + "/api/pcsx/search").mock(
+        return_value=httpx.Response(200, json=fixture_json("eightfold_search.json"))
+    )
+    detail = respx.get(EF + "/api/pcsx/position_details").mock(
+        return_value=httpx.Response(200, json=fixture_json("eightfold_position.json"))
+    )
+    return careers, search, detail
+
+
+@respx.mock
+def test_eightfold_finds_the_domain_searches_and_normalizes(eightfold_company, fixture_json):
+    careers, search, detail = _eightfold_routes(fixture_json)
+    with httpx.Client() as client:
+        jobs = eightfold.fetch(
+            eightfold_company, client, ["director", "senior manager"], wants_body=lambda j: j.external_id == "900000000001"
+        )
+    assert careers.call_count == 1  # the domain is read once per board
+    params = [call.request.url.params for call in search.calls]
+    assert [p["query"] for p in params] == ["director", "senior manager"]
+    assert all(p["domain"] == "example.com" and p["start"] == "0" and "location" not in p for p in params)
+    assert [j.external_id for j in jobs] == ["900000000001", "900000000002", "900000000003", "900000000004"]  # deduped
+    assert detail.call_count == 1
+    assert detail.calls.last.request.url.params["position_id"] == "900000000001"
+    assert detail.calls.last.request.url.params["domain"] == "example.com"
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("eightfold", "ExampleCorp", "example.eightfold.ai")
+    assert first.title == "Director, Platform Engineering"
+    assert first.url == "https://example.eightfold.ai/careers/job/900000000001"
+    assert first.location == "Seattle, Washington, United States"
+    assert first.posted_at == "2026-09-21T14:13:20+00:00"
+    assert first.body == "Lead our platform & developer experience teams."
+    assert first.remote is False  # hybrid
+    assert jobs[1].remote is True and jobs[1].body == ""
+    assert jobs[2].remote is False
+    assert jobs[2].location == "Austin, Texas, United States; Monterrey, Nuevo Leon, Mexico"
+    assert jobs[3].remote is True  # remote_local, Nvidia's US remote roles
+
+
+@respx.mock
+def test_eightfold_passes_a_board_location(fixture_json):
+    _, search, _ = _eightfold_routes(fixture_json)
+    board = Company(name="X", ats="eightfold", slug="example.eightfold.ai", location="United States")
+    with httpx.Client() as client:
+        eightfold.fetch(board, client, ["director"], wants_body=lambda j: False)
+    assert search.calls.last.request.url.params["location"] == "United States"
+
+
+@pytest.mark.parametrize(("option", "expected"), [("remote", True), ("remote_local", True), ("onsite", False), ("hybrid", False), ("other", None), (None, None), ("", None)])
+def test_eightfold_remote(option, expected):
+    assert eightfold._remote({"workLocationOption": option}) is expected
+
+
+@respx.mock
+def test_eightfold_pages_by_ten_until_the_count_is_in(eightfold_company, caplog):
+    respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
+
+    def page(request):
+        start = int(request.url.params["start"])
+        n = max(0, min(10, 25 - start))
+        positions = [{"id": start + i + 1, "name": "Director", "locations": [], "positionUrl": f"/careers/job/{start + i}"}
+                     for i in range(n)]
+        return httpx.Response(200, json={"data": {"positions": positions, "count": 25}})
+
+    search = respx.get(EF + "/api/pcsx/search").mock(side_effect=page)
+    with httpx.Client() as client:
+        assert len(eightfold.fetch(eightfold_company, client, ["director"], wants_body=lambda j: False)) == 25
+        assert [c.request.url.params["start"] for c in search.calls] == ["0", "10", "20"]
+        assert len(eightfold.fetch(eightfold_company, client, ["director"], max_pages=1, wants_body=lambda j: False)) == 10
+    assert "kept the first" not in caplog.text  # max_pages, not the cap, stopped it
+
+
+@respx.mock
+def test_eightfold_a_broad_term_stops_at_the_cap_and_says_so(eightfold_company, caplog):
+    respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
+
+    def page(request):
+        start = int(request.url.params["start"])
+        positions = [{"id": start + i + 1, "name": "Manager", "locations": [], "positionUrl": f"/j/{start + i}"} for i in range(10)]
+        return httpx.Response(200, json={"data": {"positions": positions, "count": 9999}})
+
+    search = respx.get(EF + "/api/pcsx/search").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = eightfold.fetch(eightfold_company, client, ["manager"], wants_body=lambda j: False)
+    assert len(jobs) == eightfold.MAX_PER_TERM and search.call_count == eightfold.MAX_PER_TERM // 10
+    assert "eightfold example.eightfold.ai: 'manager' has 9999 hits; kept the first" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        '<div>{&#34;domain&#34;: &#34;example.com&#34;}</div>',  # entity-escaped JSON, as served
+        '<script>window.cfg = {"domain": "example.com"}</script>',
+    ],
+)
+def test_eightfold_reads_the_domain_from_the_careers_page(page):
+    assert eightfold._domain(page) == "example.com"
+
+
+@respx.mock
+def test_eightfold_a_careers_page_without_a_domain_is_an_error(eightfold_company):
+    respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text="<html>no config</html>"))
+    with httpx.Client() as client, pytest.raises(ValueError, match="no Eightfold domain"):
+        eightfold.fetch(eightfold_company, client, ["director"])
+
+
+@respx.mock
+def test_eightfold_failed_detail_keeps_job_without_body(eightfold_company, fixture_json, caplog):
+    _eightfold_routes(fixture_json)
+    respx.get(EF + "/api/pcsx/position_details").mock(side_effect=httpx.ConnectError("boom\nmore"))
+    with httpx.Client() as client:
+        jobs = eightfold.fetch(eightfold_company, client, ["director"], wants_body=lambda j: j.external_id == "900000000001")
+    assert len(jobs) == 4 and jobs[0].body == ""
+    assert "eightfold example.eightfold.ai: no description for 900000000001 (boom more)" in caplog.text
+
+
+class _RecordingPool(ThreadPoolExecutor):
+    """A pool that counts the work handed to it."""
+
+    def __init__(self, workers: int) -> None:
+        super().__init__(workers)
+        self.used = 0
+
+    def map(self, fn, *iterables, **kwargs):
+        self.used += 1
+        return super().map(fn, *iterables, **kwargs)
+
+    def submit(self, fn, /, *args, **kwargs):
+        self.used += 1
+        return super().submit(fn, *args, **kwargs)
+
+
+@respx.mock
+def test_eightfold_descriptions_go_through_the_pool(eightfold_company, fixture_json):
+    _, _, detail = _eightfold_routes(fixture_json)
+    with httpx.Client() as client, _RecordingPool(2) as pool:
+        fetch_company(eightfold_company, client, pool=pool, search=["director"])
+    assert detail.call_count == 4
+    assert pool.used  # not a serial map
+
+
+@pytest.mark.parametrize("slug", ["example.eightfold.ai/careers", "https://example.eightfold.ai", "", "a b"])
+def test_an_eightfold_slug_is_a_host(slug):
+    with pytest.raises(ValueError, match="host"):
+        Company(name="x", ats="eightfold", slug=slug)
+
+
+def test_location_is_only_for_search_sources():
+    with pytest.raises(ValueError, match="location"):
+        Company(name="x", ats="greenhouse", slug="x", location="United States")
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
@@ -788,6 +949,10 @@ def test_rate_groups():
     assert request_group(httpx.URL("https://acme.bamboohr.com/careers/list")) == "bamboohr"
     assert request_group(httpx.URL("https://apply.workable.com/api/v1/widget/accounts/a")) == "workable"
     assert request_group(httpx.URL("https://www.amazon.jobs/en/search.json")) == "amazon"
+    # an Eightfold board is its own host: rate limits seen so far are per host
+    ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")
+    assert rate_group(ef) == "apply.careers.microsoft.com"
+    assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)
     assert request_group(httpx.URL("https://www.bamboohr.com.evil.example/x")) == "www.bamboohr.com.evil.example"
 
 

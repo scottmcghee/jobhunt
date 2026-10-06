@@ -11,8 +11,10 @@ and re-pasted as more data arrives.
 Without ``--check`` this runs offline. With it, the first page of each new board is fetched
 through its source adapter (no descriptions), and the board is dropped if it has no open postings
 or answers with any status below 500 other than 429: a SmartRecruiters identifier with no
-postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). Boards
-that time out, are rate limited, or fail with a 5xx are kept.
+postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). It is
+also dropped if its adapter can't read it as configured (an Eightfold page with no domain).
+Boards that time out, are rate limited, fail with a 5xx, or answer 200 with something that
+isn't JSON (a gateway or proxy page) are kept.
 """
 
 from __future__ import annotations
@@ -59,6 +61,9 @@ _WORKABLE_OWN = {
 _NOT_WORKABLE_ACCOUNTS = {"j", "api"}  # apply.workable.com/j/<code> is a short link, no account
 # <tenant>.bamboohr.com/careers/... or /jobs/...; BambooHR's own sites are other subdomains.
 _BAMBOOHR_HOST = re.compile(r"([a-z0-9-]+)\.bamboohr\.com")
+# <tenant>.eightfold.ai/careers/...; a company on its own host (Microsoft) can't be found this way.
+_EIGHTFOLD_HOST = re.compile(r"([a-z0-9-]+)\.eightfold\.ai")
+_EIGHTFOLD_OWN = {"www", "app", "community", "learn", "blog", "docs", "help", "status", "api"}
 _BAMBOOHR_OWN = {
     "www", "app", "api", "documentation", "help", "marketplace", "partners", "status", "newsroom"
 }
@@ -107,6 +112,10 @@ def _workable_or_bamboohr(host: str, segments: list[str]) -> Company | None:
         return None if first in _NOT_WORKABLE_ACCOUNTS else _named("workable", first)
     if (m := _WORKABLE_ACCOUNT_HOST.fullmatch(host)) and m.group(1) not in _WORKABLE_OWN:
         return _named("workable", m.group(1)) if first in ("jobs", "j") else None
+    if (m := _EIGHTFOLD_HOST.fullmatch(host)) and m.group(1) not in _EIGHTFOLD_OWN:
+        if first != "careers" or not _SLUG.fullmatch(m.group(1)):
+            return None
+        return Company(name=m.group(1), ats="eightfold", slug=host)
     if (m := _BAMBOOHR_HOST.fullmatch(host)) and m.group(1) not in _BAMBOOHR_OWN:
         return _named("bamboohr", m.group(1)) if first in ("careers", "jobs") else None
     return None
@@ -178,6 +187,7 @@ def render(companies: Iterable[Company]) -> str:
         f"    ats: {c.ats}\n"
         f"    slug: {_scalar(c.slug)}\n"
         + (f"    datacenter: {c.datacenter}\n" if c.datacenter else "")
+        + (f"    location: {_scalar(c.location)}\n" if c.location else "")
         + f"    tags: [{', '.join(_scalar(t) for t in c.tags)}]\n"
         for c in companies
     )
@@ -219,7 +229,11 @@ def check_workers() -> int:
 
 
 def _has_jobs(company: Company, client: httpx.Client) -> bool:
-    """Whether a board is worth listing. Boards that can't be checked right now are kept."""
+    """Whether a board is worth listing.
+
+    Boards that can't be checked right now (timeouts, 429, 5xx, a 200 that isn't JSON) are kept.
+    Boards its adapter can't read as configured (any other ValueError) are dropped.
+    """
     try:
         jobs = fetch_company(company, client, wants_body=lambda job: False, max_pages=1)
     except httpx.HTTPStatusError as e:
@@ -232,6 +246,13 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
     except httpx.HTTPError as e:
         log.warning("%s: kept, could not check (%s)", company.key, e)
         return True
+    # a 200 that isn't the API, e.g. a gateway page (not UTF-8 fails before JSON parsing)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        log.warning("%s: kept, could not check (not JSON: %s)", company.key, e)
+        return True
+    except ValueError as e:  # the adapters' signal for data they can't read
+        log.warning("dropped %s: can't fetch it as configured (%s)", company.key, e)
+        return False
     if not jobs:
         log.info("dropped %s: no open postings", company.key)
     return bool(jobs)

@@ -81,6 +81,11 @@ def amazon_company() -> Company:
 
 
 @pytest.fixture
+def eightfold_company() -> Company:
+    return Company(name="ExampleCorp", ats="eightfold", slug="example.eightfold.ai")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

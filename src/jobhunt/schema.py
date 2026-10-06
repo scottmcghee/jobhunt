@@ -14,10 +14,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 ATSName = Literal[
     "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable", "bamboohr",
-    "amazon",
+    "amazon", "eightfold",
 ]
 
 _WORKDAY_DATACENTER = re.compile(r"wd\d+")
+_HOST = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", re.I)
 
 
 class Company(BaseModel):
@@ -27,6 +28,7 @@ class Company(BaseModel):
     ats: ATSName
     slug: str  # Workday: "tenant/site", e.g. "adobe/external_experienced"
     datacenter: str | None = None  # Workday only: the "wd5" in adobe.wd5.myworkdayjobs.com
+    location: str | None = None  # Eightfold only: limit searches to a place, e.g. "United States"
     tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -37,6 +39,10 @@ class Company(BaseModel):
                 raise ValueError("a workday slug is tenant/site, e.g. adobe/external_experienced")
             if not self.datacenter or not _WORKDAY_DATACENTER.fullmatch(self.datacenter):
                 raise ValueError("a workday board needs datacenter: wdN, e.g. wd5")
+        if self.ats == "eightfold" and not _HOST.fullmatch(self.slug):
+            raise ValueError("an eightfold slug is a careers site host, e.g. eaton.eightfold.ai")
+        if self.location is not None and self.ats != "eightfold":
+            raise ValueError("location: is only for eightfold boards")
         return self
 
     @property

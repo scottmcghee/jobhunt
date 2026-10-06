@@ -22,6 +22,9 @@
 #   BambooHR:   <tenant>.bamboohr.com/careers
 #               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.
+#   Eightfold:  <tenant>.eightfold.ai/careers, or a company's own host (Microsoft's is
+#               apply.careers.microsoft.com). slug is that host. Optional location: limits its
+#               searches to one place, e.g. "United States". Searched like Amazon (below).
 #   Amazon:     amazon.jobs has its own search, not an ATS. slug is the country to search (ISO
 #               alpha-3, e.g. USA). fetch searches once per word in preferences.yaml title.must_include_any.
 #               Amazon matches whole words only: a wildcard term like "recruit*" searches just
@@ -97,4 +100,10 @@ companies:
   - name: Amazon
     ats: amazon
     slug: USA
+    tags: [big-tech]
+
+  - name: Microsoft
+    ats: eightfold
+    slug: apply.careers.microsoft.com
+    location: United States
     tags: [big-tech]

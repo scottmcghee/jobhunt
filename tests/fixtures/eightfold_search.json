@@ -1,0 +1,93 @@
+{
+  "status": 200,
+  "error": {},
+  "data": {
+    "positions": [
+      {
+        "id": 900000000001,
+        "displayJobId": "R900000000001",
+        "name": "Director, Platform Engineering",
+        "locations": [
+          "Seattle, Washington, United States"
+        ],
+        "standardizedLocations": [
+          "Seattle, Washington, United States"
+        ],
+        "postedTs": 1790000000,
+        "stars": 0,
+        "department": "Engineering",
+        "creationTs": 1790000000,
+        "isHot": 0,
+        "workLocationOption": "hybrid",
+        "locationFlexibility": null,
+        "atsJobId": "R900000000001",
+        "positionUrl": "/careers/job/900000000001"
+      },
+      {
+        "id": 900000000002,
+        "displayJobId": "R900000000002",
+        "name": "Senior Manager, Site Reliability",
+        "locations": [
+          "United States"
+        ],
+        "standardizedLocations": [
+          "United States"
+        ],
+        "postedTs": 1790500000,
+        "stars": 0,
+        "department": "Engineering",
+        "creationTs": 1790500000,
+        "isHot": 0,
+        "workLocationOption": "remote",
+        "locationFlexibility": null,
+        "atsJobId": "R900000000002",
+        "positionUrl": "/careers/job/900000000002"
+      },
+      {
+        "id": 900000000003,
+        "displayJobId": "R900000000003",
+        "name": "Director, Supply Chain",
+        "locations": [
+          "Austin, Texas, United States",
+          "Monterrey, Nuevo Leon, Mexico"
+        ],
+        "standardizedLocations": [
+          "Austin, Texas, United States",
+          "Monterrey, Nuevo Leon, Mexico"
+        ],
+        "postedTs": 1789000000,
+        "stars": 0,
+        "department": "Engineering",
+        "creationTs": 1789000000,
+        "isHot": 0,
+        "workLocationOption": "onsite",
+        "locationFlexibility": null,
+        "atsJobId": "R900000000003",
+        "positionUrl": "/careers/job/900000000003"
+      },
+      {
+        "id": 900000000004,
+        "displayJobId": "R900000000004",
+        "name": "Director, Developer Tools",
+        "locations": [
+          "US, NV, Remote"
+        ],
+        "standardizedLocations": [
+          "Nevada, United States"
+        ],
+        "postedTs": 1789500000,
+        "stars": 0,
+        "department": "Engineering",
+        "creationTs": 1789500000,
+        "isHot": 0,
+        "workLocationOption": "remote_local",
+        "locationFlexibility": null,
+        "atsJobId": "R900000000004",
+        "positionUrl": "/careers/job/900000000004"
+      }
+    ],
+    "count": 4,
+    "filterDef": {},
+    "appliedFilters": {}
+  }
+}
