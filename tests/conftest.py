@@ -66,6 +66,16 @@ def smartrecruiters_company() -> Company:
 
 
 @pytest.fixture
+def workable_company() -> Company:
+    return Company(name="ExampleCorp", ats="workable", slug="examplecorp")
+
+
+@pytest.fixture
+def bamboohr_company() -> Company:
+    return Company(name="ExampleCorp", ats="bamboohr", slug="examplecorp")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

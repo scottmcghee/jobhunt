@@ -17,6 +17,11 @@
 #               API: https://api.smartrecruiters.com/v1/companies/<identifier>/postings
 #               An unknown identifier returns no postings rather than a 404, so it is never removed
 #               automatically; fetch warns about any SmartRecruiters board with no postings.
+#   Workable:   apply.workable.com/<account>  (older: <account>.workable.com/jobs/...)
+#               API: https://apply.workable.com/api/v1/widget/accounts/<account>?details=true
+#   BambooHR:   <tenant>.bamboohr.com/careers
+#               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
+#               An unknown tenant redirects to bamboohr.com; that counts like a 404.
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help`: it finds board URLs in any text
 # file, such as lines grepped from Common Crawl index files. Add --check to drop boards that have
@@ -76,3 +81,8 @@ companies:
     ats: smartrecruiters
     slug: ServiceNow
     tags: [saas]
+
+  - name: Hugging Face
+    ats: workable
+    slug: huggingface
+    tags: [ai]

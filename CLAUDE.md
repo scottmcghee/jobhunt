@@ -6,7 +6,7 @@ This file is the constitution for AI-assisted work in this repo. Read it before 
 
 A small, well-tested Python CLI that:
 
-1. **Ingests** open roles from company career pages via ATS JSON APIs (Greenhouse, Lever, Ashby, Workday).
+1. **Ingests** open roles from company career pages via ATS JSON APIs (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable, BambooHR).
 2. **Filters** them against hard constraints (title level, location, remote policy, keywords).
 3. **Scores** each surviving role 1–10 against a fixed candidate profile using Claude, with a written rationale.
 4. **Generates** a tailored cover letter for high-scoring roles by assembling pre-written proof modules from a Cover Letter Kit — never by inventing claims.
@@ -92,6 +92,9 @@ Agreed future work, in rough priority order. Each item still follows the workflo
      - Like Workday, the listing has no descriptions, so `fetch` takes the same `wants_body` check.
      - An unknown identifier returns 200 with no postings, not a 404, so 404 pruning never fires. `fetch` warns on an empty board instead of guessing that it is dead.
      - `jobhunt.slugs` harvests `jobs.smartrecruiters.com/<identifier>` and `careers.smartrecruiters.com/<identifier>` URLs.
+   - **Workable and BambooHR** *(done)*. Neither documents these endpoints; both are what each account's own careers page calls.
+     - Workable: `sources/workable.py`, one request per board with descriptions included. A board is `slug: <account>`; an unknown account is a 404. `jobhunt.slugs` harvests `apply.workable.com/<account>` and the older `<account>.workable.com/jobs|j/...`.
+     - BambooHR: `sources/bamboohr.py`, a listing plus one detail request per wanted posting (the same `wants_body` check). A board is `slug: <tenant>`. An unknown tenant redirects to bamboohr.com, which `cli._board_gone` counts like a 404; the adapter never follows redirects. Every tenant has its own subdomain, but they share one rate group. `jobhunt.slugs` harvests `<tenant>.bamboohr.com/careers|jobs/...`.
 3. **Companies with no ATS (e.g., Apple).** These are case-by-case and may need crawling HTML rather than calling an API, so treat this as a separate flow, not another `sources/` adapter.
    - **Investigate first.** For each company, check whether its careers site is backed by a JSON endpoint before writing a crawler.
    - **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.

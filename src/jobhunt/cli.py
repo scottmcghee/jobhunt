@@ -1,7 +1,7 @@
 """Find job postings that fit a candidate profile, and draft cover letters for the best ones.
 
 Pulls open roles from the company job boards in config/companies.yaml (Greenhouse, Lever,
-Ashby, Workday, SmartRecruiters), drops those that fail the hard filters in
+Ashby, Workday, SmartRecruiters, Workable, BambooHR), drops those that fail the hard filters in
 config/preferences.yaml, has Claude score the rest 1-10 against config/profile.md, and assembles
 cover letters for the top scorers from the pre-written modules in config/kit/.
 
@@ -112,9 +112,18 @@ def _host_refused(response: httpx.Response) -> bool:
 
 
 def _board_gone(company: Company, response: httpx.Response) -> bool:
-    """A 404; for Workday also a 422 (the site was removed) or a 403 "S22" (the site is closed)."""
+    """A 404; for Workday also a 422 (the site was removed) or a 403 "S22" (the site is closed);
+    for BambooHR a redirect to bamboohr.com itself, its answer for an unknown tenant."""
     if response.status_code == 404:
         return True
+    if company.ats == "bamboohr":
+        if not response.is_redirect:
+            return False
+        try:
+            target = httpx.URL(response.headers.get("location", ""))
+        except httpx.InvalidURL:
+            return False
+        return target.host in ("bamboohr.com", "www.bamboohr.com")
     if company.ats != "workday" or response.status_code not in (403, 422):
         return False
     try:
@@ -270,8 +279,8 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     fetch = args.settings.fetch
     prune = fetch.prune_after_404s
     transport = _transport(fetch, workers=args.workers, per_host=args.per_host)
-    # Later pages and descriptions (Workday, SmartRecruiters) go to their group's pool; the
-    # transport's per-host and global limits still decide how many are in flight.
+    # Later pages and descriptions (Workday, SmartRecruiters, BambooHR) go to their group's pool;
+    # the transport's per-host and global limits still decide how many are in flight.
     pools = _GroupPools(args.per_host)
     with _client(transport, fetch) as client, _stop_on_exit(transport, pools):
         boards = BoardRunner(

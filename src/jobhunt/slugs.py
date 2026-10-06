@@ -10,8 +10,9 @@ and re-pasted as more data arrives.
 
 Without ``--check`` this runs offline. With it, the first page of each new board is fetched
 through its source adapter (no descriptions), and the board is dropped if it has no open postings
-or answers with a 4xx other than 429: a SmartRecruiters identifier with no postings, say, or a
-Greenhouse slug that 404s. Boards that time out, are rate limited, or fail with a 5xx are kept.
+or answers with any status below 500 other than 429: a SmartRecruiters identifier with no
+postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). Boards
+that time out, are rate limited, or fail with a 5xx are kept.
 """
 
 from __future__ import annotations
@@ -48,6 +49,20 @@ _BOARD_HOSTS: dict[str, ATSName] = {
 }
 _KEEPS_CASE: set[ATSName] = {"ashby", "smartrecruiters"}  # the others are case-insensitive
 
+# apply.workable.com/<account>/..., or the older <account>.workable.com/jobs/... (which redirects
+# there). Workable's own sites use other subdomains, and their paths never start /jobs or /j.
+_WORKABLE_APPLY = "apply.workable.com"
+_WORKABLE_ACCOUNT_HOST = re.compile(r"([a-z0-9-]+)\.workable\.com")
+_WORKABLE_OWN = {
+    "apply", "jobs", "www", "resources", "help", "partners", "partnerhelp", "jobseekers"
+}
+_NOT_WORKABLE_ACCOUNTS = {"j", "api"}  # apply.workable.com/j/<code> is a short link, no account
+# <tenant>.bamboohr.com/careers/... or /jobs/...; BambooHR's own sites are other subdomains.
+_BAMBOOHR_HOST = re.compile(r"([a-z0-9-]+)\.bamboohr\.com")
+_BAMBOOHR_OWN = {
+    "www", "app", "api", "documentation", "help", "marketplace", "partners", "status", "newsroom"
+}
+
 # <tenant>.<datacenter>.myworkdayjobs.com/[<language>/]<site>/...
 _WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com")
 _LANGUAGE = re.compile(r"[a-z]{2}(-[a-z]{2})?", re.I)  # en-US, en-us, es
@@ -79,6 +94,24 @@ def _workday_board(tenant: str, datacenter: str, segments: list[str]) -> Company
     return Company(name=tenant, ats="workday", slug=f"{tenant}/{site}", datacenter=datacenter)
 
 
+def _named(ats: ATSName, slug: str) -> Company | None:
+    slug = slug.lower()
+    if not _SLUG.fullmatch(slug) or slug in _NOT_SLUGS:
+        return None
+    return Company(name=slug, ats=ats, slug=slug)
+
+
+def _workable_or_bamboohr(host: str, segments: list[str]) -> Company | None:
+    first = segments[0].lower() if segments else ""
+    if host == _WORKABLE_APPLY:
+        return None if first in _NOT_WORKABLE_ACCOUNTS else _named("workable", first)
+    if (m := _WORKABLE_ACCOUNT_HOST.fullmatch(host)) and m.group(1) not in _WORKABLE_OWN:
+        return _named("workable", m.group(1)) if first in ("jobs", "j") else None
+    if (m := _BAMBOOHR_HOST.fullmatch(host)) and m.group(1) not in _BAMBOOHR_OWN:
+        return _named("bamboohr", m.group(1)) if first in ("careers", "jobs") else None
+    return None
+
+
 def board_from_url(url: str) -> Company | None:
     """The job board a URL points at, if any.
 
@@ -94,6 +127,8 @@ def board_from_url(url: str) -> Company | None:
 
     if m := _WORKDAY_HOST.fullmatch(host):
         return _workday_board(m.group(1), m.group(2), segments)
+    if board := _workable_or_bamboohr(host, segments):
+        return board
 
     ats: ATSName
     if host == _GREENHOUSE_API or _GREENHOUSE_BOARD.fullmatch(host):
