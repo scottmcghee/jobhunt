@@ -112,9 +112,13 @@ def _host_refused(response: httpx.Response) -> bool:
 
 
 def _board_gone(company: Company, response: httpx.Response) -> bool:
-    """A 404; for Workday also a 422 (the site was removed) or a 403 "S22" (the site is closed)."""
+    """A 404; for Workday also a 422 (the site was removed) or a 403 "S22" (the site is closed);
+    for BambooHR a redirect to bamboohr.com itself, its answer for an unknown tenant."""
     if response.status_code == 404:
         return True
+    if company.ats == "bamboohr":
+        target = httpx.URL(response.headers.get("location", ""))
+        return response.is_redirect and target.host in ("bamboohr.com", "www.bamboohr.com")
     if company.ats != "workday" or response.status_code not in (403, 422):
         return False
     try:

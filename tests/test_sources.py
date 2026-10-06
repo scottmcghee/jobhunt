@@ -13,12 +13,14 @@ import respx
 from jobhunt.schema import Company
 from jobhunt.sources import (
     ashby,
+    bamboohr,
     fetch_company,
     greenhouse,
     lever,
     rate_group,
     request_group,
     smartrecruiters,
+    workable,
     workday,
 )
 from jobhunt.sources._html import to_text
@@ -348,6 +350,137 @@ def test_fetch_company_passes_max_pages(smartrecruiters_company, gh_company, fix
 
 
 
+# ------------------------------------------------------------------ Workable
+
+WK = "https://apply.workable.com/api/v1/widget/accounts/examplecorp"
+
+
+@respx.mock
+def test_workable_fetch_normalizes(workable_company, fixture_json):
+    route = respx.get(WK).mock(return_value=httpx.Response(200, json=fixture_json("workable_account.json")))
+    with httpx.Client() as client:
+        jobs = workable.fetch(workable_company, client)
+    assert route.calls.last.request.url.params["details"] == "true"  # descriptions in one request
+    assert [j.title for j in jobs] == ["Director of Platform Engineering", "Senior Software Engineer", "Head of Infrastructure"]
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug, first.external_id) == (
+        "workable", "ExampleCorp", "examplecorp", "A1B2C3D4E5"
+    )
+    assert first.url == "https://apply.workable.com/j/A1B2C3D4E5"
+    assert first.location == "United States"
+    assert first.remote is True  # telecommuting
+    assert first.body.startswith("Lead our platform & infrastructure teams.")
+    assert first.posted_at == "2026-09-20"
+    assert jobs[1].location == "Seattle, Washington, United States"
+    assert jobs[1].remote is None  # not telecommuting doesn't say on-site or hybrid
+    assert jobs[2].location == "Austin, Texas, United States; Bellevue, Washington, United States"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ({"telecommuting": True}, True),
+        ({"telecommuting": False, "city": "Remote"}, True),
+        ({"telecommuting": False, "title": "Director, Platform (Remote)"}, True),
+        ({"telecommuting": False, "city": "Austin"}, None),
+    ],
+)
+def test_workable_remote(raw, expected):
+    assert workable._is_remote(raw, workable._location(raw)) is expected
+
+
+def test_workable_location_falls_back_to_the_top_level_fields():
+    raw = {"city": "Paris", "state": "Île-de-France", "country": "France", "locations": []}
+    assert workable._location(raw) == "Paris, Île-de-France, France"
+
+
+@respx.mock
+def test_workable_unknown_account_raises_404(workable_company):
+    respx.get(WK).mock(return_value=httpx.Response(404, text="Not Found"))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        workable.fetch(workable_company, client)
+
+
+# ------------------------------------------------------------------ BambooHR
+
+BH = "https://examplecorp.bamboohr.com/careers"
+
+
+@respx.mock
+def test_bamboohr_lists_everything_but_fetches_bodies_only_when_wanted(bamboohr_company, fixture_json):
+    listing = respx.get(BH + "/list").mock(return_value=httpx.Response(200, json=fixture_json("bamboohr_list.json")))
+    detail = respx.get(BH + "/101/detail").mock(return_value=httpx.Response(200, json=fixture_json("bamboohr_job.json")))
+    with httpx.Client() as client:
+        jobs = bamboohr.fetch(bamboohr_company, client, lambda job: job.external_id == "101")
+    assert listing.call_count == 1 and detail.call_count == 1
+    assert [j.title for j in jobs] == ["Director of Platform Engineering", "Office Manager", "VP, Infrastructure"]
+    first = jobs[0]
+    assert (first.source, first.company_slug, first.external_id) == ("bamboohr", "examplecorp", "101")
+    assert first.url == "https://examplecorp.bamboohr.com/careers/101"
+    assert first.remote is True and first.location == "United States"
+    assert first.body == "Own our platform & developer experience.\n\nCompensation: $200,000 - $240,000"
+    assert first.posted_at == "2026-09-28"
+    office, vp = jobs[1], jobs[2]
+    assert (office.remote, office.location, office.body) == (False, "Seattle, Washington", "")
+    assert (vp.remote, vp.location) == (False, "Bellevue, Washington")  # hybrid counts as not remote
+
+
+@pytest.mark.parametrize(
+    ("location_type", "is_remote", "expected"),
+    [("0", None, False), ("1", None, True), ("2", None, False), (None, True, True), (None, None, None), ("9", None, None)],
+)
+def test_bamboohr_remote(location_type, is_remote, expected):
+    assert bamboohr._is_remote({"locationType": location_type, "isRemote": is_remote}) is expected
+
+
+def test_bamboohr_remote_with_no_place_says_remote():
+    raw = {"locationType": "1", "location": {"city": None, "state": None}, "atsLocation": None}
+    assert bamboohr._location(raw) == "Remote"
+
+
+@respx.mock
+def test_bamboohr_failed_detail_keeps_job_without_body(bamboohr_company, fixture_json, caplog):
+    respx.get(BH + "/list").mock(return_value=httpx.Response(200, json=fixture_json("bamboohr_list.json")))
+    respx.get(BH + "/101/detail").mock(side_effect=httpx.ConnectError("boom\nmore"))
+    with httpx.Client() as client:
+        jobs = bamboohr.fetch(bamboohr_company, client, lambda job: job.external_id == "101")
+    assert jobs[0].body == "" and len(jobs) == 3
+    (line,) = [r.getMessage() for r in caplog.records if "no description" in r.getMessage()]
+    assert line == "bamboohr examplecorp: no description for 101 (boom more)"
+
+
+@respx.mock
+def test_bamboohr_unknown_tenant_redirects_and_raises(bamboohr_company):
+    respx.get(BH + "/list").mock(return_value=httpx.Response(302, headers={"Location": "https://www.bamboohr.com/"}))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError) as e:
+        bamboohr.fetch(bamboohr_company, client)
+    assert e.value.response.status_code == 302
+
+
+@respx.mock
+def test_bamboohr_unknown_tenant_raises_even_when_the_client_follows_redirects(bamboohr_company):
+    # slugs --check uses such a client; following to bamboohr.com's home page would give HTML
+    respx.get(BH + "/list").mock(return_value=httpx.Response(302, headers={"Location": "https://www.bamboohr.com/"}))
+    home = respx.get("https://www.bamboohr.com/").mock(return_value=httpx.Response(200, text="<html></html>"))
+    with httpx.Client(follow_redirects=True) as client, pytest.raises(httpx.HTTPStatusError) as e:
+        bamboohr.fetch(bamboohr_company, client)
+    assert e.value.response.status_code == 302 and home.call_count == 0
+
+
+@respx.mock
+def test_fetch_company_passes_wants_body_to_bamboohr(bamboohr_company, fixture_json):
+    respx.get(BH + "/list").mock(return_value=httpx.Response(200, json=fixture_json("bamboohr_list.json")))
+    detail = respx.get(url__regex=BH + r"/\d+/detail").mock(
+        return_value=httpx.Response(200, json=fixture_json("bamboohr_job.json"))
+    )
+    with httpx.Client() as client:
+        fetch_company(bamboohr_company, client, wants_body=lambda job: False)
+        assert detail.call_count == 0
+        with ThreadPoolExecutor(2) as pool:
+            fetch_company(bamboohr_company, client, pool=pool)
+        assert detail.call_count == 3
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
@@ -358,6 +491,8 @@ SOURCES_WITH_IDS = [
      "ashby_board.json", "jobs", "id"),
     (workday, "workday_company", "POST", WD + "/jobs", "workday_jobs.json", "jobPostings", "externalPath"),
     (smartrecruiters, "smartrecruiters_company", "GET", SR, "smartrecruiters_postings.json", "content", "id"),
+    (workable, "workable_company", "GET", WK, "workable_account.json", "jobs", "shortcode"),
+    (bamboohr, "bamboohr_company", "GET", BH + "/list", "bamboohr_list.json", "result", "id"),
 ]
 
 
@@ -365,7 +500,7 @@ def _fetch_listing(source, company, method, url, data):
     with respx.mock:
         respx.route(method=method, url=url).mock(return_value=httpx.Response(200, json=data))
         with httpx.Client() as client:
-            if source in (workday, smartrecruiters):
+            if source in (workday, smartrecruiters, bamboohr):
                 return source.fetch(company, client, lambda job: False)
             return source.fetch(company, client)
 
@@ -403,6 +538,8 @@ def _requests_made(company, mocks):
         ("ashby_company", [("GET", "https://api.ashbyhq.com/posting-api/job-board/exampleashby", "ashby_board.json")]),
         ("workday_company", [("POST", WD + "/jobs", "workday_jobs.json"), ("GET", WD + "/job/", "workday_job.json")]),
         ("smartrecruiters_company", [("GET", SR + "/", "smartrecruiters_posting.json"), ("GET", SR, "smartrecruiters_postings.json")]),
+        ("workable_company", [("GET", WK, "workable_account.json")]),
+        ("bamboohr_company", [("GET", BH + "/list", "bamboohr_list.json"), ("GET", BH + "/", "bamboohr_job.json")]),
     ],
 )
 def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
@@ -417,6 +554,10 @@ def test_rate_groups():
     assert rate_group(wd("wd1")) == "workday:wd1" and rate_group(wd("wd103")) == "workday:wd103"
     assert rate_group(Company(name="x", ats="lever", slug="x")) == "lever"
     assert request_group(httpx.URL("https://other.example.com/x")) == "other.example.com"
+    # every BambooHR tenant has its own host, but they are one service
+    assert request_group(httpx.URL("https://acme.bamboohr.com/careers/list")) == "bamboohr"
+    assert request_group(httpx.URL("https://apply.workable.com/api/v1/widget/accounts/a")) == "workable"
+    assert request_group(httpx.URL("https://www.bamboohr.com.evil.example/x")) == "www.bamboohr.com.evil.example"
 
 
 # ------------------------------------------------------------------ concurrent pages and details

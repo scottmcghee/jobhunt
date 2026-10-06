@@ -9,7 +9,7 @@ from concurrent.futures import Executor
 import httpx
 
 from jobhunt.schema import ATSName, Company, Job
-from jobhunt.sources import ashby, greenhouse, lever, smartrecruiters, workday
+from jobhunt.sources import ashby, bamboohr, greenhouse, lever, smartrecruiters, workable, workday
 
 Fetcher = Callable[[Company, httpx.Client], list[Job]]
 BodyCheck = Callable[[Job], bool]
@@ -18,6 +18,7 @@ FETCHERS: dict[ATSName, Fetcher] = {
     "greenhouse": greenhouse.fetch,
     "lever": lever.fetch,
     "ashby": ashby.fetch,
+    "workable": workable.fetch,
 }
 
 # Sources whose listings lack descriptions, so each description costs a request.
@@ -25,6 +26,7 @@ PagedFetcher = Callable[[Company, httpx.Client, BodyCheck, int | None, Executor 
 ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
     "workday": workday.fetch,
     "smartrecruiters": smartrecruiters.fetch,
+    "bamboohr": bamboohr.fetch,
 }
 
 
@@ -37,7 +39,8 @@ def fetch_company(
 ) -> list[Job]:
     """Dispatch to the right ATS adapter for this company.
 
-    ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters):
+    ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters,
+    BambooHR):
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
@@ -50,14 +53,17 @@ def fetch_company(
 
 
 # Requests are rate-limited per group: one per Workday datacenter (its tenants share
-# infrastructure), and one per API host for the other sources (every board is on that host).
+# infrastructure), and one per API host for the other sources (every board is on that host;
+# BambooHR gives each tenant its own subdomain, but they are one service, so one group).
 _API_HOSTS: dict[str, str] = {
     "boards-api.greenhouse.io": "greenhouse",
     "api.lever.co": "lever",
     "api.ashbyhq.com": "ashby",
     "api.smartrecruiters.com": "smartrecruiters",
+    "apply.workable.com": "workable",
 }
 _WORKDAY_HOST = re.compile(r"[a-z0-9-]+\.(wd\d+)\.myworkdayjobs\.com")
+_BAMBOOHR_HOST = re.compile(r"[a-z0-9-]+\.bamboohr\.com")
 
 
 def rate_group(company: Company) -> str:
@@ -70,4 +76,6 @@ def request_group(url: httpx.URL) -> str:
     host = url.host.lower()
     if m := _WORKDAY_HOST.fullmatch(host):
         return f"workday:{m.group(1)}"
+    if _BAMBOOHR_HOST.fullmatch(host):
+        return "bamboohr"
     return _API_HOSTS.get(host, host)

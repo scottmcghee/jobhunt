@@ -1,0 +1,103 @@
+{
+  "name": "ExampleCorp",
+  "description": "<p>ExampleCorp builds tools for small teams.</p>",
+  "jobs": [
+    {
+      "title": "Director of Platform Engineering",
+      "shortcode": "A1B2C3D4E5",
+      "code": "",
+      "employment_type": "Full-time",
+      "telecommuting": true,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/j/A1B2C3D4E5",
+      "shortlink": "https://apply.workable.com/j/A1B2C3D4E5",
+      "application_url": "https://apply.workable.com/j/A1B2C3D4E5/apply",
+      "published_on": "2026-09-20",
+      "created_at": "2026-09-19",
+      "country": "United States",
+      "city": "",
+      "state": "",
+      "education": "",
+      "experience": "Director",
+      "function": "Engineering",
+      "industry": "Computer Software",
+      "locations": [
+        {
+          "country": "United States",
+          "countryCode": "US",
+          "city": "",
+          "region": "",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Lead our <strong>platform</strong> &amp; infrastructure teams.</p><ul><li>Own reliability</li></ul>"
+    },
+    {
+      "title": "Senior Software Engineer",
+      "shortcode": "F6G7H8I9J0",
+      "code": "ENG-12",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/j/F6G7H8I9J0",
+      "shortlink": "https://apply.workable.com/j/F6G7H8I9J0",
+      "application_url": "https://apply.workable.com/j/F6G7H8I9J0/apply",
+      "published_on": "2026-09-22",
+      "created_at": "2026-09-22",
+      "country": "United States",
+      "city": "Seattle",
+      "state": "Washington",
+      "education": "",
+      "experience": "Mid-Senior level",
+      "function": "Engineering",
+      "industry": "Computer Software",
+      "locations": [
+        {
+          "country": "United States",
+          "countryCode": "US",
+          "city": "Seattle",
+          "region": "Washington",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Write and ship code.</p>"
+    },
+    {
+      "title": "Head of Infrastructure",
+      "shortcode": "K1L2M3N4O5",
+      "code": "",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/j/K1L2M3N4O5",
+      "shortlink": "https://apply.workable.com/j/K1L2M3N4O5",
+      "application_url": "https://apply.workable.com/j/K1L2M3N4O5/apply",
+      "published_on": "2026-09-25",
+      "created_at": "2026-09-24",
+      "country": "United States",
+      "city": "Austin",
+      "state": "Texas",
+      "education": "",
+      "experience": "Executive",
+      "function": "Engineering",
+      "industry": "Computer Software",
+      "locations": [
+        {
+          "country": "United States",
+          "countryCode": "US",
+          "city": "Austin",
+          "region": "Texas",
+          "hidden": false
+        },
+        {
+          "country": "United States",
+          "countryCode": "US",
+          "city": "Bellevue",
+          "region": "Washington",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Run our cloud infrastructure.</p>"
+    }
+  ]
+}

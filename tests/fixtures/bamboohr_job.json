@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "totalCount": 1
+  },
+  "result": {
+    "jobOpening": {
+      "jobOpeningShareUrl": "https://examplecorp.bamboohr.com/careers/101",
+      "jobOpeningName": "Director of Platform Engineering",
+      "jobOpeningStatus": "Open",
+      "jobCategoryId": null,
+      "departmentId": "11",
+      "departmentLabel": "Engineering",
+      "employmentStatusLabel": "Full-Time",
+      "employmentType": null,
+      "location": {
+        "city": null,
+        "state": null,
+        "postalCode": null,
+        "addressCountry": null
+      },
+      "atsLocation": {
+        "country": "United States",
+        "countryId": "1",
+        "state": null,
+        "city": null
+      },
+      "description": "<p>Own our <strong>platform</strong> &amp; developer experience.</p>",
+      "compensation": "$200,000 - $240,000",
+      "datePosted": "2026-09-28",
+      "minimumExperience": "Senior Manager/Supervisor",
+      "locationType": "1",
+      "seekPromoted": false,
+      "aiProcessingDisclosureEnabled": false
+    },
+    "formFields": {}
+  }
+}
