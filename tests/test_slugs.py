@@ -305,6 +305,23 @@ def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
 
 
 @respx.mock
+def test_check_drops_a_board_it_cannot_read_and_carries_on(caplog):
+    # an Eightfold careers page with no domain raises ValueError: unfetchable as configured
+    respx.get("https://gone.eightfold.ai/careers").mock(return_value=httpx.Response(200, text="<html>no config</html>"))
+    respx.get(GH.format("live")).mock(
+        return_value=httpx.Response(200, json={"jobs": [{"id": 1, "title": "x", "absolute_url": "https://x", "location": {"name": "y"}}]})
+    )
+    boards = [
+        Company(name="gone", ats="eightfold", slug="gone.eightfold.ai"),
+        Company(name="live", ats="greenhouse", slug="live"),
+    ]
+    with httpx.Client() as client:
+        kept = slugs.check(boards, client, workers=1)
+    assert [c.slug for c in kept] == ["live"]
+    assert "no Eightfold domain" in caplog.text
+
+
+@respx.mock
 def test_check_keeps_boards_it_could_not_reach(caplog):
     respx.get(GH.format("flaky")).mock(return_value=httpx.Response(503))
     respx.get(GH.format("slow")).mock(side_effect=httpx.ConnectTimeout("timed out"))

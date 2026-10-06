@@ -64,9 +64,29 @@
         "locationFlexibility": null,
         "atsJobId": "R900000000003",
         "positionUrl": "/careers/job/900000000003"
+      },
+      {
+        "id": 900000000004,
+        "displayJobId": "R900000000004",
+        "name": "Director, Developer Tools",
+        "locations": [
+          "US, NV, Remote"
+        ],
+        "standardizedLocations": [
+          "Nevada, United States"
+        ],
+        "postedTs": 1789500000,
+        "stars": 0,
+        "department": "Engineering",
+        "creationTs": 1789500000,
+        "isHot": 0,
+        "workLocationOption": "remote_local",
+        "locationFlexibility": null,
+        "atsJobId": "R900000000004",
+        "positionUrl": "/careers/job/900000000004"
       }
     ],
-    "count": 3,
+    "count": 4,
     "filterDef": {},
     "appliedFilters": {}
   }

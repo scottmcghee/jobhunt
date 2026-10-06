@@ -240,6 +240,9 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
     except httpx.HTTPError as e:
         log.warning("%s: kept, could not check (%s)", company.key, e)
         return True
+    except ValueError as e:  # the adapters' signal for data they can't read
+        log.warning("dropped %s: can't fetch it as configured (%s)", company.key, e)
+        return False
     if not jobs:
         log.info("dropped %s: no open postings", company.key)
     return bool(jobs)

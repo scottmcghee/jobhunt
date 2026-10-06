@@ -38,7 +38,6 @@ log = logging.getLogger(__name__)
 PAGE_SIZE = 10  # fixed by the API; a larger num is ignored
 MAX_PER_TERM = 500  # 50 requests; a runaway guard for broad terms
 _DOMAIN = re.compile(r'"domain"\s*:\s*"([a-z0-9][a-z0-9.-]*\.[a-z]{2,})"', re.I)
-_REMOTE = {"remote": True, "onsite": False, "hybrid": False}
 
 
 def _domain(page: str) -> str | None:
@@ -48,7 +47,10 @@ def _domain(page: str) -> str | None:
 
 
 def _remote(raw: dict) -> bool | None:
-    return _REMOTE.get((raw.get("workLocationOption") or "").lower())
+    option = (raw.get("workLocationOption") or "").lower()
+    if option.startswith("remote"):  # remote, or Nvidia's remote_local
+        return True
+    return False if option in ("onsite", "hybrid") else None
 
 
 def _posted(ts: object) -> str | None:

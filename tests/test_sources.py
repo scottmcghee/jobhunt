@@ -739,7 +739,7 @@ def test_eightfold_finds_the_domain_searches_and_normalizes(eightfold_company, f
     params = [call.request.url.params for call in search.calls]
     assert [p["query"] for p in params] == ["director", "senior manager"]
     assert all(p["domain"] == "example.com" and p["start"] == "0" and "location" not in p for p in params)
-    assert [j.external_id for j in jobs] == ["900000000001", "900000000002", "900000000003"]  # deduped
+    assert [j.external_id for j in jobs] == ["900000000001", "900000000002", "900000000003", "900000000004"]  # deduped
     assert detail.call_count == 1
     assert detail.calls.last.request.url.params["position_id"] == "900000000001"
     assert detail.calls.last.request.url.params["domain"] == "example.com"
@@ -754,6 +754,7 @@ def test_eightfold_finds_the_domain_searches_and_normalizes(eightfold_company, f
     assert jobs[1].remote is True and jobs[1].body == ""
     assert jobs[2].remote is False
     assert jobs[2].location == "Austin, Texas, United States; Monterrey, Nuevo Leon, Mexico"
+    assert jobs[3].remote is True  # remote_local, Nvidia's US remote roles
 
 
 @respx.mock
@@ -765,13 +766,13 @@ def test_eightfold_passes_a_board_location(fixture_json):
     assert search.calls.last.request.url.params["location"] == "United States"
 
 
-@pytest.mark.parametrize(("option", "expected"), [("remote", True), ("onsite", False), ("hybrid", False), (None, None), ("", None)])
+@pytest.mark.parametrize(("option", "expected"), [("remote", True), ("remote_local", True), ("onsite", False), ("hybrid", False), ("other", None), (None, None), ("", None)])
 def test_eightfold_remote(option, expected):
     assert eightfold._remote({"workLocationOption": option}) is expected
 
 
 @respx.mock
-def test_eightfold_pages_by_ten_until_the_count_is_in(eightfold_company):
+def test_eightfold_pages_by_ten_until_the_count_is_in(eightfold_company, caplog):
     respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
 
     def page(request):
@@ -786,6 +787,7 @@ def test_eightfold_pages_by_ten_until_the_count_is_in(eightfold_company):
         assert len(eightfold.fetch(eightfold_company, client, ["director"], wants_body=lambda j: False)) == 25
         assert [c.request.url.params["start"] for c in search.calls] == ["0", "10", "20"]
         assert len(eightfold.fetch(eightfold_company, client, ["director"], max_pages=1, wants_body=lambda j: False)) == 10
+    assert "kept the first" not in caplog.text  # max_pages, not the cap, stopped it
 
 
 @respx.mock
@@ -828,16 +830,33 @@ def test_eightfold_failed_detail_keeps_job_without_body(eightfold_company, fixtu
     respx.get(EF + "/api/pcsx/position_details").mock(side_effect=httpx.ConnectError("boom\nmore"))
     with httpx.Client() as client:
         jobs = eightfold.fetch(eightfold_company, client, ["director"], wants_body=lambda j: j.external_id == "900000000001")
-    assert len(jobs) == 3 and jobs[0].body == ""
+    assert len(jobs) == 4 and jobs[0].body == ""
     assert "eightfold example.eightfold.ai: no description for 900000000001 (boom more)" in caplog.text
+
+
+class _RecordingPool(ThreadPoolExecutor):
+    """A pool that counts the work handed to it."""
+
+    def __init__(self, workers: int) -> None:
+        super().__init__(workers)
+        self.used = 0
+
+    def map(self, fn, *iterables, **kwargs):
+        self.used += 1
+        return super().map(fn, *iterables, **kwargs)
+
+    def submit(self, fn, /, *args, **kwargs):
+        self.used += 1
+        return super().submit(fn, *args, **kwargs)
 
 
 @respx.mock
 def test_eightfold_descriptions_go_through_the_pool(eightfold_company, fixture_json):
     _, _, detail = _eightfold_routes(fixture_json)
-    with httpx.Client() as client, ThreadPoolExecutor(2) as pool:
+    with httpx.Client() as client, _RecordingPool(2) as pool:
         fetch_company(eightfold_company, client, pool=pool, search=["director"])
-    assert detail.call_count == 3
+    assert detail.call_count == 4
+    assert pool.used  # not a serial map
 
 
 @pytest.mark.parametrize("slug", ["example.eightfold.ai/careers", "https://example.eightfold.ai", "", "a b"])
