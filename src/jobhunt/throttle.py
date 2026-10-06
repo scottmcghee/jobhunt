@@ -8,9 +8,10 @@ Every request goes through ``ThrottledTransport``. It finds the request's rate-l
   backoff, up to ``MAX_RETRIES`` times; the last response is then returned as is, so the
   caller's ``raise_for_status`` handles it like any other error. A Retry-After over
   ``MAX_RETRY_AFTER`` is not retried: the group pauses for the cap and the response is returned;
-- retries a transient failure (a 500, 502 or 504, a connection error, or a timeout) after a
-  1/2 s backoff, up to ``TRANSIENT_RETRIES`` times, holding no slot while it waits; the last
-  response is returned, or the last error raised. These leave the group's limit alone;
+- retries a transient failure (a 500, 502 or 504, a connection error, or a timeout, also while
+  reading the body, which is read here for that reason) after a 1/2 s backoff, up to
+  ``TRANSIENT_RETRIES`` times, holding no slot while it waits; the last response is returned,
+  or the last error raised. These leave the group's limit alone;
 - passes everything else through untouched.
 
 ``GroupLimiter`` is AIMD: each success raises the limit by 1/limit, up to the ceiling; a throttle
@@ -217,16 +218,21 @@ class ThrottledTransport(httpx.BaseTransport):
         retries = transient = 0
         while True:
             limiter.acquire()
+            response = None
             try:
                 if self._slots is None:
                     response = self._send(request)
+                    response.read()  # a body that stalls or drops fails here, so it is retried
                 else:
                     with self._slots:
                         response = self._send(request)
+                        response.read()
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
                 delay = retry_after_seconds(retry_after)
             except TRANSIENT_ERRORS:
+                if response is not None:
+                    response.close()
                 limiter.release(neutral=True)
                 if transient == self._transient_retries:
                     raise

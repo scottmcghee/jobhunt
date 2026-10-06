@@ -39,7 +39,7 @@ src/jobhunt/
   filter.py           # pure: list[Job] x Preferences -> list[Job]
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
-  storage.py          # seen-set and 404 ledgers, JSONL append
+  storage.py          # seen-set and gone-board ledgers (see cli._board_gone), JSONL append
   throttle.py         # polite HTTP for fetch: per-group concurrency limits, 429/Retry-After and transient retries
   runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the ONLY module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend

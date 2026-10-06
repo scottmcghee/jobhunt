@@ -210,6 +210,10 @@ def test_a_dead_workday_site_counts_like_a_404(tmp_path, capsys, response):
         _workday_error(403, "S99"),  # a 403 about something else
         httpx.Response(403, text="<html>blocked</html>"),  # a block page: the host, not the site
         _workday_error(400, "HTTP_400"),
+        _workday_error(422, "S22"),  # each code counts only with its own status
+        _workday_error(403, "HTTP_422"),
+        httpx.Response(403, json=[{"errorCode": "S22"}]),  # JSON, but not an object
+        httpx.Response(422, json=[{"errorCode": "HTTP_422"}]),
     ],
 )
 @respx.mock
@@ -217,7 +221,7 @@ def test_other_workday_errors_dont_count(tmp_path, response):
     companies = _workday_config(tmp_path)
     respx.post(WD.format("Open")).mock(return_value=httpx.Response(200, json={"total": 0, "jobPostings": []}))
     respx.post(WD.format("Gone")).mock(return_value=response)
-    _fetch(tmp_path, companies)
+    assert _fetch(tmp_path, companies) == 0  # the run completes
     assert _misses(tmp_path).counts == {}
 
 
@@ -225,7 +229,7 @@ def test_other_workday_errors_dont_count(tmp_path, response):
 def test_a_422_from_another_ats_doesnt_count(tmp_path):
     companies = _two_company_config(tmp_path)
     respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
-    respx.get(GH.format("dead")).mock(return_value=httpx.Response(422, json={"errorCode": "x"}))
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(422, json={"errorCode": "HTTP_422"}))
     _fetch(tmp_path, companies)
     assert _misses(tmp_path).counts == {}
 
@@ -239,6 +243,23 @@ def test_warnings_name_the_board_and_fit_on_one_line(tmp_path, caplog):
     lines = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert "acme (acme/Open): boom For more information: x" in lines
     assert "acme (acme/Gone): HTTP 500 — check slug/ATS" in lines
+
+
+@respx.mock
+def test_a_board_with_malformed_data_is_skipped_on_one_line(tmp_path, caplog, monkeypatch):
+    companies = _two_company_config(tmp_path)
+    real_fetch = cli.fetch_company
+
+    def fetch(company, client, **kw):
+        if company.slug == "dead":
+            raise ValueError("bad posting\nat line 2")
+        return real_fetch(company, client, **kw)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    assert _fetch(tmp_path, companies) == 0
+    lines = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "Dead: skipped, ValueError: bad posting at line 2" in lines
 
 
 @respx.mock

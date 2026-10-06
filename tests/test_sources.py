@@ -199,6 +199,18 @@ def test_fetch_company_passes_wants_body_to_workday(workday_company, fixture_jso
         assert detail.call_count == 3
 
 
+@respx.mock
+def test_workday_no_description_warning_fits_on_one_line(workday_company, fixture_json, caplog):
+    respx.post(WD + "/jobs").mock(return_value=httpx.Response(200, json=fixture_json("workday_jobs.json")))
+    respx.get(WD_DETAIL).mock(side_effect=httpx.ConnectError("boom\nFor more information: x"))
+    with httpx.Client() as client:
+        jobs = workday.fetch(workday_company, client, _wants_directors)
+    assert jobs[0].body == ""
+    (warning,) = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "no description" in warning and "boom For more information: x" in warning
+    assert "\n" not in warning
+
+
 SR = "https://api.smartrecruiters.com/v1/companies/ExampleCorp/postings"
 GH_JOBS_URL = "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs"
 SR_DETAIL = SR + "/744000000001001"
@@ -230,6 +242,18 @@ def test_smartrecruiters_lists_everything_but_fetches_bodies_only_when_wanted(sm
 
     assert jobs[1].body == "" and jobs[1].remote is False  # hybrid
     assert jobs[2].remote is None  # neither flag set: on-site and unset look the same
+
+
+@respx.mock
+def test_smartrecruiters_no_description_warning_fits_on_one_line(smartrecruiters_company, fixture_json, caplog):
+    respx.get(SR).mock(return_value=httpx.Response(200, json=fixture_json("smartrecruiters_postings.json")))
+    respx.get(SR_DETAIL).mock(side_effect=httpx.ConnectError("boom\nFor more information: x"))
+    with httpx.Client() as client:
+        jobs = smartrecruiters.fetch(smartrecruiters_company, client, _wants_directors)
+    assert jobs[0].body == ""
+    (warning,) = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "no description" in warning and "boom For more information: x" in warning
+    assert "\n" not in warning
 
 
 def test_smartrecruiters_remote_from_location_text(smartrecruiters_company):
