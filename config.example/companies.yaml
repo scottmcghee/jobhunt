@@ -24,6 +24,10 @@
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.
 #   Amazon:     amazon.jobs has its own search, not an ATS. slug is the country to search (ISO
 #               alpha-3, e.g. USA). fetch searches once per word in preferences.yaml title.must_include_any.
+#               Amazon matches whole words only: a wildcard term like "recruit*" searches just
+#               "recruit" (fetch warns), so list "recruiter" and the other endings you want.
+#               A wrong country code finds nothing rather than a 404, so the board is never
+#               removed; fetch warns about it instead. Each term keeps its 2,000 newest postings.
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help`: it finds board URLs in any text
 # file, such as lines grepped from Common Crawl index files. Add --check to drop boards that have

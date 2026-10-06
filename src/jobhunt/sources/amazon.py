@@ -16,6 +16,7 @@ country the search is limited to.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable
 from datetime import datetime
@@ -36,7 +37,12 @@ MAX_PER_TERM = 2000  # runaway guard; the API itself stops at 10,000 hits
 
 def _terms(search: Iterable[str]) -> list[str]:
     """Cleaned, unique search terms; a trailing filter wildcard ("recruit*") is dropped."""
-    terms = [t.strip().rstrip("*").strip().lower() for t in search]
+    raw = list(dict.fromkeys(t.strip().lower() for t in search))
+    for term in raw:
+        if term.endswith("*") and (stem := term.rstrip("*").strip()):
+            # Amazon matches whole words, so "recruit" won't find "Recruiter".
+            log.warning("amazon can't search by prefix; searching %r only for %r", stem, term)
+    terms = [t.rstrip("*").strip() for t in raw]
     return list(dict.fromkeys(t for t in terms if t)) or [""]
 
 
@@ -57,8 +63,35 @@ def _body(raw: dict) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+def _locations(raw: dict) -> list[dict]:
+    """The posting's ``locations`` (JSON strings, one per location); unreadable ones are skipped."""
+    out = []
+    for entry in raw.get("locations") or []:
+        if isinstance(entry, str):
+            try:
+                entry = json.loads(entry)
+            except ValueError:
+                continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
+
+
+def _remote(locations: list[dict], where: str) -> bool | None:
+    kinds = {str(loc.get("type") or "").upper() for loc in locations}
+    if "VIRTUAL" in kinds:
+        return True
+    if kinds == {"ONSITE"}:
+        return False
+    return True if "virtual" in where or "remote" in where else None
+
+
 def normalize(company: Company, raw: dict) -> Job:
-    location = raw.get("normalized_location") or raw.get("location") or ""
+    locations = _locations(raw)
+    # Many postings list several cities; the first is only in normalized_location.
+    names = [loc.get("normalizedLocation") for loc in locations]
+    names = list(dict.fromkeys(n for n in names if isinstance(n, str) and n))
+    location = "; ".join(names) or raw.get("normalized_location") or raw.get("location") or ""
     where = f"{raw.get('location', '')} {location} {raw.get('title', '')}".lower()
     return Job(
         source="amazon",
@@ -67,7 +100,7 @@ def normalize(company: Company, raw: dict) -> Job:
         external_id=str(raw.get("id_icims") or raw["id"]),
         title=raw.get("title", ""),
         location=location,
-        remote=True if "virtual" in where or "remote" in where else None,
+        remote=_remote(locations, where),
         url=SITE + (raw.get("job_path") or ""),
         body=_body(raw),
         posted_at=_posted(raw.get("posted_date")),
@@ -109,5 +142,15 @@ def fetch(
             offset += len(postings)
             if not postings or offset >= hits:  # an empty page ends it, whatever hits says
                 break
+        else:
+            if offset >= MAX_PER_TERM:
+                log.warning(
+                    "amazon %s: %s has %d hits; kept the %d most recent",
+                    company.slug, term, hits, offset,
+                )
+    if not found:
+        log.warning(
+            "amazon %s: 0 postings — check the country code (ISO alpha-3, e.g. USA)", company.slug
+        )
     log.info("amazon %s: %d jobs", company.slug, len(found))
     return list(found.values())

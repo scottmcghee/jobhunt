@@ -1,6 +1,6 @@
 {
   "error": null,
-  "hits": 3,
+  "hits": 4,
   "facets": {},
   "content": {},
   "jobs": [
@@ -90,6 +90,36 @@
       "title": "Director, Operations",
       "updated_time": "3 days",
       "url_next_step": "https://account.amazon.jobs/jobs/10000003/apply"
+    },
+    {
+      "basic_qualifications": "- 10+ years of experience leading engineering teams<br/>- Experience with AWS",
+      "business_category": "aws",
+      "city": "Austin",
+      "company_name": "Example Services, Inc.",
+      "country_code": "USA",
+      "description": "Lead our cloud platform org.",
+      "description_short": "Lead our cloud platform org.",
+      "id": "0f0e0d0c-0000-4000-8000-000000000004",
+      "id_icims": "10000004",
+      "is_intern": null,
+      "is_manager": null,
+      "job_category": "Software Development",
+      "job_family": "Software Development",
+      "job_path": "/en/jobs/10000004/director-software-development",
+      "job_schedule_type": "full-time",
+      "location": "US, TX, Austin",
+      "locations": [
+        "{\"normalizedStateName\": \"Texas\", \"normalizedCountryCode\": \"USA\", \"city\": \"Austin\", \"normalizedLocation\": \"Austin, Texas, USA\", \"location\": \"US, TX, Austin\", \"type\": \"ONSITE\"}",
+        "{\"normalizedStateName\": \"Washington\", \"normalizedCountryCode\": \"USA\", \"city\": \"Seattle\", \"normalizedLocation\": \"Seattle, Washington, USA\", \"location\": \"US, WA, Seattle\", \"type\": \"ONSITE\"}"
+      ],
+      "normalized_location": "Austin, Texas, USA",
+      "posted_date": "July 17, 2026",
+      "preferred_qualifications": "- Experience with developer platforms",
+      "source_system": "JobCreator",
+      "state": "Texas",
+      "title": "Director, Software Development",
+      "updated_time": "3 days",
+      "url_next_step": "https://account.amazon.jobs/jobs/10000004/apply"
     }
   ],
   "job_posting_search_request": {}
