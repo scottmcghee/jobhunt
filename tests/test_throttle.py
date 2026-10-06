@@ -138,28 +138,203 @@ def test_503_is_retried_only_with_retry_after():
         assert client.get(URL).status_code == 200
 
 
+@pytest.mark.parametrize("status", [500, 502, 504])
 @respx.mock
-def test_502_and_504_are_retried_once():
+def test_transient_server_errors_are_retried_with_a_backoff_then_returned(status):
     clock = FakeClock()
-    route = respx.get(URL).mock(return_value=httpx.Response(502))
+    route = respx.get(URL).mock(return_value=httpx.Response(status))
     with _client(clock) as client:
-        assert client.get(URL).status_code == 502
-    assert route.call_count == 2
+        assert client.get(URL).status_code == status  # the caller's raise_for_status takes it
+    assert route.call_count == 1 + throttle.TRANSIENT_RETRIES
+    assert clock.slept == [1.0, 2.0]
 
-    route.mock(side_effect=[httpx.Response(504), httpx.Response(200)])
+    route.mock(side_effect=[httpx.Response(status), httpx.Response(200)])
     with _client(clock) as client:
         assert client.get(URL).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("[Errno 9] Bad file descriptor"),
+        httpx.ConnectError("[Errno 6] Device not configured"),
+        httpx.ConnectTimeout("timed out"),
+        httpx.ReadTimeout("The read operation timed out"),
+        httpx.ReadError("connection reset"),
+        httpx.WriteError("broken pipe"),
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+    ],
+)
+@respx.mock
+def test_transient_transport_errors_are_retried_with_a_backoff_then_raised(error):
+    clock = FakeClock()
+    route = respx.get(URL).mock(side_effect=[error, httpx.Response(200)])
+    with _client(clock) as client:
+        assert client.get(URL).status_code == 200
+    assert clock.slept == [1.0]
+
+    route.mock(side_effect=error)
+    with _client(clock) as client, pytest.raises(type(error)):
+        client.get(URL)
+    assert route.call_count == 2 + 1 + throttle.TRANSIENT_RETRIES
+
+
+class _Body(httpx.SyncByteStream):
+    """A response body that raises ``error`` while it is read, if given; records reads and closes."""
+
+    def __init__(self, error: Exception | None = None):
+        self.error, self.reads, self.closed = error, 0, False
+
+    def __iter__(self):
+        self.reads += 1
+        if self.error is not None:
+            raise self.error
+        yield b"ok"
+
+    def close(self):
+        self.closed = True
+
+
+def _serving(bodies, statuses=None):
+    """A transport that answers each request with the next of ``bodies`` (and ``statuses``)."""
+    statuses = list(statuses or [200] * len(bodies))
+    queue = list(bodies)
+    return httpx.MockTransport(lambda request: httpx.Response(statuses.pop(0), stream=queue.pop(0)))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ReadTimeout("The read operation timed out"), httpx.RemoteProtocolError("peer closed connection")],
+)
+def test_a_failure_while_reading_the_body_is_retried(error):
+    # the inner transport returns after the headers; a body that stalls or drops comes later
+    clock = FakeClock()
+    bodies = [_Body(error), _Body()]
+    transport = throttle.ThrottledTransport(
+        inner=_serving(bodies), clock=clock, sleep=clock.sleep, jitter=lambda: 0.0
+    )
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).text == "ok"
+    assert clock.slept == [1.0]
+    assert bodies[0].closed
+    assert bodies[1].reads == 1  # read once, by the transport; the client's read is a no-op
+    assert transport.limiter("greenhouse").in_flight == 0
+
+
+@pytest.mark.parametrize("status", [429, 502])
+def test_a_retried_response_is_closed(status):
+    clock = FakeClock()
+    bodies = [_Body(), _Body()]
+    transport = throttle.ThrottledTransport(
+        inner=_serving(bodies, [status, 200]), clock=clock, sleep=clock.sleep, jitter=lambda: 0.0
+    )
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 200
+    assert bodies[0].closed and bodies[1].closed
+
+
+@respx.mock
+def test_a_transient_retry_frees_its_slots_while_it_waits():
+    clock = FakeClock()
+    transport = throttle.ThrottledTransport(
+        start=1, ceiling=1, clock=clock, jitter=lambda: 0.0, max_in_flight=1
+    )
+    seen: list[tuple[int, int]] = []
+
+    def sleep(seconds):
+        lim = transport.limiter(throttle.request_group(httpx.URL(URL)))
+        seen.append((lim.in_flight, transport._slots._value))
+        clock.sleep(seconds)
+
+    transport._sleep = sleep
+    respx.get(URL).mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 200
+    assert seen == [(0, 1)]  # neither the group's slot nor the global one is held
+
+
+@respx.mock
+def test_a_transient_failure_neither_grows_nor_shrinks_the_limit():
+    clock = FakeClock()
+    respx.get(URL).mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(500), httpx.Response(500)])
+    transport = throttle.ThrottledTransport(start=2, clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 500
+    (stats,) = transport.stats().values()
+    assert stats["limit"] == 2 and stats["throttles"] == 0 and stats["requests"] == 3
+
+
+def test_a_stop_during_a_transient_backoff_sends_nothing_more():
+    transport = throttle.ThrottledTransport(jitter=lambda: 0.0)
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        transport.stop()  # e.g. Ctrl-C while this request's retry is waiting
+        raise httpx.ConnectError("boom", request=request)
+
+    transport._inner = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as client, pytest.raises(throttle.Stopped):
+        client.get(URL)
+    assert len(sent) == 1
+
+
+def test_a_stop_cuts_a_transient_backoff_short():
+    import threading
+
+    sent = threading.Event()
+
+    def handler(request):
+        sent.set()
+        raise httpx.ConnectError("boom", request=request)
+
+    # a 30 s backoff: only a wait on the stop event, not time.sleep, ends it at once
+    transport = throttle.ThrottledTransport(inner=httpx.MockTransport(handler), jitter=lambda: 29.0)
+    raised: list[BaseException] = []
+
+    def run():
+        try:
+            transport.handle_request(httpx.Request("GET", URL))
+        except BaseException as e:
+            raised.append(e)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert sent.wait(STOP_WAIT)
+    transport.stop()
+    thread.join(1)
+    assert not thread.is_alive()
+    assert [type(e) for e in raised] == [throttle.Stopped]
+
+
+@respx.mock
+def test_transient_retries_is_a_constructor_parameter():
+    clock = FakeClock()
+    route = respx.get(URL).mock(return_value=httpx.Response(502))
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, transient_retries=0)
+    with httpx.Client(transport=transport) as client:
+        assert client.get(URL).status_code == 502
+    assert route.call_count == 1
+    route.mock(side_effect=httpx.ConnectError("boom"))
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, transient_retries=0)
+    with httpx.Client(transport=transport) as client, pytest.raises(httpx.ConnectError):
+        client.get(URL)
+    assert route.call_count == 2
 
 
 @respx.mock
 def test_other_errors_pass_straight_through():
     clock = FakeClock()
-    for status in (500, 404, 403):
+    for status in (404, 403, 422, 400, 501):
         route = respx.get(URL).mock(return_value=httpx.Response(status))
         with _client(clock) as client:
             assert client.get(URL).status_code == status
         assert route.call_count == 1
         respx.reset()
+    route = respx.get(URL).mock(side_effect=httpx.UnsupportedProtocol("ftp?"))
+    with _client(clock) as client, pytest.raises(httpx.UnsupportedProtocol):
+        client.get(URL)
+    assert route.call_count == 1
     assert clock.slept == []
 
 

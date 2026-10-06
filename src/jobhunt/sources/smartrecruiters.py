@@ -105,7 +105,10 @@ def _detail(company: Company, client: httpx.Client, posting_id: str) -> dict | N
         resp.raise_for_status()
         return resp.json()
     except (httpx.HTTPError, ValueError) as e:
-        log.warning("smartrecruiters %s: no description for %s (%s)", company.slug, posting_id, e)
+        error = " ".join(str(e).split())  # httpx's messages can span lines
+        log.warning(
+            "smartrecruiters %s: no description for %s (%s)", company.slug, posting_id, error
+        )
         return None
 
 

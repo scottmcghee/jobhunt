@@ -39,8 +39,8 @@ src/jobhunt/
   filter.py           # pure: list[Job] x Preferences -> list[Job]
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
-  storage.py          # seen-set and 404 ledgers, JSONL append
-  throttle.py         # polite HTTP for fetch: per-group concurrency limits, 429/Retry-After retries
+  storage.py          # seen-set and gone-board ledgers (see cli._board_gone), JSONL append
+  throttle.py         # polite HTTP for fetch: per-group concurrency limits, 429/Retry-After and transient retries
   runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the ONLY module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
   settings.py         # tunables: defaults < config/settings.yaml < JOBHUNT_<SECTION>_<KEY> env < CLI flags
@@ -82,7 +82,7 @@ output/               # generated letters (gitignored)
 
 Agreed future work, in rough priority order. Each item still follows the workflow above (fixture + test first).
 
-1. **Prune dead boards automatically.** *(done)* `jobhunt fetch` counts consecutive HTTP 404s per board in `data/misses.json`. Any successful fetch resets the count; the third 404 in a row removes the entry from `config/companies.yaml`. `--dry-run` changes neither.
+1. **Prune dead boards automatically.** *(done)* `jobhunt fetch` counts consecutive fetches that find a board gone (an HTTP 404; for Workday also a 422, or a 403 `S22` closed site) in `data/misses.json`. Any successful fetch resets the count; the third in a row removes the entry from `config/companies.yaml`. `--dry-run` changes neither.
 2. **Workday and SmartRecruiters sources.** A module under `sources/` for each, with a recorded fixture and `respx` tests, plus an `ATSName` entry.
    - **Workday** *(done)*. There is no documented public API; `sources/workday.py` calls the JSON endpoints each tenant's careers site uses.
      - A board is `slug: tenant/site` plus `datacenter: wdN`, the only optional `Company` field. Tenant and site together are the board's identity (one tenant often has several sites), so keys, 404 pruning, and duplicate checks work unchanged.

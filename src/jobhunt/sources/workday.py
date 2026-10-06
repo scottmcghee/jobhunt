@@ -110,7 +110,8 @@ def _detail(company: Company, client: httpx.Client, path: str) -> dict | None:
         return resp.json().get("jobPostingInfo") or None
     except (httpx.HTTPError, ValueError) as e:
         posting_id = path.rsplit("/", 1)[-1]
-        log.warning("workday %s: no description for %s (%s)", company.slug, posting_id, e)
+        error = " ".join(str(e).split())  # httpx's messages can span lines
+        log.warning("workday %s: no description for %s (%s)", company.slug, posting_id, error)
         return None
 
 

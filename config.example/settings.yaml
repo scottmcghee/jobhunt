@@ -36,9 +36,14 @@ fetch:
   # Refusals (429, or a 403 block page) in a row before a host's other boards are skipped.
   # Env: JOBHUNT_FETCH_BREAKER
   breaker: 5
-  # HTTP 404s in a row before a board is removed from companies.yaml.
+  # Fetches in a row that find a board gone before it is removed from companies.yaml: an HTTP
+  # 404, or for Workday a 422 (site removed) or a 403 "S22" (site closed).
   # Env: JOBHUNT_FETCH_PRUNE_AFTER_404S
   prune_after_404s: 3
+  # Retries, after a 1 s then 2 s wait, on a 500/502/504, a connection error (e.g. a failed DNS
+  # lookup) or a timeout, before the board is skipped for this run.
+  # Env: JOBHUNT_FETCH_TRANSIENT_RETRIES
+  transient_retries: 2
 
 paths:
   # ~ expands, and a relative path is under the repo (like the defaults), whatever directory

@@ -8,14 +8,18 @@ Every request goes through ``ThrottledTransport``. It finds the request's rate-l
   backoff, up to ``MAX_RETRIES`` times; the last response is then returned as is, so the
   caller's ``raise_for_status`` handles it like any other error. A Retry-After over
   ``MAX_RETRY_AFTER`` is not retried: the group pauses for the cap and the response is returned;
-- retries a 502 or 504 once;
+- retries a transient failure (a 500, 502 or 504, a connection error, or a timeout, also while
+  reading the body, which is read here for that reason) after a 1/2 s backoff, up to
+  ``TRANSIENT_RETRIES`` times, holding no slot while it waits; the last response is returned,
+  or the last error raised. These leave the group's limit alone;
 - passes everything else through untouched.
 
 ``GroupLimiter`` is AIMD: each success raises the limit by 1/limit, up to the ceiling; a throttle
 halves it, never below 1, at most once per ``COOLDOWN``, so a burst of 429s from requests that
 were already in flight counts as one signal.
 
-The default inner transport retries a failed connection once (httpx's default client: never).
+The default inner transport also retries a failed connection once, at once (httpx's default
+client: never); the backoff above is for failures that outlast that, like a burst of DNS errors.
 
 ``stop()`` (or ``close()``) ends the run: requests waiting for a slot or out a pause wake and
 raise ``Stopped``, and no new request is sent; one already sent finishes.
@@ -38,6 +42,16 @@ from jobhunt.sources import request_group
 MAX_RETRIES = 3
 MAX_RETRY_AFTER = 120.0  # seconds; a server asking for more gets a skipped board instead
 COOLDOWN = 5.0  # seconds between two halvings of one group's limit
+TRANSIENT_RETRIES = 2
+TRANSIENT_STATUSES = frozenset({500, 502, 504})
+# Failures that a retry a moment later usually gets past. Not, say, UnsupportedProtocol.
+TRANSIENT_ERRORS = (
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
 
 
 class Stopped(Exception):
@@ -147,6 +161,7 @@ class ThrottledTransport(httpx.BaseTransport):
         max_retries: int | None = None,
         max_retry_after: float | None = None,
         cooldown: float | None = None,
+        transient_retries: int | None = None,
     ):
         if inner is None:
             proxies = urllib.request.getproxies()
@@ -162,6 +177,9 @@ class ThrottledTransport(httpx.BaseTransport):
         self._max_retries = MAX_RETRIES if max_retries is None else max_retries
         self._max_retry_after = MAX_RETRY_AFTER if max_retry_after is None else max_retry_after
         self._cooldown = cooldown
+        self._transient_retries = (
+            TRANSIENT_RETRIES if transient_retries is None else transient_retries
+        )
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -197,19 +215,30 @@ class ThrottledTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         limiter = self.limiter(request_group(request.url))
-        retries = 0
-        gateway_retried = False
+        retries = transient = 0
         while True:
             limiter.acquire()
+            response = None
             try:
                 if self._slots is None:
                     response = self._send(request)
+                    response.read()  # a body that stalls or drops fails here, so it is retried
                 else:
                     with self._slots:
                         response = self._send(request)
+                        response.read()
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
                 delay = retry_after_seconds(retry_after)
+            except TRANSIENT_ERRORS:
+                if response is not None:
+                    response.close()
+                limiter.release(neutral=True)
+                if transient == self._transient_retries:
+                    raise
+                transient += 1
+                self._backoff(transient)
+                continue
             except BaseException:
                 limiter.release(neutral=True)
                 raise
@@ -226,13 +255,18 @@ class ThrottledTransport(httpx.BaseTransport):
                 response.close()
                 limiter.release(throttled=True, retry_after=delay)
                 continue
-            if response.status_code in (502, 504) and not gateway_retried:
-                gateway_retried = True
+            if response.status_code in TRANSIENT_STATUSES and transient < self._transient_retries:
+                transient += 1
                 response.close()
                 limiter.release(neutral=True)
+                self._backoff(transient)
                 continue
             limiter.release(neutral=response.status_code >= 500)
             return response
+
+    def _backoff(self, attempt: int) -> None:
+        """Wait before transient retry ``attempt`` (1, 2, ...); a stop cuts it short."""
+        (self._sleep or self._stop.wait)(2.0 ** (attempt - 1) + self._jitter())
 
     def _send(self, request: httpx.Request) -> httpx.Response:
         if self._stop.is_set():  # stopped while waiting for the slot

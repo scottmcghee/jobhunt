@@ -51,7 +51,10 @@ class FetchSettings(_Section):
     max_retry_after: float = Field(120.0, ge=0)  # longer Retry-After: skip the board instead
     cooldown: float = Field(5.0, ge=0)  # seconds between two halvings of a host's limit
     breaker: int = Field(5, ge=1)  # refusals in a row before a host's other boards are skipped
-    prune_after_404s: int = Field(3, ge=1)  # 404s in a row before a board leaves companies.yaml
+    # Fetches in a row that find the board gone (a 404; for Workday also a 422, or a 403 "S22"
+    # closed site) before it leaves companies.yaml. The name predates the Workday cases.
+    prune_after_404s: int = Field(3, ge=1)
+    transient_retries: int = Field(2, ge=0)  # retries on 500/502/504, connection errors, timeouts
 
 
 class PathSettings(_Section):

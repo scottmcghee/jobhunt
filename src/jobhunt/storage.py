@@ -1,7 +1,8 @@
 """Runtime state on disk. Deliberately boring: JSON and JSONL files under data/.
 
 - seen.json    : {job_key: first_seen_iso}. The idempotency ledger.
-- misses.json  : {board_key: consecutive HTTP 404s}. Boards that answered fine are absent.
+- misses.json  : {board_key: fetches in a row that found the board gone (see cli._board_gone)}.
+                 Boards that answered fine are absent.
 - jobs.jsonl   : every Job that passed the filter, appended once.
 - scores.jsonl : every ScoredJob, appended once per job.
 - output/      : one Markdown letter per generated job.
@@ -53,7 +54,7 @@ class SeenSet:
 
 
 class MissLedger:
-    """Consecutive HTTP 404 count per board, keyed by ``Company.key``."""
+    """Per board (by ``Company.key``): fetches in a row that found it gone (see cli._board_gone)."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -62,7 +63,7 @@ class MissLedger:
             self.counts = json.loads(path.read_text() or "{}")
 
     def miss(self, key: str) -> int:
-        """Record one more 404 in a row and return the new count."""
+        """Record one more fetch in a row that found the board gone, and return the new count."""
         self.counts[key] = self.counts.get(key, 0) + 1
         return self.counts[key]
 

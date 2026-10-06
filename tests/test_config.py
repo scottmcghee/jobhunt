@@ -79,7 +79,7 @@ def test_remove_companies_keeps_everything_else(tmp_path):
 
     removed = config.remove_companies(p, {"greenhouse:beta", "ashby:nope"})
 
-    assert removed == ["Beta"]
+    assert [c.name for c in removed] == ["Beta"]
     text = p.read_text()
     assert text.startswith("# Companies to watch.\n# (header comments must survive pruning)\n")
     assert "  - name: Beta\n" not in text
@@ -91,7 +91,7 @@ def test_remove_companies_last_entry(tmp_path):
     p = tmp_path / "companies.yaml"
     p.write_text(COMPANIES_YAML)
 
-    assert config.remove_companies(p, {"ashby:gamma"}) == ["Gamma"]
+    assert [c.name for c in config.remove_companies(p, {"ashby:gamma"})] == ["Gamma"]
     assert p.read_text().endswith("    slug: beta\n    tags: []\n")
     assert [c.name for c in config.load_companies(p)] == ["Alpha", "Beta", "Beta on Lever"]
 

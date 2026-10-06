@@ -22,6 +22,7 @@ def test_defaults_are_todays_values():
     assert (f.workers, f.per_host, f.start_per_host, f.timeout) == (32, 6, 2, 20.0)
     assert f.user_agent == "jobhunt/0.1 (+personal job search tool)"
     assert (f.max_retries, f.max_retry_after, f.cooldown, f.breaker, f.prune_after_404s) == (3, 120.0, 5.0, 5, 3)
+    assert f.transient_retries == 2
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
     assert s.slugs.check_workers == 4
 

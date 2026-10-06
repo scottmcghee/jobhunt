@@ -112,19 +112,19 @@ def _entry_spans(lines: list[str]) -> list[tuple[int, int]]:
     return list(zip(starts, [*starts[1:], end], strict=True))
 
 
-def remove_companies(path: Path, keys: Collection[str]) -> list[str]:
-    """Delete entries whose ``Company.key`` is in ``keys``. Returns the names removed.
+def remove_companies(path: Path, keys: Collection[str]) -> list[Company]:
+    """Delete entries whose ``Company.key`` is in ``keys``. Returns the companies removed.
 
     Edits the file as text, so comments and spacing elsewhere stay exactly as written.
     """
     lines = path.read_text().splitlines(keepends=True)
-    removed: list[str] = []
+    removed: list[Company] = []
     drop: set[int] = set()
     for lo, hi in _entry_spans(lines):
         entry = yaml.safe_load(textwrap.dedent("".join(lines[lo:hi])))[0]
         company = Company.model_validate(entry)
         if company.key in keys:
-            removed.append(company.name)
+            removed.append(company)
             drop.update(range(lo, hi))
     if removed:
         kept = "".join(line for i, line in enumerate(lines) if i not in drop)
