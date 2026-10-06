@@ -196,6 +196,10 @@ def test_unknown_remote_inside_the_onsite_region_passes(prefs):
         ("New York, NY, United States", "This role is fully remote within the US."),
         ("New York, NY, United States", "x" * 5000 + " Remote candidates welcome."),  # past 2,000
         ("New York, NY, United States", "You can work from home."),
+        ("New York, NY, United States", "You'll be working from home."),
+        ("New York, NY, United States", "The team works from home."),
+        ("New York, NY, United States", "Work-from-home eligible."),
+        ("New York, NY, United States", "Telecommuting is available."),
         ("New York, NY, United States", "You may work remotely."),
         ("New York, NY, United States", "This job can be performed remotely."),
         ("New York, NY, United States (Remote)", ""),
@@ -241,7 +245,10 @@ def test_virtual_counts_as_remote_only_in_the_location(prefs):
 def test_remote_words_dont_help_when_remote_isnt_allowed(prefs):
     loc = prefs.location.model_copy(update={"unknown_remote_is_onsite": True, "allow_remote": False})
     job = _job("Director of Platform Engineering", "New York, NY, United States", body="remote ok")
-    assert not jfilter.evaluate(job, prefs.model_copy(update={"location": loc})).passed
+    r = jfilter.evaluate(job, prefs.model_copy(update={"location": loc}))
+    assert not r.passed
+    assert "not mentioned" not in r.reason
+    assert "remote roles not allowed" in r.reason and "location 'New York" in r.reason
 
 
 def test_unknown_remote_rule_needs_an_onsite_list(prefs):

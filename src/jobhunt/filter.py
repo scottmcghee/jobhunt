@@ -67,7 +67,14 @@ def check_domain(job: Job, prefs: Preferences) -> str | None:
 # Words that say a posting can be done remotely, for roles whose remote flag is unknown. The
 # location ones are too common in a body ("our home", "team offsites", "virtual machines") to
 # count there.
-REMOTE_CUES = ["remote*", "work from home", "work-from-home", "telecommut*"]
+REMOTE_CUES = [
+    "remote*",
+    "work from home",
+    "working from home",
+    "works from home",
+    "work-from-home",
+    "telecommut*",
+]
 REMOTE_LOCATION_CUES = ["home", "home based", "home-based", "offsite", "virtual"]
 
 
@@ -102,7 +109,8 @@ def check_location(job: Job, prefs: Preferences) -> str | None:
             where = job.location or "unknown"
             if job.remote is False:
                 return f"on-site or hybrid role in '{where}', outside onsite_accept_any"
-            return f"remote unknown and not mentioned; location '{where}' outside onsite_accept_any"
+            why = "not mentioned" if rules.allow_remote else "remote roles not allowed"
+            return f"remote unknown and {why}; location '{where}' outside onsite_accept_any"
         return None
     if _any_in(rules.accept_any, loc_text):
         return None
