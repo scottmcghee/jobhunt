@@ -10,7 +10,11 @@ A board is ``ats: apple`` with ``slug:`` the location filter from a search URL, 
 ``united-states-USA``. Apple lists thousands of roles, so ``fetch`` searches once per term (a
 multi-word term is sent as a "quoted phrase": unquoted, Apple matches any of its words, and
 "head of" finds 4,000+ postings) and fetches a job page only for postings that pass
-``wants_body``.
+``wants_body``. The body is the job page's summary, description, responsibilities, and minimum
+and preferred qualifications.
+
+A mistyped location filter finds nothing rather than a 404, so ``fetch`` warns about a board with
+no postings instead.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ _DATA = re.compile(
     r'window\.__staticRouterHydrationData\s*=\s*JSON\.parse\(("(?:[^"\\]|\\.)*")\)', re.S
 )
 _SECTIONS = (
+    ("", "jobSummary"),
     ("", "description"),
     ("", "responsibilities"),
     ("Minimum qualifications", "minimumQualifications"),
@@ -139,6 +144,11 @@ def fetch(
                     "apple %s: %r has %d hits; kept the first %d",
                     company.slug, term, total, MAX_PER_TERM,
                 )
+    if not found:
+        log.warning(
+            "apple %s: 0 postings — check the location filter (e.g. united-states-USA)",
+            company.slug,
+        )
     wanted = [(raw, job) for raw, job in found.values() if wants_body(job)]
     run = pool.map if pool is not None else map
     details = run(lambda pair: _detail(company, client, pair[0]), wanted)

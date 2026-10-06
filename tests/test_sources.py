@@ -1050,7 +1050,7 @@ def test_apple_searches_each_term_and_normalizes(apple_company):
     assert first.url == AP + "/details/200000001-0001/director-platform-engineering"
     assert first.location == "Seattle, United States of America; Cupertino, United States of America"
     assert first.posted_at == "2026-09-21T17:19:04.171+00:00"
-    assert first.body.startswith("Lead our platform & developer experience teams.")
+    assert first.body.startswith("The Platform team builds the tools every Apple engineer uses.\n\nLead our platform")
     for part in ("Own reliability", "Minimum qualifications:\n10+ years", "Preferred qualifications:\nExperience with internal"):
         assert part in first.body
     assert first.remote is None  # homeOffice false says nothing more
@@ -1108,6 +1108,28 @@ def test_apple_failed_detail_keeps_job_without_body(apple_company, caplog):
         jobs = apple.fetch(apple_company, client, ["director"], wants_body=lambda j: j.external_id == "200000001-0001")
     assert len(jobs) == 3 and jobs[0].body == ""
     assert "apple united-states-USA: no description for 200000001-0001" in caplog.text
+
+
+@respx.mock
+def test_apple_detail_http_error_keeps_job_without_body(apple_company, caplog):
+    _apple_routes()
+    respx.get(url__startswith=AP + "/details/").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client:
+        jobs = apple.fetch(apple_company, client, ["director"], wants_body=lambda j: j.external_id == "200000001-0001")
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert "apple united-states-USA: no description for 200000001-0001 (Client error '404 Not Found'" in caplog.text
+
+
+@respx.mock
+def test_apple_warns_about_a_board_with_no_postings(apple_company, caplog):
+    loader = {"search": {"searchResults": [], "totalRecords": 0}}
+    page = f"<script>window.__staticRouterHydrationData = JSON.parse({json.dumps(json.dumps({'loaderData': loader}))});</script>"
+    respx.get(AP + "/search").mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        assert apple.fetch(apple_company, client, ["director", "vp"]) == []
+    assert caplog.messages == [
+        "apple united-states-USA: 0 postings — check the location filter (e.g. united-states-USA)"
+    ]
 
 
 @respx.mock
