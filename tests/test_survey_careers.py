@@ -259,38 +259,76 @@ def test_main_surveys_writes_outputs_and_resumes(tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------ websites by Wikipedia title
 
+# What en.wikipedia's query API answers for titles=Airbnb|Palantir Technologies|No Site Co|Missing Page
+# (formatversion=2): a redirect, and a page with no Wikidata item.
+PAGES = {
+    "batchcomplete": True,
+    "query": {
+        "normalized": [{"fromencoded": False, "from": "palantir_Technologies", "to": "Palantir Technologies"}],
+        "redirects": [{"from": "Palantir Technologies", "to": "Palantir"}],
+        "pages": [
+            {"ns": 0, "title": "Missing Page", "missing": True},
+            {"pageid": 1, "ns": 0, "title": "Airbnb", "pageprops": {"wikibase_item": "Q63327"}},
+            {"pageid": 2, "ns": 0, "title": "Palantir", "pageprops": {"wikibase_item": "Q2047336"}},
+            {"pageid": 3, "ns": 0, "title": "No Site Co", "pageprops": {"wikibase_item": "Q1"}},
+            {"pageid": 4, "ns": 0, "title": "No Item"},
+        ],
+    },
+}
+
 ENTITIES = {
     "entities": {
         "Q63327": {
             "id": "Q63327",
             "claims": {"P856": [{"mainsnak": {"datavalue": {"value": "https://www.airbnb.com/"}}},
                                 {"mainsnak": {"datavalue": {"value": "https://www.airbnb.fr/"}}}]},
-            "sitelinks": {"enwiki": {"site": "enwiki", "title": "Airbnb"}},
         },
-        "Q1": {"id": "Q1", "claims": {"P856": [{"mainsnak": {"snaktype": "novalue"}}]},
-               "sitelinks": {"enwiki": {"site": "enwiki", "title": "No Site Co"}}},
-        "-1": {"site": "enwiki", "title": "Missing Page", "missing": ""},
+        "Q2047336": {"id": "Q2047336",
+                     "claims": {"P856": [{"mainsnak": {"datavalue": {"value": "https://www.palantir.com/"}}}]}},
+        "Q1": {"id": "Q1", "claims": {"P856": [{"mainsnak": {"snaktype": "novalue"}}]}},
     }
 }
 
 
-def test_title_sites_take_the_first_official_website():
-    assert survey.parse_title_sites(ENTITIES) == {"Airbnb": "https://www.airbnb.com/"}
+def test_item_ids_follow_normalized_titles_and_redirects():
+    titles = ["Airbnb", "palantir_Technologies", "Missing Page", "No Item"]
+    assert survey.parse_item_ids(PAGES, titles) == {"Airbnb": "Q63327", "palantir_Technologies": "Q2047336"}
+
+
+def test_item_sites_take_the_first_official_website():
+    assert survey.parse_item_sites(ENTITIES) == {"Q63327": "https://www.airbnb.com/",
+                                                 "Q2047336": "https://www.palantir.com/"}
 
 
 @respx.mock
 def test_title_sites_are_fetched_fifty_titles_a_call_with_mediawiki_titles():
-    route = respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json=ENTITIES))
-    titles = ["airbnb", "Airbnb", "Johnson_&_Johnson", *(f"Co {i}" for i in range(60))]
+    pages = respx.get("https://en.wikipedia.org/w/api.php").mock(return_value=httpx.Response(200, json=PAGES))
+    items = respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json=ENTITIES))
+    titles = ["airbnb", "Airbnb", "Palantir_Technologies", *(f"Co {i}" for i in range(60))]
     with httpx.Client() as client:
         sites = survey.fetch_title_sites(client, titles)
-    assert sites == {"Airbnb": "https://www.airbnb.com/"}
-    assert route.call_count == 2
-    first = route.calls[0].request.url.params
-    assert (first["action"], first["sites"], first["props"]) == ("wbgetentities", "enwiki", "claims|sitelinks")
-    asked = [t for call in route.calls for t in call.request.url.params["titles"].split("|")]
-    assert asked[:2] == ["Airbnb", "Johnson & Johnson"] and len(asked) == 62
+    # Keyed by the title asked for, even when Wikipedia redirects it.
+    assert sites == {"Airbnb": "https://www.airbnb.com/", "Palantir Technologies": "https://www.palantir.com/"}
+    assert pages.call_count == 2
+    first = pages.calls[0].request.url.params
+    assert (first["action"], first["redirects"], first["prop"], first["ppprop"], first["formatversion"]) == (
+        "query", "1", "pageprops", "wikibase_item", "2")
+    asked = [t for call in pages.calls for t in call.request.url.params["titles"].split("|")]
+    assert asked[:2] == ["Airbnb", "Palantir Technologies"] and len(asked) == 62
     assert len(first["titles"].split("|")) == 50
+    ids = [i for call in items.calls for i in call.request.url.params["ids"].split("|")]
+    assert sorted(ids) == ["Q2047336", "Q63327"]
+    assert items.calls[0].request.url.params["action"] == "wbgetentities"
+
+
+@respx.mock
+def test_item_websites_are_read_fifty_ids_a_call():
+    many = {"query": {"pages": [{"title": f"Co {i}", "pageprops": {"wikibase_item": f"Q{i}"}} for i in range(60)]}}
+    respx.get("https://en.wikipedia.org/w/api.php").mock(return_value=httpx.Response(200, json=many))
+    items = respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json={"entities": {}}))
+    with httpx.Client() as client:
+        survey.fetch_title_sites(client, [f"Co {i}" for i in range(60)])
+    assert [len(c.request.url.params["ids"].split("|")) for c in items.calls] == [50, 10]
 
 
 @respx.mock
@@ -300,6 +338,7 @@ def test_main_finds_a_website_by_title_when_the_ticker_lookup_has_none(tmp_path,
     monkeypatch.setattr(survey, "fetch_constituents", lambda client: [abnb, nosite])
     monkeypatch.setattr(survey, "fetch_sites", lambda client: {})  # the SPARQL map misses both
     monkeypatch.setattr(survey.time, "sleep", lambda s: None)
+    respx.get("https://en.wikipedia.org/w/api.php").mock(return_value=httpx.Response(200, json=PAGES))
     respx.get("https://www.wikidata.org/w/api.php").mock(return_value=httpx.Response(200, json=ENTITIES))
     respx.get("https://www.airbnb.com/robots.txt").mock(return_value=httpx.Response(404))
     respx.get("https://www.airbnb.com/careers").mock(
@@ -527,7 +566,7 @@ def test_urls_in_page_text_lose_trailing_punctuation():
     assert [(b.ats, b.slug) for b in result.boards] == [("lever", "acme")]
 
 
-@pytest.mark.parametrize("href", ["https://[object Object]/careers", "http://[::1/careers"])
+@pytest.mark.parametrize("href", ["https://[object Object]/careers", "http://[::1/careers", "https://acme.com:abc/careers"])
 def test_career_links_skip_hrefs_that_do_not_parse(href):
     page = f'<a href="{href}">Careers</a> <a href="/careers">Careers</a>'
     assert survey.career_links(page, "https://www.acme.com/") == ["https://www.acme.com/careers"]
@@ -539,3 +578,94 @@ def test_career_links_skip_job_sites_and_social_networks():
               <a href="https://x.com/acmecareers">X</a> <a href="https://careers.facebook.com/acme">FB</a>
               <a href="https://jobs.acme.com/">Jobs</a>"""
     assert survey.career_links(page, "https://www.acme.com/") == ["https://jobs.acme.com/"]
+
+
+@respx.mock
+@pytest.mark.parametrize("href", ["https://acme.com:abc/careers", "https://xn--zz.com/careers"])
+def test_a_homepage_link_httpx_cannot_request_does_not_stop_the_survey(href):
+    for host in ("https://www.acme.com", "https://acme.com", "https://careers.acme.com", "https://jobs.acme.com"):
+        respx.get(host + "/robots.txt").mock(return_value=httpx.Response(404))
+    for url in (ACME + "/careers", "https://acme.com/careers", "https://careers.acme.com/", "https://jobs.acme.com/"):
+        respx.get(url).mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/").mock(
+        return_value=httpx.Response(200, text=f'<a href="{href}">Careers</a> <a href="/en/careers">Careers</a>')
+    )
+    respx.get(ACME + "/en/careers").mock(return_value=httpx.Response(200, text=WORKDAY))
+    with _client() as client:
+        result = survey.survey_company(survey.Constituent("ACM", "Acme", "X"), ACME + "/", client, delay=0)
+    assert result.platforms == ["workday"] and result.status == ""
+
+
+def test_a_url_httpx_cannot_request_is_an_error_not_a_crash():
+    with _client() as client:
+        polite = survey._Polite(client, delay=0)
+        assert polite._fetch("https://xn--zz.com/careers", follow_redirects=False) is None
+        assert polite._fetch("https://acme.com:abc/careers", follow_redirects=False) is None
+    assert [e.split(": ")[0] for e in polite.errors] == ["https://xn--zz.com/careers", "https://acme.com:abc/careers"]
+    assert polite.responses == 0
+
+
+def _main_setup(monkeypatch, rows, sites):
+    monkeypatch.setattr(survey, "fetch_constituents", lambda client: rows)
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: sites)
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {})
+    monkeypatch.setattr(survey.time, "sleep", lambda s: None)
+
+
+@respx.mock
+def test_limit_surveys_new_companies_before_retrying_unreachable_ones(tmp_path, monkeypatch):
+    rows = [survey.Constituent(t, t, "X", t) for t in ("DED", "OK1", "OK2")]
+    _main_setup(monkeypatch, rows, {"DED": "https://dead.example", "OK1": "https://ok1.example",
+                                    "OK2": "https://ok2.example"})
+    respx.route(host__regex=r".*dead\.example").mock(side_effect=httpx.ConnectError("NXDOMAIN"))
+    respx.route().mock(return_value=httpx.Response(404))
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    for _ in range(3):
+        assert survey.main([str(out), "--companies", str(known), "--delay", "0", "--limit", "1"]) == 0
+    saved = json.loads((out / "results.json").read_text())
+    assert [(r["ticker"], r["status"]) for r in saved] == [("DED", "unreachable"), ("OK1", ""), ("OK2", "")]
+
+
+@respx.mock
+def test_an_unreachable_company_is_tried_three_times_in_all(tmp_path, monkeypatch):
+    _main_setup(monkeypatch, [survey.Constituent("DED", "Dead", "X", "Dead")], {"DED": "https://dead.example"})
+    respx.route().mock(side_effect=httpx.ConnectError("NXDOMAIN"))
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    attempts = []
+    for _ in range(4):
+        calls = len(respx.calls)
+        assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+        attempts.append(len(respx.calls) > calls)
+    assert attempts == [True, True, True, False]
+    saved = json.loads((out / "results.json").read_text())
+    assert [(r["ticker"], r["status"], r["attempts"]) for r in saved] == [("DED", "unreachable", 3)]
+    assert "| DED | Dead | unreachable |  |" in (out / "survey.md").read_text()
+
+    calls = len(respx.calls)
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0", "--only", "DED"]) == 0
+    assert len(respx.calls) > calls  # --only still re-surveys it
+
+
+@respx.mock
+def test_a_company_with_any_response_is_not_unreachable_and_is_not_retried(tmp_path, monkeypatch):
+    _main_setup(monkeypatch, [survey.Constituent("ACM", "Acme", "X", "Acme")], {"ACM": ACME})
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/").mock(return_value=httpx.Response(200, text="home"))
+    for host in ("https://acme.com", "https://careers.acme.com", "https://jobs.acme.com"):
+        respx.get(url__startswith=host + "/").mock(side_effect=httpx.ConnectError("no such host"))
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+    saved = json.loads((out / "results.json").read_text())
+    assert saved[0]["errors"] and saved[0]["status"] != "unreachable"
+    assert "| ACM | Acme | none found |  |" in (out / "survey.md").read_text()
+
+    calls = len(respx.calls)
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+    assert len(respx.calls) == calls

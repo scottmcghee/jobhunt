@@ -15,7 +15,8 @@ It is polite: one request at a time, ``--delay`` seconds apart, and it honours e
 robots.txt, redirect by redirect (RFC 9309: a robots.txt that answers 5xx or can't be fetched
 disallows everything). Companies in EXCLUDED get no requests at all. Results are saved after every
 company, so an interrupted run picks up where it stopped; companies that were unreachable are
-tried again, and ``--only`` re-surveys the given tickers. Outputs, in OUT_DIR (default data/sp500):
+tried again after the new ones (three attempts in all), and ``--only`` re-surveys the given
+tickers. Outputs, in OUT_DIR (default data/sp500):
 
     survey.md                  platform counts, and one row per company
     companies.generated.yaml   boards not in companies.yaml yet; review, then paste
@@ -43,6 +44,7 @@ from jobhunt.schema import Company
 
 DEFAULT_OUT = Path("data/sp500")
 WIKI_URL = "https://en.wikipedia.org/w/index.php"
+WIKI_API = "https://en.wikipedia.org/w/api.php"
 SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 # Constituents still in the index (no end date), with their website and ticker.
@@ -52,6 +54,7 @@ SPARQL = """SELECT ?cLabel ?site ?tick WHERE {
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }"""
 MAX_PAGE = 2_000_000  # characters of a page to scan
 MAX_REDIRECTS = 5
+MAX_ATTEMPTS = 3  # surveys of a company that stays unreachable
 # Companies this survey leaves alone, and why.
 EXCLUDED = {
     "META": "Meta's terms forbid automated collection",
@@ -110,6 +113,7 @@ class Result:
     skipped_by_robots: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)  # "<url>: <exception type>"
     status: str = ""  # "", "unreachable" (no response at all), or "excluded: <reason>"
+    attempts: int = 0  # surveys so far
 
 
 # ------------------------------------------------------------------ inputs
@@ -161,30 +165,55 @@ def _title(article: str) -> str:
     return title[:1].upper() + title[1:]
 
 
-def parse_title_sites(entities: dict) -> dict[str, str]:
-    """English Wikipedia title -> official website (the first), from a wbgetentities response."""
+def parse_item_ids(query: dict, titles: Iterable[str]) -> dict[str, str]:
+    """Title asked for -> Wikidata item, through Wikipedia's title normalization and redirects."""
+    body = query.get("query", {})
+    normalized = {n["from"]: n["to"] for n in body.get("normalized", [])}
+    redirects = {r["from"]: r["to"] for r in body.get("redirects", [])}
+    items = {p["title"]: p["pageprops"]["wikibase_item"]
+             for p in body.get("pages", []) if "wikibase_item" in p.get("pageprops", {})}
+    ids = {}
+    for title in titles:
+        page = normalized.get(title, title)
+        if item := items.get(redirects.get(page, page)):
+            ids[title] = item
+    return ids
+
+
+def parse_item_sites(entities: dict) -> dict[str, str]:
+    """Wikidata item -> official website (the first), from a wbgetentities response."""
     sites: dict[str, str] = {}
-    for entity in entities.get("entities", {}).values():
-        title = entity.get("sitelinks", {}).get("enwiki", {}).get("title")
+    for item, entity in entities.get("entities", {}).items():
         values = [c.get("mainsnak", {}).get("datavalue", {}).get("value")
                   for c in entity.get("claims", {}).get("P856", [])]
-        if title and (site := next((v for v in values if v), None)):
-            sites[title] = site
+        if site := next((v for v in values if v), None):
+            sites[item] = site
     return sites
 
 
 def fetch_title_sites(client: httpx.Client, articles: Iterable[str]) -> dict[str, str]:
-    """Websites by Wikipedia article, 50 titles a call (the API's limit)."""
+    """Websites by Wikipedia article, 50 titles or items a call (the APIs' limit).
+
+    Wikipedia resolves each title (redirects too) to its Wikidata item; Wikidata has the website.
+    """
     titles = list(dict.fromkeys(_title(a) for a in articles if a))
-    sites: dict[str, str] = {}
+    ids: dict[str, str] = {}
     for i in range(0, len(titles), 50):
-        batch = "|".join(titles[i : i + 50])
-        params = {"action": "wbgetentities", "sites": "enwiki", "titles": batch,
-                  "props": "claims|sitelinks", "format": "json"}
+        batch = titles[i : i + 50]
+        params = {"action": "query", "titles": "|".join(batch), "redirects": "1", "format": "json",
+                  "formatversion": "2", "prop": "pageprops", "ppprop": "wikibase_item"}
+        resp = client.get(WIKI_API, params=params)
+        resp.raise_for_status()
+        ids.update(parse_item_ids(resp.json(), batch))
+    items = list(dict.fromkeys(ids.values()))
+    sites: dict[str, str] = {}
+    for i in range(0, len(items), 50):
+        params = {"action": "wbgetentities", "ids": "|".join(items[i : i + 50]), "props": "claims",
+                  "format": "json"}
         resp = client.get(WIKIDATA_API, params=params)
         resp.raise_for_status()
-        sites.update(parse_title_sites(resp.json()))
-    return sites
+        sites.update(parse_item_sites(resp.json()))
+    return {title: sites[item] for title, item in ids.items() if item in sites}
 
 
 def fetch_constituents(client: httpx.Client) -> list[Constituent]:
@@ -226,7 +255,8 @@ def career_links(page: str, base: str, limit: int = 2) -> list[str]:
             url = urljoin(base, href.strip())
             parts = urlsplit(url)
             host = parts.hostname or ""
-        except ValueError:  # e.g. "https://[object Object]/careers"
+            httpx.URL(url)
+        except (ValueError, httpx.InvalidURL):  # e.g. "https://[object Object]/careers", a bad port
             continue
         if parts.scheme not in ("http", "https") or url in links:
             continue
@@ -253,7 +283,7 @@ class _Polite:
         time.sleep(self.delay)
         try:
             resp = self.client.get(url, follow_redirects=follow_redirects)
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:  # ValueError: a bad IDNA host
             self.errors.append(f"{url}: {type(e).__name__}")
             return None
         self.responses += 1
@@ -409,7 +439,8 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     saved = args.out / "results.json"
     results = _load(saved)
-    done = {r.ticker for r in results if r.status != "unreachable"}  # unreachable: try again
+    tried = {r.ticker: r for r in results}
+    retry = {t for t, r in tried.items() if r.status == "unreachable" and r.attempts < MAX_ATTEMPTS}
     headers = {"User-Agent": fetch.user_agent}
     with httpx.Client(headers=headers, timeout=fetch.timeout, follow_redirects=True) as client:
         constituents = fetch_constituents(client)
@@ -418,10 +449,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.only:  # these, even if done before
             todo = [c for c in constituents if c.ticker in set(args.only)]
         else:
-            todo = [c for c in constituents if c.ticker not in done]
+            todo = [c for c in constituents if c.ticker not in tried]  # new ones first
+            todo += [c for c in constituents if c.ticker in retry]
         for company in todo[: args.limit]:
             site = by_title.get(_title(company.article)) or sites.get(company.ticker)
             result = survey_company(company, site, client, args.delay)
+            result.attempts = (tried[company.ticker].attempts if company.ticker in tried else 0) + 1
             rows = [r.ticker for r in results]
             if company.ticker in rows:
                 results[rows.index(company.ticker)] = result
