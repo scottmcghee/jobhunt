@@ -41,11 +41,11 @@ Respond with ONLY a JSON object:
 }"""
 
 
-def build_user_prompt(job: Job, profile: str, kit: Kit) -> str:
+def build_user_prompt(job: Job, profile: str, kit: Kit, body_chars: int = 12000) -> str:
     module_list = "\n".join(
         f"- {m.id}: {m.title} (use when: {', '.join(m.use_when)})" for m in kit.modules.values()
     )
-    body = job.body[:12000]  # keep prompt bounded; postings are rarely longer
+    body = job.body[:body_chars]  # keep prompt bounded; postings are rarely longer
     remote = job.remote if job.remote is not None else "unknown"
     return f"""# CANDIDATE PROFILE
 {profile}
@@ -63,8 +63,16 @@ URL: {job.url}
 """
 
 
-def score_job(job: Job, profile: str, kit: Kit, complete: Completer) -> ScoredJob:
-    raw = complete(SYSTEM, build_user_prompt(job, profile, kit), 1600)
+def score_job(
+    job: Job,
+    profile: str,
+    kit: Kit,
+    complete: Completer,
+    max_tokens: int = 1600,
+    body_chars: int = 12000,
+    model_label: str | None = None,  # backend:model; default: from settings now
+) -> ScoredJob:
+    raw = complete(SYSTEM, build_user_prompt(job, profile, kit, body_chars), max_tokens)
     data = extract_json(raw)
     # Only allow module ids that actually exist in the kit.
     mods = [m for m in data.get("suggested_modules", []) if m in kit.modules][:2]
@@ -74,6 +82,6 @@ def score_job(job: Job, profile: str, kit: Kit, complete: Completer) -> ScoredJo
         strengths=[str(s) for s in data.get("strengths", [])],
         gaps=[str(g) for g in data.get("gaps", [])],
         suggested_modules=mods,
-        model=f"{backend_name()}:{model_name()}",
+        model=model_label or f"{backend_name()}:{model_name()}",
     )
     return ScoredJob(job=job, score=score)

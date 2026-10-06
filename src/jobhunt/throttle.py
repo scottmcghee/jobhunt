@@ -71,8 +71,10 @@ class GroupLimiter:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] | None = None,
         stop: threading.Event | None = None,
+        cooldown: float | None = None,
     ):
         self.ceiling = ceiling
+        self._cooldown = COOLDOWN if cooldown is None else cooldown
         self.limit = float(min(start, ceiling))
         self.in_flight = 0
         self.pause_until = 0.0
@@ -111,7 +113,7 @@ class GroupLimiter:
                 self.throttles += 1
                 if now >= self._cooldown_until:
                     self.limit = max(1.0, self.limit / 2)
-                    self._cooldown_until = now + COOLDOWN
+                    self._cooldown_until = now + self._cooldown
                 self.pause_until = max(self.pause_until, now + retry_after)
             elif not neutral:
                 self.limit = min(float(self.ceiling), self.limit + 1 / self.limit)
@@ -142,6 +144,9 @@ class ThrottledTransport(httpx.BaseTransport):
         jitter: Callable[[], float] = lambda: random.uniform(0, 0.5),
         max_in_flight: int | None = None,
         limits: httpx.Limits | None = None,
+        max_retries: int | None = None,
+        max_retry_after: float | None = None,
+        cooldown: float | None = None,
     ):
         if inner is None:
             proxies = urllib.request.getproxies()
@@ -153,6 +158,10 @@ class ThrottledTransport(httpx.BaseTransport):
         self._inner = inner
         self._start, self._ceiling = start, ceiling
         self._clock, self._sleep, self._jitter = clock, sleep, jitter
+        # None: the module defaults, read now (settings.py passes the configured values)
+        self._max_retries = MAX_RETRIES if max_retries is None else max_retries
+        self._max_retry_after = MAX_RETRY_AFTER if max_retry_after is None else max_retry_after
+        self._cooldown = cooldown
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -168,6 +177,7 @@ class ThrottledTransport(httpx.BaseTransport):
                     clock=self._clock,
                     sleep=self._sleep,
                     stop=self._stop,
+                    cooldown=self._cooldown,
                 )
             return self._limiters[group]
 
@@ -204,10 +214,10 @@ class ThrottledTransport(httpx.BaseTransport):
                 limiter.release(neutral=True)
                 raise
             if throttled:
-                if delay is not None and delay > MAX_RETRY_AFTER:
-                    limiter.release(throttled=True, retry_after=MAX_RETRY_AFTER)
+                if delay is not None and delay > self._max_retry_after:
+                    limiter.release(throttled=True, retry_after=self._max_retry_after)
                     return response
-                if retries == MAX_RETRIES:
+                if retries == self._max_retries:
                     limiter.release(throttled=True)
                     return response
                 if delay is None:

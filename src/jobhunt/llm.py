@@ -28,6 +28,8 @@ import subprocess
 from collections.abc import Callable
 from typing import Any
 
+from jobhunt import settings
+
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -43,16 +45,24 @@ _DEFAULT_MODELS = {
 Completer = Callable[[str, str, int], str]
 
 
-def model_name() -> str:
+def _llm() -> settings.LLMSettings:
+    """llm.* settings: config/settings.yaml, then JOBHUNT_LLM_* (or JOBHUNT_MODEL/_BACKEND).
+
+    Only for callers that pass none: the CLI loads settings once per run and passes them down.
+    """
+    return settings.load().llm
+
+
+def model_name(s: settings.LLMSettings | None = None) -> str:
     """The model the current backend will call; recorded with every score and letter."""
-    default = _DEFAULT_MODELS.get(backend_name(), DEFAULT_MODEL)
-    return os.environ.get("JOBHUNT_MODEL", default)
+    s = s or _llm()
+    return s.model or _DEFAULT_MODELS.get(backend_name(s), DEFAULT_MODEL)
 
 
-def backend_name() -> str:
-    explicit = os.environ.get("JOBHUNT_BACKEND")
-    if explicit:
-        return explicit
+def backend_name(s: settings.LLMSettings | None = None) -> str:
+    s = s or _llm()
+    if s.backend:
+        return s.backend
     if os.environ.get("ANTHROPIC_API_KEY"):
         return "anthropic"
     if shutil.which("claude"):
@@ -60,14 +70,15 @@ def backend_name() -> str:
     return "anthropic"  # will fail with a clear SDK error about the missing key
 
 
-def make_completer() -> Completer:
-    name = backend_name()
+def make_completer(s: settings.LLMSettings | None = None) -> Completer:
+    s = s or _llm()
+    name = backend_name(s)
     if name == "anthropic":
-        return anthropic_completer()
+        return anthropic_completer(llm_settings=s)
     if name == "claude-code":
-        return claude_code_completer()
+        return claude_code_completer(llm_settings=s)
     if name == "bedrock":
-        return bedrock_completer()
+        return bedrock_completer(llm_settings=s)
     raise ValueError(
         f"unknown JOBHUNT_BACKEND {name!r}; use 'anthropic', 'claude-code', or 'bedrock'"
     )
@@ -107,13 +118,15 @@ def _fell_back(msg: Any) -> bool:
     return any(getattr(i, "type", None) == "fallback_message" for i in iterations)
 
 
-def anthropic_completer(model: str | None = None, client: Any = None) -> Completer:
+def anthropic_completer(
+    model: str | None = None, client: Any = None, llm_settings: settings.LLMSettings | None = None
+) -> Completer:
     """Build a completer backed by the Anthropic SDK. Imported lazily; ``client`` is injectable."""
     if client is None:
         import anthropic  # local import so tests never need the key
 
         client = anthropic.Anthropic()
-    use_model = model or os.environ.get("JOBHUNT_MODEL", DEFAULT_MODEL)
+    use_model = model or (llm_settings or _llm()).model or DEFAULT_MODEL
     thinking = _thinking_off(use_model)
     fallback = use_model.startswith(_FALLBACK_MODELS)
 
@@ -156,7 +169,9 @@ def _check_bedrock_auth() -> None:
         )
 
 
-def bedrock_completer(model: str | None = None, client: Any = None) -> Completer:
+def bedrock_completer(
+    model: str | None = None, client: Any = None, llm_settings: settings.LLMSettings | None = None
+) -> Completer:
     """Build a completer on Claude in Amazon Bedrock (the Messages-API endpoint).
 
     The SDK reads ``AWS_REGION`` and either ``AWS_BEARER_TOKEN_BEDROCK`` (a Bedrock API key) or the
@@ -168,7 +183,7 @@ def bedrock_completer(model: str | None = None, client: Any = None) -> Completer
 
         _check_bedrock_auth()
         client = anthropic.AnthropicBedrockMantle()
-    use_model = model or os.environ.get("JOBHUNT_MODEL", DEFAULT_BEDROCK_MODEL)
+    use_model = model or (llm_settings or _llm()).model or DEFAULT_BEDROCK_MODEL
     thinking = _thinking_off(use_model)
 
     def complete(system: str, user: str, max_tokens: int = 1500) -> str:
@@ -205,13 +220,15 @@ def claude_code_command(system: str, model: str) -> list[str]:
 def claude_code_completer(
     model: str | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    llm_settings: settings.LLMSettings | None = None,
 ) -> Completer:
     """Build a completer that shells out to the Claude Code CLI.
 
     The user prompt goes in on stdin; the response comes back as JSON on stdout with the
     assistant text in ``result``. ``runner`` is injectable so tests never spawn a process.
     """
-    use_model = model or os.environ.get("JOBHUNT_MODEL", DEFAULT_CLI_MODEL)
+    s = llm_settings or _llm()
+    use_model = model or s.model or DEFAULT_CLI_MODEL
 
     def complete(system: str, user: str, max_tokens: int = 1500) -> str:
         proc = runner(
@@ -219,7 +236,7 @@ def claude_code_completer(
             input=user,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=s.claude_code_timeout,
         )
         if proc.returncode != 0:
             raise RuntimeError(

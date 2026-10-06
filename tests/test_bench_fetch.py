@@ -102,3 +102,27 @@ def test_sample_of_no_boards_writes_nothing(tmp_path, capsys):
     assert bench.main(["sample", "--companies", str(companies), "-o", str(out)]) == 2
     assert "no boards" in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_run_leaves_unset_flags_to_the_settings(tmp_path, monkeypatch, capsys):
+    sample = tmp_path / "bench.yaml"
+    sample.write_text("companies: []\n")
+    seen = []
+    monkeypatch.setattr(bench.cli, "main", lambda argv: seen.append(argv) or 0)
+    monkeypatch.setenv("JOBHUNT_FETCH_WORKERS", "9")
+    assert bench.main(["run", "--companies", str(sample)]) == 0
+    assert "--workers" not in seen[0] and "--per-host" not in seen[0]  # fetch reads the settings
+    assert "--workers 9 --per-host 6:" in capsys.readouterr().err
+    assert bench.main(["run", "--companies", str(sample), "--per-host", "2"]) == 0
+    assert seen[1][-2:] == ["--per-host", "2"]
+
+
+def test_run_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch, capsys):
+    sample = tmp_path / "bench.yaml"
+    sample.write_text("companies: []\n")
+    called = []
+    monkeypatch.setattr(bench.cli, "main", lambda argv: called.append(argv) or 0)
+    monkeypatch.setenv("JOBHUNT_FETCH_WORKERS", "lots")
+    assert bench.main(["run", "--companies", str(sample)]) == 2
+    assert "JOBHUNT_FETCH_WORKERS" in capsys.readouterr().err
+    assert not called

@@ -19,7 +19,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from jobhunt import cli, config, slugs
+from jobhunt import cli, config, settings, slugs
 from jobhunt.schema import Company
 from jobhunt.sources import rate_group
 
@@ -65,8 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("-o", "--out", type=Path, default=DEFAULT_SAMPLE)
     r = sub.add_parser("run", help="time a dry-run fetch of the sample")
     r.add_argument("--companies", type=Path, default=DEFAULT_SAMPLE)
-    r.add_argument("--workers", default="32")
-    r.add_argument("--per-host", default="6")
+    r.add_argument("--workers", help="default: fetch.workers from settings")
+    r.add_argument("--per-host", help="default: fetch.per_host from settings")
     args = parser.parse_args(argv)
 
     if args.cmd == "sample":
@@ -87,12 +87,22 @@ def main(argv: list[str] | None = None) -> int:
     if not args.companies.exists():
         print(f"no sample at {args.companies}; run `bench_fetch.py sample` first", file=sys.stderr)
         return 2
+    try:
+        fetch = settings.load().fetch  # what fetch itself will use for any flag not given here
+    except settings.SettingsError as e:
+        print(e, file=sys.stderr)
+        return 2
+    flags = []
+    if args.workers:
+        flags += ["--workers", args.workers]
+    if args.per_host:
+        flags += ["--per-host", args.per_host]
     start = time.monotonic()
-    rc = cli.main(["-v", "--companies", str(args.companies), "fetch", "--dry-run",
-                   "--workers", args.workers, "--per-host", args.per_host])
+    rc = cli.main(["-v", "--companies", str(args.companies), "fetch", "--dry-run", *flags])
     elapsed = time.monotonic() - start
     if rc in (0, 130):  # finished, or stopped with Ctrl-C: the time still means something
-        flags = f"--workers {args.workers} --per-host {args.per_host}"
+        workers, per_host = args.workers or fetch.workers, args.per_host or fetch.per_host
+        flags = f"--workers {workers} --per-host {per_host}"
         print(f"\n{flags}: {elapsed:.0f} s", file=sys.stderr)
     return rc
 

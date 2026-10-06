@@ -295,7 +295,7 @@ def _index_with(tmp_path, *urls):
 
 @respx.mock
 def test_main_check_drops_dead_boards(tmp_path, monkeypatch, fixture_json):
-    monkeypatch.setattr(slugs, "_client", httpx.Client)
+    monkeypatch.setattr(slugs, "_client", lambda fetch: httpx.Client())
     respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
     respx.get(GH.format("gone")).mock(return_value=httpx.Response(404))
     index = _index_with(tmp_path, "https://boards.greenhouse.io/live", "https://boards.greenhouse.io/gone")
@@ -331,3 +331,51 @@ def test_check_keeps_rate_limited_boards(caplog):
     with httpx.Client() as client:
         assert slugs.check([board], client) == [board]
     assert "busy: kept, could not check (HTTP 429)" in caplog.text
+
+
+def test_check_workers_and_client_come_from_settings(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "2")
+    monkeypatch.setenv("JOBHUNT_FETCH_TIMEOUT", "7")
+    monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
+    with slugs._client() as client:
+        assert client.timeout.read == 7 and client.headers["User-Agent"] == "test-agent/1"
+    assert slugs.check_workers() == 2
+
+
+def test_main_check_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "lots")
+    out = tmp_path / "out.yaml"
+    assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(out), "--check"]) == 2
+    assert "JOBHUNT_SLUGS_CHECK_WORKERS" in caplog.text
+    assert not out.exists()
+
+
+def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
+    monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
+    seen = {}
+
+    def client(fetch):
+        seen["agent"] = fetch.user_agent
+        return httpx.Client()
+
+    def check(found, client, workers):
+        seen["workers"] = workers
+        return found
+
+    monkeypatch.setattr(slugs, "_client", client)
+    monkeypatch.setattr(slugs, "check", check)
+    monkeypatch.setattr(slugs, "check_workers", lambda: pytest.fail("settings loaded again"))
+    assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(tmp_path / "o"), "--check"]) == 0
+    assert seen == {"agent": "test-agent/1", "workers": 3}
+
+
+def test_check_pool_size_comes_from_the_argument_or_settings(monkeypatch):
+    sizes = []
+    real = slugs.ThreadPoolExecutor
+    monkeypatch.setattr(slugs, "ThreadPoolExecutor", lambda n: sizes.append(n) or real(n))
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
+    with httpx.Client() as client:
+        slugs.check([], client, workers=2)
+        slugs.check([], client)
+    assert sizes == [2, 3]

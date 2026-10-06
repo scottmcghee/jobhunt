@@ -247,3 +247,67 @@ def test_no_fallback_log_when_the_fallback_model_declines_too(caplog):
     with pytest.raises(ValueError, match="cyber"):
         llm.anthropic_completer(client=client)("SYS", "USER", 100)
     assert "answered by fallback" not in caplog.text
+
+
+# ------------------------------------------------------------------ settings
+
+
+def test_backend_and_model_can_come_from_the_settings_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("JOBHUNT_BACKEND", raising=False)
+    monkeypatch.delenv("JOBHUNT_MODEL", raising=False)
+    (tmp_path / "settings.yaml").write_text("llm:\n  backend: claude-code\n  model: opus\n")
+    monkeypatch.setattr(llm.settings.config, "DEFAULT_CONFIG_DIR", tmp_path)
+    assert llm.backend_name() == "claude-code"
+    assert llm.model_name() == "opus"
+
+
+def test_the_long_env_names_work_for_backend_and_model(monkeypatch):
+    monkeypatch.delenv("JOBHUNT_MODEL", raising=False)
+    monkeypatch.setenv("JOBHUNT_LLM_BACKEND", "anthropic")
+    monkeypatch.setenv("JOBHUNT_LLM_MODEL", "claude-opus-5-5")
+    assert llm.backend_name() == "anthropic"
+    assert llm.model_name() == "claude-opus-5-5"
+    client = _fake_client()
+    llm.anthropic_completer(client=client)("SYS", "USER", 10)
+    assert client.messages.calls[0]["model"] == "claude-opus-5-5"
+
+
+def test_claude_code_timeout_comes_from_settings(monkeypatch):
+    monkeypatch.setenv("JOBHUNT_LLM_CLAUDE_CODE_TIMEOUT", "42")
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["timeout"] = kw["timeout"]
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"result": "ok", "is_error": False}), stderr="")
+
+    llm.claude_code_completer(runner=fake_run)("SYS", "USER", 10)
+    assert seen["timeout"] == 42
+
+
+def test_settings_passed_in_are_used_without_reading_the_file(tmp_path, monkeypatch):
+    # One CLI run loads settings once; an edit (or a typo) in the file mid-run changes nothing.
+    (tmp_path / "settings.yaml").write_text("llm:\n  model: [oops\n")
+    monkeypatch.setattr(llm.settings.config, "DEFAULT_CONFIG_DIR", tmp_path)
+    s = llm.settings.LLMSettings(backend="claude-code", model="opus", claude_code_timeout=42)
+    assert (llm.backend_name(s), llm.model_name(s)) == ("claude-code", "opus")
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen.update(model=argv[argv.index("--model") + 1], timeout=kw["timeout"])
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"result": "ok", "is_error": False}), stderr="")
+
+    llm.claude_code_completer(runner=fake_run, llm_settings=s)("SYS", "USER", 10)
+    assert seen == {"model": "opus", "timeout": 42}
+    for make in (llm.anthropic_completer, llm.bedrock_completer):
+        client = _fake_client()
+        make(client=client, llm_settings=s)("SYS", "USER", 10)
+        assert client.messages.calls[0]["model"] == "opus"
+    monkeypatch.setattr(llm, "claude_code_completer", lambda llm_settings: llm_settings)
+    assert llm.make_completer(s) is s
+
+
+def test_make_completer_passes_its_settings_to_every_backend(monkeypatch):
+    for backend, factory in (("anthropic", "anthropic_completer"), ("bedrock", "bedrock_completer")):
+        s = llm.settings.LLMSettings(backend=backend, model="x")
+        monkeypatch.setattr(llm, factory, lambda llm_settings: llm_settings)
+        assert llm.make_completer(s) is s

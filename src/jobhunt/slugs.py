@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import httpx
 import yaml
 
-from jobhunt import config
+from jobhunt import config, settings
 from jobhunt.schema import ATSName, Company
 from jobhunt.sources import fetch_company
 
@@ -36,7 +36,6 @@ log = logging.getLogger("jobhunt.slugs")
 
 DEFAULT_INDEX = Path("data/commoncrawl.txt")
 DEFAULT_OUT = Path("data/companies.generated.yaml")
-CHECK_WORKERS = 4
 
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
 _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
@@ -168,12 +167,18 @@ def read_urls(path: Path) -> Iterator[str]:
                 yield _trim(url)
 
 
-def _client() -> httpx.Client:
+def _client(fetch: settings.FetchSettings | None = None) -> httpx.Client:
+    fetch = fetch or settings.load().fetch
     return httpx.Client(
-        timeout=20.0,
-        headers={"User-Agent": "jobhunt/0.1 (+personal job search tool)"},
+        timeout=fetch.timeout,
+        headers={"User-Agent": fetch.user_agent},
         follow_redirects=True,
     )
+
+
+def check_workers() -> int:
+    """Threads for --check (slugs.check_workers / JOBHUNT_SLUGS_CHECK_WORKERS)."""
+    return settings.load().slugs.check_workers
 
 
 def _has_jobs(company: Company, client: httpx.Client) -> bool:
@@ -195,9 +200,11 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
     return bool(jobs)
 
 
-def check(companies: list[Company], client: httpx.Client) -> list[Company]:
+def check(
+    companies: list[Company], client: httpx.Client, workers: int | None = None
+) -> list[Company]:
     """The boards that have open postings, in their original order."""
-    with ThreadPoolExecutor(CHECK_WORKERS) as pool:
+    with ThreadPoolExecutor(workers or check_workers()) as pool:
         keep = list(pool.map(lambda c: _has_jobs(c, client), companies))
     return [c for c, k in zip(companies, keep, strict=True) if k]
 
@@ -219,8 +226,13 @@ def main(argv: list[str] | None = None) -> int:
     known = config.load_companies(args.companies)
     found = discover((url for p in args.index for url in read_urls(p)), known)
     if args.check:
-        with _client() as client:
-            checked = check(found, client)
+        try:
+            s = settings.load()
+        except settings.SettingsError as e:
+            log.error("%s", e)
+            return 2
+        with _client(s.fetch) as client:
+            checked = check(found, client, s.slugs.check_workers)
         log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
         found = checked
     args.out.write_text(render(found))
