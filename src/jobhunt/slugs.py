@@ -246,7 +246,8 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
     except httpx.HTTPError as e:
         log.warning("%s: kept, could not check (%s)", company.key, e)
         return True
-    except json.JSONDecodeError as e:  # a 200 that isn't the API, e.g. a gateway page
+    # a 200 that isn't the API, e.g. a gateway page (not UTF-8 fails before JSON parsing)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         log.warning("%s: kept, could not check (not JSON: %s)", company.key, e)
         return True
     except ValueError as e:  # the adapters' signal for data they can't read

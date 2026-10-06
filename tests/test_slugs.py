@@ -334,6 +334,21 @@ def test_check_keeps_a_board_that_answers_with_a_page_that_is_not_json(caplog):
 
 
 @respx.mock
+def test_check_keeps_a_board_that_answers_with_a_page_that_is_neither_json_nor_utf8(caplog):
+    # httpx's .json() raises UnicodeDecodeError here, not JSONDecodeError
+    page = "<html>Passerelle indisponible - réessayez</html>"
+    respx.get(GH.format("latin")).mock(
+        return_value=httpx.Response(
+            200, content=page.encode("latin-1"), headers={"content-type": "text/html; charset=iso-8859-1"}
+        )
+    )
+    boards = [Company(name="latin", ats="greenhouse", slug="latin")]
+    with httpx.Client() as client:
+        assert slugs.check(boards, client, workers=1) == boards
+    assert "latin: kept, could not check (not JSON" in caplog.text
+
+
+@respx.mock
 def test_check_keeps_boards_it_could_not_reach(caplog):
     respx.get(GH.format("flaky")).mock(return_value=httpx.Response(503))
     respx.get(GH.format("slow")).mock(side_effect=httpx.ConnectTimeout("timed out"))
