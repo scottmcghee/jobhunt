@@ -48,7 +48,9 @@ class LocationRules(BaseModel):
     onsite_accept_any: list[str] = Field(default_factory=list)
     # When true (and onsite_accept_any is set), a role whose remote status is unknown is checked
     # like an on-site one if neither its location nor its text mentions remote work, unless its
-    # whole location is one of country_wide_any (e.g. just "United States"). Off by default.
+    # whole location is one of country_wide_any (e.g. just "United States"). With allow_remote
+    # false the rule still applies, but mentioning remote work no longer exempts a role. Off by
+    # default.
     unknown_remote_is_onsite: bool = False
     country_wide_any: list[str] = Field(default_factory=list)
 

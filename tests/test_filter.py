@@ -196,9 +196,12 @@ def test_unknown_remote_inside_the_onsite_region_passes(prefs):
         ("New York, NY, United States", "This role is fully remote within the US."),
         ("New York, NY, United States", "x" * 5000 + " Remote candidates welcome."),  # past 2,000
         ("New York, NY, United States", "You can work from home."),
+        ("New York, NY, United States", "You may work remotely."),
+        ("New York, NY, United States", "This job can be performed remotely."),
         ("New York, NY, United States (Remote)", ""),
         ("AMER - United States - Washington - Offsite/Home", ""),
         ("United States - Home Based", ""),
+        ("Texas, United States of America (Virtual)", ""),
     ],
 )
 def test_unknown_remote_that_mentions_remote_anywhere_passes(prefs, location, body):
@@ -220,6 +223,17 @@ def test_a_country_inside_a_longer_location_is_not_country_wide(prefs):
 
 def test_home_counts_as_remote_only_in_the_location(prefs):
     body = "platform. Our home is New York, and our offsite is in June."
+    job = _job("Director of Platform Engineering", "New York, NY, United States", body=body)
+    assert not jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+def test_unknown_remote_with_remote_in_the_title_passes(prefs):
+    job = _job("Director of Platform Engineering (Remote)", "New York, NY, United States")
+    assert jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+def test_virtual_counts_as_remote_only_in_the_location(prefs):
+    body = "platform. You will run virtual machines at scale."
     job = _job("Director of Platform Engineering", "New York, NY, United States", body=body)
     assert not jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
 

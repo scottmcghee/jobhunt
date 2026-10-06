@@ -65,9 +65,10 @@ def check_domain(job: Job, prefs: Preferences) -> str | None:
 
 
 # Words that say a posting can be done remotely, for roles whose remote flag is unknown. The
-# location ones are too common in a body ("our home", "team offsites") to count there.
-REMOTE_CUES = ["remote", "work from home", "work-from-home", "telecommut*"]
-REMOTE_LOCATION_CUES = ["home", "home based", "home-based", "offsite"]
+# location ones are too common in a body ("our home", "team offsites", "virtual machines") to
+# count there.
+REMOTE_CUES = ["remote*", "work from home", "work-from-home", "telecommut*"]
+REMOTE_LOCATION_CUES = ["home", "home based", "home-based", "offsite", "virtual"]
 
 
 def _probably_onsite(job: Job, prefs: Preferences) -> bool:
@@ -76,7 +77,7 @@ def _probably_onsite(job: Job, prefs: Preferences) -> bool:
     if job.remote is not None or not rules.unknown_remote_is_onsite:
         return False
     if rules.allow_remote and (
-        _any_in(REMOTE_CUES, f"{job.location}\n{job.body}")
+        _any_in(REMOTE_CUES, f"{job.title}\n{job.location}\n{job.body}")
         or _any_in(REMOTE_LOCATION_CUES, job.location)
     ):
         return False
