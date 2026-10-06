@@ -3,8 +3,9 @@
 Every request goes through ``ThrottledTransport``. It finds the request's rate-limit group
 (``sources.request_group``: a Workday datacenter or an API host) and:
 
-- waits for a free slot in that group's ``GroupLimiter``, out any pause a 429 set, and, for a
-  group with a rate cap (``max_rate``), until the cap allows the next request to start;
+- waits for a free slot in that group's ``GroupLimiter`` and out any pause a 429 set; then, for a
+  group with a rate cap (``max_rate``), after taking a global slot (``max_in_flight``), until
+  the cap allows the next send, so requests that queued for a global slot don't go out together;
 - retries a 429, or a 503 that carries Retry-After, after Retry-After seconds or a 1/2/4 s
   backoff, up to ``MAX_RETRIES`` times (a Retry-After under a second, like Cloudflare's "0" on a
   rate-limit ban, counts as none, so it gets the backoff rather than instant retries); the last
@@ -24,8 +25,8 @@ were already in flight counts as one signal.
 The default inner transport also retries a failed connection once, at once (httpx's default
 client: never); the backoff above is for failures that outlast that, like a burst of DNS errors.
 
-``stop()`` (or ``close()``) ends the run: requests waiting for a slot or out a pause wake and
-raise ``Stopped``, and no new request is sent; one already sent finishes.
+``stop()`` (or ``close()``) ends the run: requests waiting for a slot, out a pause, or for the
+rate cap wake and raise ``Stopped``, and no new request is sent; one already sent finishes.
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ class GroupLimiter:
         rate: float | None = None,
     ):
         self.ceiling = ceiling
-        self.rate = rate  # most request starts per second; None: no cap
+        self.rate = rate  # most requests sent per second; None: no cap
         self._next_start = 0.0
         self._cooldown = COOLDOWN if cooldown is None else cooldown
         self.limit = float(min(start, ceiling))
@@ -112,24 +113,36 @@ class GroupLimiter:
         self._cond = threading.Condition()
 
     def acquire(self) -> None:
-        """Wait for a slot, out any pause, and for the rate cap; raises ``Stopped`` on ``stop``."""
+        """Wait for a slot and out any pause; raises ``Stopped`` on ``stop``."""
         while True:
             if self._stop.is_set():
                 raise Stopped
             with self._cond:
-                now = self._clock()
-                wait = max(self.pause_until, self._next_start) - now
+                wait = self.pause_until - self._clock()
                 if wait <= 0:
                     if self.in_flight < int(self.limit):
                         self.in_flight += 1
                         self.requests += 1
                         self.max_in_flight = max(self.max_in_flight, self.in_flight)
-                        if self.rate:  # spaced from this start, so idle time isn't a burst
-                            self._next_start = now + 1 / self.rate
                         return
                     self._cond.wait(0.05)
                     continue
             self._sleep(wait)  # outside the lock, so releases aren't blocked meanwhile
+
+    def space(self) -> None:
+        """Wait until the rate cap allows the next send; raises ``Stopped`` on ``stop``.
+
+        Called just before the send, so the gap holds between actual sends.
+        """
+        if self.rate:
+            with self._cond:
+                now = self._clock()
+                start = max(now, self._next_start)  # from now when idle, so idle isn't a burst
+                self._next_start = start + 1 / self.rate
+            if start > now:
+                self._sleep(start - now)  # outside the lock, so others can reserve meanwhile
+        if self._stop.is_set():
+            raise Stopped
 
     def release(self, throttled: bool = False, retry_after: float = 0.0, neutral: bool = False):
         """Free a slot. A success grows the limit, a throttle shrinks it, ``neutral`` neither."""
@@ -194,7 +207,7 @@ class ThrottledTransport(httpx.BaseTransport):
         self._transient_retries = (
             TRANSIENT_RETRIES if transient_retries is None else transient_retries
         )
-        self._max_rate = dict(max_rate or {})  # rate group -> most request starts per second
+        self._max_rate = dict(max_rate or {})  # rate group -> most requests sent per second
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -237,10 +250,12 @@ class ThrottledTransport(httpx.BaseTransport):
             response = None
             try:
                 if self._slots is None:
+                    limiter.space()
                     response = self._send(request)
                     response.read()  # a body that stalls or drops fails here, so it is retried
                 else:
                     with self._slots:
+                        limiter.space()  # after the global slot, so queued requests don't bunch
                         response = self._send(request)
                         response.read()
                 throttled = _throttled(response)

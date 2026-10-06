@@ -176,7 +176,19 @@ def test_max_rate_from_the_file_and_from_json_in_the_environment(tmp_path):
     assert settings.load(p, environ={}).fetch.max_rate == {}  # no caps at all
 
 
-@pytest.mark.parametrize("value", ["{\"workable\": 0}", "{\"workable\": -1}", "fast", "[2]"])
+@pytest.mark.parametrize(
+    "value",
+    ["{\"workable\": 0}", "{\"workable\": -1}", "fast", "[2]",
+     "{\"workable\": NaN}", "{\"workable\": Infinity}"],
+)
 def test_a_bad_max_rate_names_the_variable(tmp_path, value):
     with pytest.raises(settings.SettingsError, match="JOBHUNT_FETCH_MAX_RATE"):
         settings.load(tmp_path / "nope.yaml", environ={"JOBHUNT_FETCH_MAX_RATE": value})
+
+
+def test_a_nan_max_rate_in_the_file_is_rejected(tmp_path):
+    # NaN would pass a "<= 0" check and silently turn the cap off
+    p = tmp_path / "settings.yaml"
+    p.write_text("fetch:\n  max_rate:\n    workable: .nan\n")
+    with pytest.raises(settings.SettingsError, match="fetch.max_rate"):
+        settings.load(p, environ={})

@@ -67,12 +67,26 @@ def test_a_rate_spaces_request_starts():
     clock = FakeClock()
     lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
     for _ in range(3):
-        lim.acquire()  # slots are free; only the rate holds them back
+        lim.acquire()  # slots are free, and the gap isn't taken here
+    assert clock.slept == []
+    for _ in range(3):
+        lim.space()  # only the rate holds them back
     assert clock.slept == [0.5, 0.5]
     clock.now += 10  # idle time isn't banked as a burst
-    lim.acquire()
-    lim.acquire()
+    lim.space()
+    lim.space()
     assert clock.slept == [0.5, 0.5, 0.5]
+
+
+def test_a_stop_while_spacing_raises_stopped():
+    import threading
+
+    stop = threading.Event()
+    lim = throttle.GroupLimiter(rate=0.01, stop=stop)  # a 100 s gap
+    lim.space()
+    stop.set()
+    with pytest.raises(throttle.Stopped):
+        lim.space()
 
 
 def test_without_a_rate_requests_start_at_once():
@@ -512,6 +526,42 @@ def test_max_in_flight_caps_requests_across_groups():
         client.get("https://api.lever.co/v0/postings/acme")
         first.join()
     assert overlapped == [False]
+
+
+def test_max_rate_spaces_sends_while_the_global_cap_is_full():
+    # with every global slot taken, rate-capped requests used to queue there and then go out
+    # together; the gap is now taken after the global slot, just before the send
+    import threading
+    import time
+
+    lever_in = threading.Event()
+    sends: list[float] = []
+
+    class Inner(httpx.BaseTransport):
+        def handle_request(self, request):
+            if "lever" in request.url.host:
+                lever_in.set()
+                time.sleep(0.4)
+            else:
+                sends.append(time.monotonic())
+            return httpx.Response(200, request=request)
+
+    transport = throttle.ThrottledTransport(
+        inner=Inner(), start=6, ceiling=6, max_in_flight=1, max_rate={"workable": 10.0}
+    )
+    workable = "https://apply.workable.com/api/v1/widget/accounts/acme"
+    with httpx.Client(transport=transport) as client:
+        first = threading.Thread(target=client.get, args=("https://api.lever.co/v0/postings/acme",))
+        first.start()
+        assert lever_in.wait(5)
+        threads = [threading.Thread(target=client.get, args=(workable,)) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads + [first]:
+            t.join(5)
+    assert len(sends) == 4
+    gaps = [b - a for a, b in zip(sends, sends[1:], strict=False)]
+    assert min(gaps) >= 0.09, gaps
 
 
 def test_limits_size_the_connection_pool(monkeypatch):

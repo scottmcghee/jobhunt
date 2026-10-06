@@ -14,6 +14,7 @@ Search preferences (titles, locations, ...) are not settings; they live in prefe
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -56,8 +57,10 @@ class FetchSettings(_Section):
     # closed site) before it leaves companies.yaml. The name predates the Workday cases.
     prune_after_404s: int = Field(3, ge=1)
     transient_retries: int = Field(2, ge=0)  # retries on 500/502/504, connection errors, timeouts
-    # Most request starts per second, per rate group (an API host like "workable", or
-    # "workday:wd5"). Workable's Cloudflare bans an IP for a burst of about 50 requests in 10 s.
+    # Most requests sent per second, per rate group: the group names `fetch -v` stats print
+    # ("workable", "lever", "workday:wd5"), not hostnames; case-sensitive. Setting the map
+    # replaces it whole, so keep "workable" in it to keep that cap. Workable's Cloudflare bans
+    # an IP for a burst of about 50 requests in 10 s.
     max_rate: dict[str, float] = Field(default_factory=lambda: {"workable": 2.0})
 
     @field_validator("max_rate", mode="before")
@@ -74,8 +77,9 @@ class FetchSettings(_Section):
     @field_validator("max_rate")
     @classmethod
     def _positive(cls, value: dict[str, float]) -> dict[str, float]:
-        if bad := [group for group, rate in value.items() if rate <= 0]:
-            raise ValueError(f"rates must be above 0 (got {', '.join(bad)})")
+        # not "rate <= 0": NaN passes that and turns the cap off
+        if bad := [g for g, rate in value.items() if not (math.isfinite(rate) and rate > 0)]:
+            raise ValueError(f"rates must be finite and above 0 (got {', '.join(bad)})")
         return value
 
 
