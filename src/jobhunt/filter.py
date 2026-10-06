@@ -64,6 +64,34 @@ def check_domain(job: Job, prefs: Preferences) -> str | None:
     return None
 
 
+# Words that say a posting can be done remotely, for roles whose remote flag is unknown. The
+# location ones are too common in a body ("our home", "team offsites", "virtual machines") to
+# count there.
+REMOTE_CUES = [
+    "remote*",
+    "work from home",
+    "working from home",
+    "works from home",
+    "work-from-home",
+    "telecommut*",
+]
+REMOTE_LOCATION_CUES = ["home", "home based", "home-based", "offsite", "virtual"]
+
+
+def _probably_onsite(job: Job, prefs: Preferences) -> bool:
+    """Remote unknown, nothing mentions remote, and the location names more than a country."""
+    rules = prefs.location
+    if job.remote is not None or not rules.unknown_remote_is_onsite:
+        return False
+    if rules.allow_remote and (
+        _any_in(REMOTE_CUES, f"{job.title}\n{job.location}\n{job.body}")
+        or _any_in(REMOTE_LOCATION_CUES, job.location)
+    ):
+        return False
+    country_wide = {c.strip().lower() for c in rules.country_wide_any}
+    return job.location.strip().lower() not in country_wide
+
+
 def check_location(job: Job, prefs: Preferences) -> str | None:
     rules = prefs.location
     loc_text = f"{job.location} {job.title}".lower()
@@ -74,12 +102,15 @@ def check_location(job: Job, prefs: Preferences) -> str | None:
 
     if rules.allow_remote and job.remote:
         return None
-    if job.remote is False and rules.onsite_accept_any:
-        # Explicitly on-site or hybrid: this list replaces accept_any, so a broad term like
-        # "united states" isn't enough.
+    if rules.onsite_accept_any and (job.remote is False or _probably_onsite(job, prefs)):
+        # On-site or hybrid (or probably so): this list replaces accept_any, so a broad term
+        # like "united states" isn't enough.
         if not _any_in(rules.onsite_accept_any, loc_text):
             where = job.location or "unknown"
-            return f"on-site or hybrid role in '{where}', outside onsite_accept_any"
+            if job.remote is False:
+                return f"on-site or hybrid role in '{where}', outside onsite_accept_any"
+            why = "not mentioned" if rules.allow_remote else "remote roles not allowed"
+            return f"remote unknown and {why}; location '{where}' outside onsite_accept_any"
         return None
     if _any_in(rules.accept_any, loc_text):
         return None
