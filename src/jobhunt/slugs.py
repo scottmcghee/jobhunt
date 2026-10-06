@@ -149,10 +149,13 @@ def board_from_url(url: str) -> Company | None:
     host = (parts.hostname or "").lower()
     segments = [unquote(s) for s in parts.path.split("/") if s]
 
-    if m := _WORKDAY_HOST.fullmatch(host):
-        return _workday_board(m.group(1), m.group(2), segments)
-    if board := _workable_or_bamboohr(host, segments):
-        return board
+    try:  # a host the patterns allow but Company rejects (a label ending in "-") is no board
+        if m := _WORKDAY_HOST.fullmatch(host):
+            return _workday_board(m.group(1), m.group(2), segments)
+        if board := _workable_or_bamboohr(host, segments):
+            return board
+    except ValueError:
+        return None
 
     ats: ATSName
     if host == _GREENHOUSE_API or _GREENHOUSE_BOARD.fullmatch(host):
@@ -170,18 +173,26 @@ def board_from_url(url: str) -> Company | None:
     return Company(name=slug, ats=ats, slug=slug)
 
 
+def _dedupe_key(company: Company) -> str:
+    if company.ats == "oracle":
+        return f"oracle:{company.slug.partition('/')[0]}".lower()
+    return company.key.lower()
+
+
 def discover(urls: Iterable[str], known: Iterable[Company] = ()) -> list[Company]:
     """Unique boards found in ``urls``, minus ``known``, sorted by ATS then slug.
 
-    Slugs are compared case-insensitively; the first spelling seen is kept.
+    Slugs are compared case-insensitively; the first spelling seen is kept. Oracle boards are
+    compared by host alone: its search ignores the site, so every site on a host lists the same
+    postings, and the first site seen is kept.
     """
-    seen = {c.key.lower() for c in known}
+    seen = {_dedupe_key(c) for c in known}
     found: list[Company] = []
     for url in urls:
         board = board_from_url(url)
-        if board is None or board.key.lower() in seen:
+        if board is None or _dedupe_key(board) in seen:
             continue
-        seen.add(board.key.lower())
+        seen.add(_dedupe_key(board))
         found.append(board)
     return sorted(found, key=lambda c: (c.ats, c.slug.lower()))
 

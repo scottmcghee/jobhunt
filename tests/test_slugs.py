@@ -90,6 +90,10 @@ from jobhunt.schema import Company
         ("https://eightfold.ai/careers", None),  # Eightfold's own site
         ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/", None),
         ("https://eeho.fa.us2.oraclecloud.com/hcmUI/faces/AtkHomePageWelcome", None),  # the HCM app itself
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/job/11138", None),  # no site
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/errors/404", None),
+        ("https://ab-.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/1", None),  # not a valid host
+        ("https://ab-.eightfold.ai/careers", None),
         ("https://www.oracle.com/careers/", None),
         ("https://eeho.fa.us2.oraclecloud.com.evil.example/hcmUI/CandidateExperience/en/sites/CX_1", None),
         ("https://www.eightfold.ai/careers", None),
@@ -187,6 +191,21 @@ def test_discover_dedupes_ashby_case_insensitively():
 def test_discover_dedupes_smartrecruiters_case_insensitively():
     urls = ["https://jobs.smartrecruiters.com/ServiceNow/1-a", "https://careers.smartrecruiters.com/servicenow"]
     assert [c.slug for c in slugs.discover(urls)] == ["ServiceNow"]
+
+
+def test_discover_keeps_one_oracle_board_per_host():
+    # the search ignores the site, so a second site on a host would repeat the first one's postings
+    urls = [
+        "https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_45001/job/1",
+        "https://EEHO.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/jobsearch/job/2",
+        "https://ehzq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/GrantThorntonBermuda",
+    ]
+    assert [c.slug for c in slugs.discover(urls)] == [
+        "eeho.fa.us2.oraclecloud.com/CX_45001",
+        "ehzq.fa.us2.oraclecloud.com/GrantThorntonBermuda",
+    ]
+    known = [Company(name="eeho", ats="oracle", slug="Eeho.fa.us2.oraclecloud.com/CX_1")]
+    assert [c.slug for c in slugs.discover(urls[:2], known)] == []
 
 
 def test_render_matches_companies_yaml_style():

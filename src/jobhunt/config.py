@@ -5,8 +5,10 @@ config/ is personal and gitignored. config.example/ holds committed templates to
 
 from __future__ import annotations
 
+import logging
 import re
 import textwrap
+from collections import Counter
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +17,8 @@ import yaml
 from pydantic import BaseModel, Field
 
 from jobhunt.schema import Company
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 
@@ -88,7 +92,15 @@ _LIST_ITEM = re.compile(r"^( +)- ")
 def load_companies(path: Path | None = None) -> list[Company]:
     path = path or DEFAULT_CONFIG_DIR / "companies.yaml"
     raw = yaml.safe_load(_read(path)) or {}
-    return [Company.model_validate(c) for c in raw.get("companies", [])]
+    companies = [Company.model_validate(c) for c in raw.get("companies", [])]
+    hosts = Counter(c.slug.partition("/")[0].lower() for c in companies if c.ats == "oracle")
+    for host, n in hosts.items():
+        if n > 1:
+            log.warning(
+                "%s: %d oracle boards; the search ignores the site, so their postings would "
+                "repeat — keep one", host, n,
+            )
+    return companies
 
 
 def _entry_spans(lines: list[str]) -> list[tuple[int, int]]:

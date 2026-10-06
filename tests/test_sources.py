@@ -919,8 +919,8 @@ def test_oracle_searches_each_term_and_normalizes(oracle_company, fixture_json):
         ("ORA_ON_SITE", "Remote, US", "Director", False),  # the code wins over text
         ("ORA_HYBRID", "Austin, TX", "Director", False),
         (None, "Austin, TX", "Director (Remote)", True),
-        (None, "Austin, TX", "Director", None),
-        ("", "", "", None),
+        (None, "Austin, TX", "Director", False),  # Oracle's own facet counts blank as on-site
+        ("", "", "", False),
     ],
 )
 def test_oracle_remote(code, location, title, expected):
