@@ -373,6 +373,19 @@ def test_check_workers_and_client_come_from_settings(monkeypatch):
     assert slugs.check_workers() == 2
 
 
+def test_the_check_client_is_throttled_like_fetch(monkeypatch):
+    # --check once sent unthrottled bursts that got the IP banned by Workable's Cloudflare
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RATE", '{"workable": 1.5}')
+    monkeypatch.setenv("JOBHUNT_FETCH_PER_HOST", "3")
+    with slugs._client() as client:
+        transport = client._transport
+        assert isinstance(transport, slugs.throttle.ThrottledTransport)
+        assert transport.limiter("workable").rate == 1.5
+        assert transport.limiter("greenhouse").rate is None
+        assert transport.limiter("greenhouse").ceiling == 3
+        assert client.follow_redirects
+
+
 def test_main_check_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "lots")
     out = tmp_path / "out.yaml"

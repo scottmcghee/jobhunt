@@ -3,10 +3,13 @@
 Every request goes through ``ThrottledTransport``. It finds the request's rate-limit group
 (``sources.request_group``: a Workday datacenter or an API host) and:
 
-- waits for a free slot in that group's ``GroupLimiter``, and out any pause a 429 set;
+- waits for a free slot in that group's ``GroupLimiter``, out any pause a 429 set, and, for a
+  group with a rate cap (``max_rate``), until the cap allows the next request to start;
 - retries a 429, or a 503 that carries Retry-After, after Retry-After seconds or a 1/2/4 s
-  backoff, up to ``MAX_RETRIES`` times; the last response is then returned as is, so the
-  caller's ``raise_for_status`` handles it like any other error. A Retry-After over
+  backoff, up to ``MAX_RETRIES`` times (a Retry-After under a second, like Cloudflare's "0" on a
+  rate-limit ban, counts as none, so it gets the backoff rather than instant retries); the last
+  response is then returned as is, so the caller's ``raise_for_status`` handles it like any other
+  error. A Retry-After over
   ``MAX_RETRY_AFTER`` is not retried: the group pauses for the cap and the response is returned;
 - retries a transient failure (a 500, 502 or 504, a connection error, or a timeout, also while
   reading the body, which is read here for that reason) after a 1/2 s backoff, up to
@@ -34,10 +37,14 @@ import time
 import urllib.request
 from collections.abc import Callable
 from datetime import UTC
+from typing import TYPE_CHECKING
 
 import httpx
 
 from jobhunt.sources import request_group
+
+if TYPE_CHECKING:
+    from jobhunt.settings import FetchSettings
 
 MAX_RETRIES = 3
 MAX_RETRY_AFTER = 120.0  # seconds; a server asking for more gets a skipped board instead
@@ -86,8 +93,11 @@ class GroupLimiter:
         sleep: Callable[[float], None] | None = None,
         stop: threading.Event | None = None,
         cooldown: float | None = None,
+        rate: float | None = None,
     ):
         self.ceiling = ceiling
+        self.rate = rate  # most request starts per second; None: no cap
+        self._next_start = 0.0
         self._cooldown = COOLDOWN if cooldown is None else cooldown
         self.limit = float(min(start, ceiling))
         self.in_flight = 0
@@ -102,17 +112,20 @@ class GroupLimiter:
         self._cond = threading.Condition()
 
     def acquire(self) -> None:
-        """Wait for a slot and out any pause; raises ``Stopped`` once ``stop`` is set."""
+        """Wait for a slot, out any pause, and for the rate cap; raises ``Stopped`` on ``stop``."""
         while True:
             if self._stop.is_set():
                 raise Stopped
             with self._cond:
-                wait = self.pause_until - self._clock()
+                now = self._clock()
+                wait = max(self.pause_until, self._next_start) - now
                 if wait <= 0:
                     if self.in_flight < int(self.limit):
                         self.in_flight += 1
                         self.requests += 1
                         self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                        if self.rate:  # spaced from this start, so idle time isn't a burst
+                            self._next_start = now + 1 / self.rate
                         return
                     self._cond.wait(0.05)
                     continue
@@ -162,6 +175,7 @@ class ThrottledTransport(httpx.BaseTransport):
         max_retry_after: float | None = None,
         cooldown: float | None = None,
         transient_retries: int | None = None,
+        max_rate: dict[str, float] | None = None,
     ):
         if inner is None:
             proxies = urllib.request.getproxies()
@@ -180,6 +194,7 @@ class ThrottledTransport(httpx.BaseTransport):
         self._transient_retries = (
             TRANSIENT_RETRIES if transient_retries is None else transient_retries
         )
+        self._max_rate = dict(max_rate or {})  # rate group -> most request starts per second
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -196,6 +211,7 @@ class ThrottledTransport(httpx.BaseTransport):
                     sleep=self._sleep,
                     stop=self._stop,
                     cooldown=self._cooldown,
+                    rate=self._max_rate.get(group),
                 )
             return self._limiters[group]
 
@@ -230,6 +246,8 @@ class ThrottledTransport(httpx.BaseTransport):
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
                 delay = retry_after_seconds(retry_after)
+                if delay is not None and delay < 1:  # "Retry-After: 0" during a ban
+                    delay = None
             except TRANSIENT_ERRORS:
                 if response is not None:
                     response.close()
@@ -280,3 +298,22 @@ class ThrottledTransport(httpx.BaseTransport):
     def close(self) -> None:
         self.stop()
         self._inner.close()
+
+
+def from_settings(fetch: FetchSettings, workers: int, per_host: int) -> ThrottledTransport:
+    """The transport ``fetch`` and ``slugs --check`` use, tuned by the fetch settings.
+
+    ``workers`` caps requests in flight across all groups and sizes the connection pool to match.
+    """
+    pool = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
+    return ThrottledTransport(
+        start=fetch.start_per_host,
+        ceiling=per_host,
+        max_in_flight=workers,
+        limits=pool,
+        max_retries=fetch.max_retries,
+        max_retry_after=fetch.max_retry_after,
+        cooldown=fetch.cooldown,
+        transient_retries=fetch.transient_retries,
+        max_rate=fetch.max_rate,
+    )

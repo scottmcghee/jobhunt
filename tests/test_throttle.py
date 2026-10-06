@@ -63,6 +63,26 @@ def test_a_burst_of_throttles_halves_once_per_cooldown():
     assert lim.limit == 2
 
 
+def test_a_rate_spaces_request_starts():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
+    for _ in range(3):
+        lim.acquire()  # slots are free; only the rate holds them back
+    assert clock.slept == [0.5, 0.5]
+    clock.now += 10  # idle time isn't banked as a burst
+    lim.acquire()
+    lim.acquire()
+    assert clock.slept == [0.5, 0.5, 0.5]
+
+
+def test_without_a_rate_requests_start_at_once():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6)
+    for _ in range(3):
+        lim.acquire()
+    assert clock.slept == []
+
+
 def test_acquire_waits_out_a_pause():
     clock = FakeClock()
     lim = _limiter(clock, start=2, ceiling=6)
@@ -123,6 +143,36 @@ def test_429_without_retry_after_backs_off_exponentially_then_gives_up():
         assert client.get(URL).status_code == 429  # the caller's raise_for_status takes it from here
     assert route.call_count == 1 + throttle.MAX_RETRIES
     assert clock.slept == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+def test_a_429_with_retry_after_zero_backs_off_like_one_without():
+    # Cloudflare's rate-limit ban (error 1015) says "Retry-After: 0"; retrying at once only
+    # spends the retries inside the ban
+    clock = FakeClock()
+    route = respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "0"}))
+    with _client(clock) as client:
+        assert client.get(URL).status_code == 429
+    assert route.call_count == 1 + throttle.MAX_RETRIES
+    assert clock.slept == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+def test_max_rate_caps_one_group_and_leaves_the_others_alone():
+    clock = FakeClock()
+    other = "https://api.lever.co/v0/postings/acme"
+    respx.get(URL).mock(return_value=httpx.Response(200))
+    respx.get(other).mock(return_value=httpx.Response(200))
+    transport = throttle.ThrottledTransport(
+        start=6, clock=clock, sleep=clock.sleep, max_rate={"greenhouse": 2.0}
+    )
+    with httpx.Client(transport=transport) as client:
+        for _ in range(3):
+            client.get(other)
+        assert clock.slept == []
+        for _ in range(3):
+            client.get(URL)
+    assert clock.slept == [0.5, 0.5]
 
 
 @respx.mock

@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import httpx
 import yaml
 
-from jobhunt import config, settings
+from jobhunt import config, settings, throttle
 from jobhunt.schema import ATSName, Company
 from jobhunt.sources import fetch_company
 
@@ -203,8 +203,10 @@ def read_urls(path: Path) -> Iterator[str]:
 
 
 def _client(fetch: settings.FetchSettings | None = None) -> httpx.Client:
+    """A client throttled like fetch's: per-host limits, rate caps (Workable's ban), 429 retries."""
     fetch = fetch or settings.load().fetch
     return httpx.Client(
+        transport=throttle.from_settings(fetch, workers=fetch.workers, per_host=fetch.per_host),
         timeout=fetch.timeout,
         headers={"User-Agent": fetch.user_agent},
         follow_redirects=True,
