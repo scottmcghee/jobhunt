@@ -861,12 +861,16 @@ def test_eightfold_descriptions_go_through_the_pool(eightfold_company, fixture_j
     assert pool.used  # not a serial map
 
 
+# What an older-interface tenant answers on /api/pcsx (seen live).
+PCSX_OFF = {"message": "PCSX is not enabled for this user."}
+
+
 @respx.mock
 def test_eightfold_falls_back_to_the_older_api_when_pcsx_is_forbidden(eightfold_company, fixture_json):
     careers = respx.get(EF + "/careers").mock(
         return_value=httpx.Response(200, text=(FIXTURES / "eightfold_careers.html").read_text())
     )
-    pcsx = respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403, json={"message": "FORBIDDEN"}))
+    pcsx = respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403, json=PCSX_OFF))
     v2 = respx.get(EF + "/api/apply/v2/jobs").mock(
         return_value=httpx.Response(200, json=fixture_json("eightfold_v2_search.json"))
     )
@@ -885,7 +889,8 @@ def test_eightfold_falls_back_to_the_older_api_when_pcsx_is_forbidden(eightfold_
     assert [j.external_id for j in jobs] == ["800000000001", "800000000002"]
     first, second = jobs
     assert first.title == "Director, Platform Engineering"
-    assert first.url == "https://example.eightfold.ai/careers/job/800000000001"
+    # the canonical URL's path, on the board's host, without its query
+    assert first.url == "https://example.eightfold.ai/careers/job/800000000001/director-platform"
     assert first.location == "Seattle, WA, United States"
     assert first.remote is True
     assert first.posted_at == "2026-09-21T14:13:20+00:00"
@@ -897,7 +902,7 @@ def test_eightfold_falls_back_to_the_older_api_when_pcsx_is_forbidden(eightfold_
 @respx.mock
 def test_eightfold_the_older_api_gets_the_board_location(fixture_json):
     respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
-    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403))
+    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403, json=PCSX_OFF))
     v2 = respx.get(EF + "/api/apply/v2/jobs").mock(
         return_value=httpx.Response(200, json=fixture_json("eightfold_v2_search.json"))
     )
@@ -910,7 +915,7 @@ def test_eightfold_the_older_api_gets_the_board_location(fixture_json):
 @respx.mock
 def test_eightfold_pages_the_older_api_by_ten(eightfold_company):
     respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
-    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403))
+    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403, json=PCSX_OFF))
 
     def page(request):
         start = int(request.url.params["start"])
@@ -937,7 +942,7 @@ def test_eightfold_other_errors_dont_switch_apis(eightfold_company):
 @respx.mock
 def test_eightfold_a_403_from_both_apis_is_raised(eightfold_company):
     respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
-    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403))
+    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403, json=PCSX_OFF))
     respx.get(EF + "/api/apply/v2/jobs").mock(return_value=httpx.Response(403))
     with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError) as e:
         eightfold.fetch(eightfold_company, client, ["director"])
@@ -947,13 +952,39 @@ def test_eightfold_a_403_from_both_apis_is_raised(eightfold_company):
 @respx.mock
 def test_eightfold_older_api_failed_detail_keeps_job_without_body(eightfold_company, fixture_json, caplog):
     respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
-    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403))
+    respx.get(EF + "/api/pcsx/search").mock(return_value=httpx.Response(403, json=PCSX_OFF))
     respx.get(EF + "/api/apply/v2/jobs").mock(return_value=httpx.Response(200, json=fixture_json("eightfold_v2_search.json")))
     respx.get(EF + "/api/apply/v2/jobs/800000000001").mock(return_value=httpx.Response(500))
     with httpx.Client() as client:
         jobs = eightfold.fetch(eightfold_company, client, ["director"], wants_body=lambda j: j.external_id == "800000000001")
     assert len(jobs) == 2 and jobs[0].body == ""
     assert "eightfold example.eightfold.ai: no description for 800000000001" in caplog.text
+
+
+def test_eightfold_older_rows_fall_back_to_location_and_posting_name():
+    row = {"id": 7, "posting_name": "Director, Data", "location": "Austin, TX, United States"}
+    raw = eightfold._from_older(row)
+    job = eightfold.normalize(Company(name="X", ats="eightfold", slug="example.eightfold.ai"), raw)
+    assert job.title == "Director, Data" and job.location == "Austin, TX, United States"
+
+
+@pytest.mark.parametrize(
+    "blocked",
+    [
+        httpx.Response(403, html="<html><body>Access denied</body></html>"),
+        httpx.Response(403, json={"message": "Forbidden"}),
+        httpx.Response(403),
+    ],
+    ids=["html", "other-json", "empty"],
+)
+@respx.mock
+def test_eightfold_only_the_pcsx_not_enabled_403_switches_apis(eightfold_company, blocked):
+    respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
+    respx.get(EF + "/api/pcsx/search").mock(return_value=blocked)
+    v2 = respx.get(EF + "/api/apply/v2/jobs").mock(return_value=httpx.Response(200, json={"count": 0, "positions": []}))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError) as e:
+        eightfold.fetch(eightfold_company, client, ["director"])
+    assert e.value.response.status_code == 403 and v2.call_count == 0
 
 
 @pytest.mark.parametrize("slug", ["example.eightfold.ai/careers", "https://example.eightfold.ai", "", "a b"])

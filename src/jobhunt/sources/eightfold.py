@@ -7,8 +7,10 @@ allows /careers and /api/pcsx):
     GET https://{host}/api/pcsx/search?domain=...&query=...&start=N[&location=...]
     GET https://{host}/api/pcsx/position_details?position_id=...&domain=...
 
-Some tenants are still on Eightfold's older interface: there /api/pcsx answers 403 and the same
-data comes from the older API, which ``fetch`` switches to for the rest of the board's run:
+Some tenants are still on Eightfold's older interface: there /api/pcsx answers 403 with JSON
+``{"message": "PCSX is not enabled for this user."}`` and the same data comes from the older API,
+which ``fetch`` switches to for the rest of the board's run. Any other 403 (a WAF or rate-limit
+block, usually an HTML page) is raised as is:
 
     GET https://{host}/api/apply/v2/jobs?domain=...&query=...&start=N&num=10[&location=...]
     GET https://{host}/api/apply/v2/jobs/{id}?domain=...
@@ -92,8 +94,19 @@ def _careers_domain(company: Company, client: httpx.Client) -> str:
     raise ValueError(f"no Eightfold domain on https://{company.slug}/careers")
 
 
+def _pcsx_off(resp: httpx.Response) -> bool:
+    """Whether a response is an older-interface tenant's 403 for /api/pcsx, not a block."""
+    if resp.status_code != 403:
+        return False
+    try:
+        message = resp.json().get("message")
+    except (ValueError, AttributeError):  # not JSON, or not an object
+        return False
+    return isinstance(message, str) and "pcsx" in message.lower()
+
+
 class _Board:
-    """One board's API, for one run: the current one, or the older one once that answered 403."""
+    """One board's API, for one run: the current one, or the older one once PCSX said it is off."""
 
     def __init__(self, company: Company, client: httpx.Client, domain: str):
         self.company, self.client, self.domain = company, client, domain
@@ -106,7 +119,7 @@ class _Board:
             params["location"] = self.company.location
         if not self.older:
             resp = self.client.get(f"{self.base}/api/pcsx/search", params=params)
-            if resp.status_code != 403:
+            if not _pcsx_off(resp):
                 resp.raise_for_status()
                 data = resp.json().get("data") or {}
                 return data.get("positions") or [], int(data.get("count") or 0)
