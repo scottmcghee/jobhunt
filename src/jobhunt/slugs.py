@@ -64,6 +64,9 @@ _BAMBOOHR_HOST = re.compile(r"([a-z0-9-]+)\.bamboohr\.com")
 # <tenant>.eightfold.ai/careers/...; a company on its own host (Microsoft) can't be found this way.
 _EIGHTFOLD_HOST = re.compile(r"([a-z0-9-]+)\.eightfold\.ai")
 _EIGHTFOLD_OWN = {"www", "app", "community", "learn", "blog", "docs", "help", "status", "api"}
+# <host>.oraclecloud.com/hcmUI/CandidateExperience/<lang>/sites/<site>/...; one host, many sites
+_ORACLE_HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)*\.oraclecloud\.com")
+_ORACLE_SITE = re.compile(r"[A-Za-z0-9_-]+")
 _BAMBOOHR_OWN = {
     "www", "app", "api", "documentation", "help", "marketplace", "partners", "status", "newsroom"
 }
@@ -106,12 +109,24 @@ def _named(ats: ATSName, slug: str) -> Company | None:
     return Company(name=slug, ats=ats, slug=slug)
 
 
+def _oracle_board(host: str, segments: list[str]) -> Company | None:
+    """/hcmUI/CandidateExperience/<lang>/sites/<site>/... names the board host/site."""
+    if segments[:2] != ["hcmUI", "CandidateExperience"] or segments[3:4] != ["sites"]:
+        return None
+    site = segments[4] if len(segments) > 4 else ""
+    if not _ORACLE_SITE.fullmatch(site):
+        return None
+    return Company(name=f"{host.split('.')[0]}/{site}", ats="oracle", slug=f"{host}/{site}")
+
+
 def _workable_or_bamboohr(host: str, segments: list[str]) -> Company | None:
     first = segments[0].lower() if segments else ""
     if host == _WORKABLE_APPLY:
         return None if first in _NOT_WORKABLE_ACCOUNTS else _named("workable", first)
     if (m := _WORKABLE_ACCOUNT_HOST.fullmatch(host)) and m.group(1) not in _WORKABLE_OWN:
         return _named("workable", m.group(1)) if first in ("jobs", "j") else None
+    if _ORACLE_HOST.fullmatch(host):
+        return _oracle_board(host, segments)
     if (m := _EIGHTFOLD_HOST.fullmatch(host)) and m.group(1) not in _EIGHTFOLD_OWN:
         if first != "careers" or not _SLUG.fullmatch(m.group(1)):
             return None
@@ -134,10 +149,13 @@ def board_from_url(url: str) -> Company | None:
     host = (parts.hostname or "").lower()
     segments = [unquote(s) for s in parts.path.split("/") if s]
 
-    if m := _WORKDAY_HOST.fullmatch(host):
-        return _workday_board(m.group(1), m.group(2), segments)
-    if board := _workable_or_bamboohr(host, segments):
-        return board
+    try:  # a host the patterns allow but Company rejects (a label ending in "-") is no board
+        if m := _WORKDAY_HOST.fullmatch(host):
+            return _workday_board(m.group(1), m.group(2), segments)
+        if board := _workable_or_bamboohr(host, segments):
+            return board
+    except ValueError:
+        return None
 
     ats: ATSName
     if host == _GREENHOUSE_API or _GREENHOUSE_BOARD.fullmatch(host):
@@ -155,18 +173,26 @@ def board_from_url(url: str) -> Company | None:
     return Company(name=slug, ats=ats, slug=slug)
 
 
+def _dedupe_key(company: Company) -> str:
+    if company.ats == "oracle":
+        return f"oracle:{company.slug.partition('/')[0]}".lower()
+    return company.key.lower()
+
+
 def discover(urls: Iterable[str], known: Iterable[Company] = ()) -> list[Company]:
     """Unique boards found in ``urls``, minus ``known``, sorted by ATS then slug.
 
-    Slugs are compared case-insensitively; the first spelling seen is kept.
+    Slugs are compared case-insensitively; the first spelling seen is kept. Oracle boards are
+    compared by host alone: its search ignores the site, so every site on a host lists the same
+    postings, and the first site seen is kept.
     """
-    seen = {c.key.lower() for c in known}
+    seen = {_dedupe_key(c) for c in known}
     found: list[Company] = []
     for url in urls:
         board = board_from_url(url)
-        if board is None or board.key.lower() in seen:
+        if board is None or _dedupe_key(board) in seen:
             continue
-        seen.add(board.key.lower())
+        seen.add(_dedupe_key(board))
         found.append(board)
     return sorted(found, key=lambda c: (c.ats, c.slug.lower()))
 

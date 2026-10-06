@@ -20,6 +20,7 @@ from jobhunt.sources import (
     fetch_company,
     greenhouse,
     lever,
+    oracle,
     rate_group,
     request_group,
     smartrecruiters,
@@ -870,6 +871,153 @@ def test_location_is_only_for_search_sources():
         Company(name="x", ats="greenhouse", slug="x", location="United States")
 
 
+# ------------------------------------------------------------------ Oracle Recruiting Cloud (search; a platform)
+
+OR = "https://example.fa.us2.oraclecloud.com/hcmRestApi/resources/latest"
+
+
+def _finder(request):
+    """The finder's parameters as a dict: findReqs;siteNumber=CX_1,keyword=director,... ."""
+    name, _, rest = request.url.params["finder"].partition(";")
+    return name, dict(part.split("=", 1) for part in rest.split(","))
+
+
+@respx.mock
+def test_oracle_searches_each_term_and_normalizes(oracle_company, fixture_json):
+    listing = respx.get(OR + "/recruitingCEJobRequisitions").mock(
+        return_value=httpx.Response(200, json=fixture_json("oracle_requisitions.json"))
+    )
+    detail = respx.get(OR + "/recruitingCEJobRequisitionDetails").mock(
+        return_value=httpx.Response(200, json=fixture_json("oracle_requisition.json"))
+    )
+    with httpx.Client() as client:
+        jobs = oracle.fetch(oracle_company, client, ["director", "senior manager"], wants_body=lambda j: j.external_id == "300001")
+    finders = [_finder(call.request) for call in listing.calls]
+    assert [f[1]["keyword"] for f in finders] == ["director", "senior manager"]
+    assert all(f[0] == "findReqs" and f[1]["siteNumber"] == "CX_1" and f[1]["limit"] == "200" and f[1]["offset"] == "0" for f in finders)
+    assert [j.external_id for j in jobs] == ["300001", "300002", "300003"]  # deduped across terms
+    assert detail.call_count == 1
+    name, args = _finder(detail.calls.last.request)
+    assert name == "ById" and args == {"Id": '"300001"', "siteNumber": "CX_1"}
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("oracle", "ExampleCorp", "example.fa.us2.oraclecloud.com/CX_1")
+    assert first.url == "https://example.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/300001"
+    assert first.location == "Seattle, WA, United States; Bellevue, WA, United States"
+    assert first.remote is False  # hybrid
+    assert first.posted_at == "2026-09-21"
+    assert first.body.startswith("Lead our platform & developer experience teams.")
+    assert "Own reliability" in first.body and "10+ years leading" in first.body
+    assert "ExampleCorp builds things" not in first.body  # boilerplate about the company is left out
+    assert jobs[1].remote is True  # no code, but "Remote" in the location
+    assert jobs[2].remote is False and jobs[2].body == ""
+
+
+@pytest.mark.parametrize(
+    ("code", "location", "title", "expected"),
+    [
+        ("ORA_REMOTE", "Austin, TX", "Director", True),
+        ("ORA_ON_SITE", "Remote, US", "Director", False),  # the code wins over text
+        ("ORA_HYBRID", "Austin, TX", "Director", False),
+        (None, "Austin, TX", "Director (Remote)", True),
+        (None, "Austin, TX", "Director", None),  # blank is unknown: the location filter decides
+        ("", "", "", None),
+    ],
+)
+def test_oracle_remote(code, location, title, expected):
+    assert oracle._remote({"WorkplaceTypeCode": code, "Title": title}, location) is expected
+
+
+def test_oracle_a_blank_code_with_a_remote_body_passes_the_location_filter(oracle_company, prefs):
+    # Austin is outside onsite_accept_any, so only the remote body can let it through.
+    raw = {"Id": "1", "Title": "Director, Platform Engineering", "PrimaryLocation": "Austin, TX, United States", "WorkplaceTypeCode": None}
+    detail = {"ExternalDescriptionStr": "<p>Lead our cloud platform team. Position is remote.</p>"}
+    assert check_location(oracle.normalize(oracle_company, raw, detail), prefs) is None
+    assert check_location(oracle.normalize(oracle_company, raw, None), prefs) is not None
+
+
+@respx.mock
+def test_oracle_pages_by_200_until_the_total_is_in(oracle_company):
+    def page(request):
+        offset = int(_finder(request)[1]["offset"])
+        n = max(0, min(200, 450 - offset))
+        reqs = [{"Id": str(offset + i + 1), "Title": "Director", "PrimaryLocation": "X"} for i in range(n)]
+        return httpx.Response(200, json={"items": [{"TotalJobsCount": 450, "requisitionList": reqs}]})
+
+    route = respx.get(OR + "/recruitingCEJobRequisitions").mock(side_effect=page)
+    with httpx.Client() as client:
+        assert len(oracle.fetch(oracle_company, client, ["director"], wants_body=lambda j: False)) == 450
+        assert [_finder(c.request)[1]["offset"] for c in route.calls] == ["0", "200", "400"]
+        assert len(oracle.fetch(oracle_company, client, ["director"], max_pages=1, wants_body=lambda j: False)) == 200
+
+
+@respx.mock
+def test_oracle_a_broad_term_stops_at_the_cap_and_says_so(oracle_company, caplog):
+    def page(request):
+        offset = int(_finder(request)[1]["offset"])
+        reqs = [{"Id": str(offset + i + 1), "Title": "Manager", "PrimaryLocation": "X"} for i in range(200)]
+        return httpx.Response(200, json={"items": [{"TotalJobsCount": 5000, "requisitionList": reqs}]})
+
+    route = respx.get(OR + "/recruitingCEJobRequisitions").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = oracle.fetch(oracle_company, client, ["manager"], wants_body=lambda j: False)
+        assert len(jobs) == oracle.MAX_PER_TERM and route.call_count == oracle.MAX_PER_TERM // 200
+        assert "'manager' has 5000 hits; kept the first" in caplog.text
+        caplog.clear()
+        oracle.fetch(oracle_company, client, ["manager"], max_pages=1, wants_body=lambda j: False)
+    assert "kept the first" not in caplog.text
+
+
+@respx.mock
+def test_oracle_an_empty_page_ends_the_listing(oracle_company):
+    route = respx.get(OR + "/recruitingCEJobRequisitions").mock(
+        return_value=httpx.Response(200, json={"items": [{"TotalJobsCount": 900, "requisitionList": []}]})
+    )
+    with httpx.Client() as client:
+        assert oracle.fetch(oracle_company, client, ["director"]) == []
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_oracle_failed_detail_keeps_job_without_body(oracle_company, fixture_json, caplog):
+    respx.get(OR + "/recruitingCEJobRequisitions").mock(
+        return_value=httpx.Response(200, json=fixture_json("oracle_requisitions.json"))
+    )
+    respx.get(OR + "/recruitingCEJobRequisitionDetails").mock(side_effect=httpx.ConnectError("boom\nmore"))
+    with httpx.Client() as client:
+        jobs = oracle.fetch(oracle_company, client, ["director"], wants_body=lambda j: j.external_id == "300001")
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert "oracle example.fa.us2.oraclecloud.com/CX_1: no description for 300001 (boom more)" in caplog.text
+
+
+@respx.mock
+def test_oracle_descriptions_go_through_the_pool(oracle_company, fixture_json):
+    respx.get(OR + "/recruitingCEJobRequisitions").mock(
+        return_value=httpx.Response(200, json=fixture_json("oracle_requisitions.json"))
+    )
+    detail = respx.get(OR + "/recruitingCEJobRequisitionDetails").mock(
+        return_value=httpx.Response(200, json=fixture_json("oracle_requisition.json"))
+    )
+    used = []
+
+    class Pool(ThreadPoolExecutor):
+        def map(self, *a, **kw):
+            used.append(True)
+            return super().map(*a, **kw)
+
+    with httpx.Client() as client, Pool(2) as pool:
+        fetch_company(oracle_company, client, pool=pool, search=["director"])
+    assert used and detail.call_count == 3
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["example.fa.us2.oraclecloud.com", "example.fa.us2.oraclecloud.com/", "/CX_1", "example.fa.us2.oraclecloud.com/CX_1/x", "a b/CX_1"],
+)
+def test_an_oracle_slug_is_host_slash_site(slug):
+    with pytest.raises(ValueError, match="host/site"):
+        Company(name="x", ats="oracle", slug=slug)
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
@@ -950,6 +1098,9 @@ def test_rate_groups():
     assert request_group(httpx.URL("https://apply.workable.com/api/v1/widget/accounts/a")) == "workable"
     assert request_group(httpx.URL("https://www.amazon.jobs/en/search.json")) == "amazon"
     # an Eightfold board is its own host: rate limits seen so far are per host
+    oc = Company(name="x", ats="oracle", slug="Example.fa.us2.oraclecloud.com/CX_1")
+    assert rate_group(oc) == "example.fa.us2.oraclecloud.com"
+    assert request_group(httpx.URL(OR + "/recruitingCEJobRequisitions")) == rate_group(oc)
     ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")
     assert rate_group(ef) == "apply.careers.microsoft.com"
     assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)

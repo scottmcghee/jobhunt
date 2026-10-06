@@ -1,4 +1,7 @@
-"""Search terms for sources that search instead of listing every posting (Amazon, Eightfold)."""
+"""Search terms for sources that search instead of listing every posting.
+
+Amazon, Eightfold and Oracle.
+"""
 
 from __future__ import annotations
 

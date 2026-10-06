@@ -86,6 +86,11 @@ def eightfold_company() -> Company:
 
 
 @pytest.fixture
+def oracle_company() -> Company:
+    return Company(name="ExampleCorp", ats="oracle", slug="example.fa.us2.oraclecloud.com/CX_1")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

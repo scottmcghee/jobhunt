@@ -46,8 +46,9 @@ fetch:
   transient_retries: 2
   # Most requests sent per second for a rate group; groups not listed have no cap. Keys are the
   # group names `fetch -v` prints in its stats (workable, lever, bamboohr, "workday:wd5"), and are
-  # case-sensitive; an Eightfold board's group is its careers host. Workable's Cloudflare bans an
-  # IP for a minute or so after a burst of about 50 requests in 10 s. Setting the map (here or in
+  # case-sensitive; an Eightfold board's group is its careers host, and an Oracle board's its
+  # tenant host (e.g. eeho.fa.us2.oraclecloud.com). Workable's Cloudflare bans an IP for a
+  # minute or so after a burst of about 50 requests in 10 s. Setting the map (here or in
   # the environment) replaces it whole, so keep workable and apply.careers.microsoft.com in it to
   # keep their caps; {} removes every cap.
   # Env: JOBHUNT_FETCH_MAX_RATE as JSON, e.g. '{"workable": 3, "apply.careers.microsoft.com": 0.5}'

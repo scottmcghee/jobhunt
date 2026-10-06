@@ -87,6 +87,20 @@ def test_remove_companies_keeps_everything_else(tmp_path):
     assert "\n\n\n" not in text
 
 
+def test_load_companies_warns_about_oracle_boards_sharing_a_host(tmp_path, caplog):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - {name: A, ats: oracle, slug: eeho.fa.us2.oraclecloud.com/CX_1}\n"
+        "  - {name: B, ats: oracle, slug: EEHO.fa.us2.oraclecloud.com/jobsearch}\n"
+        "  - {name: C, ats: oracle, slug: ehzq.fa.us2.oraclecloud.com/CX_1}\n"
+    )
+
+    assert len(config.load_companies(p)) == 3  # a warning, not an error
+    assert "eeho.fa.us2.oraclecloud.com: 2 oracle boards" in caplog.text
+    assert "ehzq" not in caplog.text
+
+
 def test_remove_companies_last_entry(tmp_path):
     p = tmp_path / "companies.yaml"
     p.write_text(COMPANIES_YAML)

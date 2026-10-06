@@ -38,6 +38,12 @@ from jobhunt.schema import Company
         ("https://acme.bamboohr.com/jobs/view.php?id=12", ("bamboohr", "acme")),
         ("https://acme.bamboohr.com/careers/list", ("bamboohr", "acme")),
         ("https://eaton.eightfold.ai/careers/job/687239400802", ("eightfold", "eaton.eightfold.ai")),
+        ("https://fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/118142",
+         ("oracle", "fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/CX_1")),
+        ("https://EEHO.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/fr-CA/sites/CX_45001/requisitions?keyword=x",
+         ("oracle", "eeho.fa.us2.oraclecloud.com/CX_45001")),
+        ("https://efzu.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CityOfParramattaCareers",
+         ("oracle", "efzu.fa.em2.oraclecloud.com/CityOfParramattaCareers")),
         ("https://Eaton.eightfold.ai/careers?query=director&pid=1", ("eightfold", "eaton.eightfold.ai")),
         ("https://350.bamboohr.com/careers/32", ("bamboohr", "350")),  # all-digit names are real
         ("https://apply.workable.com/1871", ("workable", "1871")),
@@ -82,6 +88,14 @@ from jobhunt.schema import Company
         ("https://workablelifesolutions.com/careers", None),
         ("https://acme.bamboohr.com.evil.example/careers", None),
         ("https://eightfold.ai/careers", None),  # Eightfold's own site
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/", None),
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/faces/AtkHomePageWelcome", None),  # the HCM app itself
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/job/11138", None),  # no site
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/errors/404", None),
+        ("https://ab-.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/1", None),  # not a valid host
+        ("https://ab-.eightfold.ai/careers", None),
+        ("https://www.oracle.com/careers/", None),
+        ("https://eeho.fa.us2.oraclecloud.com.evil.example/hcmUI/CandidateExperience/en/sites/CX_1", None),
         ("https://www.eightfold.ai/careers", None),
         ("https://app.eightfold.ai/careers", None),
         ("https://community.eightfold.ai/careers", None),
@@ -177,6 +191,21 @@ def test_discover_dedupes_ashby_case_insensitively():
 def test_discover_dedupes_smartrecruiters_case_insensitively():
     urls = ["https://jobs.smartrecruiters.com/ServiceNow/1-a", "https://careers.smartrecruiters.com/servicenow"]
     assert [c.slug for c in slugs.discover(urls)] == ["ServiceNow"]
+
+
+def test_discover_keeps_one_oracle_board_per_host():
+    # the search ignores the site, so a second site on a host would repeat the first one's postings
+    urls = [
+        "https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_45001/job/1",
+        "https://EEHO.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/jobsearch/job/2",
+        "https://ehzq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/GrantThorntonBermuda",
+    ]
+    assert [c.slug for c in slugs.discover(urls)] == [
+        "eeho.fa.us2.oraclecloud.com/CX_45001",
+        "ehzq.fa.us2.oraclecloud.com/GrantThorntonBermuda",
+    ]
+    known = [Company(name="eeho", ats="oracle", slug="Eeho.fa.us2.oraclecloud.com/CX_1")]
+    assert [c.slug for c in slugs.discover(urls[:2], known)] == []
 
 
 def test_render_matches_companies_yaml_style():

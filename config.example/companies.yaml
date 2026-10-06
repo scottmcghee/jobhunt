@@ -25,6 +25,10 @@
 #   Eightfold:  <tenant>.eightfold.ai/careers, or a company's own host (Microsoft's is
 #               apply.careers.microsoft.com). slug is that host. Optional location: limits its
 #               searches to one place, e.g. "United States". Searched like Amazon (below).
+#   Oracle:     <host>.oraclecloud.com/hcmUI/CandidateExperience/<lang>/sites/<site>/...
+#               slug is host/site, e.g. eabc.fa.us2.oraclecloud.com/CX_1. Searched like Amazon
+#               (below). The site only shapes job URLs: the search returns the host's postings
+#               whatever the site, so list one board per host (fetch warns about more).
 #   Amazon:     amazon.jobs has its own search, not an ATS. slug is the country to search (ISO
 #               alpha-3, e.g. USA). fetch searches once per word in preferences.yaml title.must_include_any.
 #               Amazon matches whole words only: a wildcard term like "recruit*" searches just

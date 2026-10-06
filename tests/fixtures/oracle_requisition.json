@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "Id": "300001",
+      "Title": "Director, Platform Engineering",
+      "ExternalPostedStartDate": "2026-09-21T16:00:00+00:00",
+      "ExternalDescriptionStr": "<p>Lead our <b>platform</b> &amp; developer experience teams.</p>",
+      "ExternalResponsibilitiesStr": "<ul><li>Own reliability</li></ul>",
+      "ExternalQualificationsStr": "<p>10+ years leading engineering teams.</p>",
+      "CorporateDescriptionStr": "<p>ExampleCorp builds things.</p>",
+      "PrimaryLocation": "Seattle, WA, United States",
+      "WorkplaceTypeCode": "ORA_HYBRID",
+      "WorkplaceType": "Hybrid"
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "limit": 25,
+  "offset": 0
+}

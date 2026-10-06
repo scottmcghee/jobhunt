@@ -16,6 +16,7 @@ from jobhunt.sources import (
     eightfold,
     greenhouse,
     lever,
+    oracle,
     smartrecruiters,
     workable,
     workday,
@@ -47,6 +48,7 @@ SearchFetcher = Callable[
 SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "amazon": amazon.fetch,
     "eightfold": eightfold.fetch,
+    "oracle": oracle.fetch,
 }
 
 
@@ -61,17 +63,17 @@ def fetch_company(
     """Dispatch to the right ATS adapter for this company.
 
     ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters,
-    BambooHR, Eightfold):
+    BambooHR, Eightfold, Oracle):
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
     source) early; the others are one request.
 
-    ``search`` matters only for sites too big to list (Amazon, Eightfold): they search per term
-    instead (``fetch`` passes the title filter's target-level words). Others ignore it.
-    With ``pool``, Workday, SmartRecruiters, BambooHR and Eightfold fetch later pages and
-    descriptions concurrently on it (BambooHR has only descriptions).
+    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle): they search per
+    term instead (``fetch`` passes the title filter's target-level words). Others ignore it.
+    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold and Oracle fetch later pages and
+    descriptions concurrently on it (BambooHR and Oracle only descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
         return SEARCH_FETCHERS[company.ats](company, client, search, max_pages, wants_body, pool)
@@ -101,6 +103,8 @@ def rate_group(company: Company) -> str:
         return f"workday:{company.datacenter}"
     if company.ats == "eightfold":  # a careers site's own host; limits seen so far are per host
         return company.slug.lower()
+    if company.ats == "oracle":  # each tenant has its own host, which may serve several sites
+        return company.slug.partition("/")[0].lower()
     return company.ats
 
 
