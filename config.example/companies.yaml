@@ -22,6 +22,8 @@
 #   BambooHR:   <tenant>.bamboohr.com/careers
 #               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.
+#   Amazon:     amazon.jobs has its own search, not an ATS. slug is the country to search (ISO
+#               alpha-3, e.g. USA). fetch searches once per word in preferences.yaml title.must_include_any.
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help`: it finds board URLs in any text
 # file, such as lines grepped from Common Crawl index files. Add --check to drop boards that have
@@ -86,3 +88,8 @@ companies:
     ats: workable
     slug: huggingface
     tags: [ai]
+
+  - name: Amazon
+    ats: amazon
+    slug: USA
+    tags: [big-tech]

@@ -22,7 +22,7 @@ import argparse
 import logging
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -190,6 +190,7 @@ def _fetch_board(
     verbose: bool,
     stopping: Callable[[], bool] = lambda: False,
     pool: Executor | None = None,
+    search: Sequence[str] = (),
 ) -> BoardOutcome:
     """Fetch one board. Touches no shared state, and a failing board never stops the run.
 
@@ -197,7 +198,7 @@ def _fetch_board(
     under boards still in flight, and the runner discards their outcomes anyway.
     """
     try:
-        jobs = fetch_company(company, client, wants_body=wants_body, pool=pool)
+        jobs = fetch_company(company, client, wants_body=wants_body, pool=pool, search=search)
         return BoardOutcome(company, jobs=jobs)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
@@ -281,6 +282,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
                 args.verbose,
                 lambda: boards.stopping,
                 pools.get(rate_group(company)),
+                prefs.title.must_include_any,  # search terms for sites too big to list (Amazon)
             ),
             group_of=rate_group,
             per_group=args.per_host,

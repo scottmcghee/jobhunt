@@ -1,0 +1,113 @@
+"""Amazon's own careers site (amazon.jobs). Not an ATS: Amazon runs its own job search.
+
+Endpoint (public, no auth; the one the site's search page calls; robots.txt only disallows
+the /internal pages):
+
+    GET https://www.amazon.jobs/en/search.json?base_query=...&normalized_country_code[]=USA
+        &result_limit=100&offset=N&sort=recent
+
+Amazon lists tens of thousands of roles, so ``fetch`` searches instead of listing everything:
+one query per search term (``fetch`` passes the title filter's target-level words), paged 100 at
+a time, results deduped across terms. Descriptions come in the search results.
+
+A board is ``ats: amazon`` with ``slug:`` an ISO 3166 alpha-3 country code (``USA``), the
+country the search is limited to.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterable
+from datetime import datetime
+
+import httpx
+
+from jobhunt.schema import Company, Job
+from jobhunt.sources._html import to_text
+from jobhunt.sources._postings import with_ids
+
+log = logging.getLogger(__name__)
+
+BASE = "https://www.amazon.jobs/en/search.json"
+SITE = "https://www.amazon.jobs"
+PAGE_SIZE = 100  # the most the API returns per page
+MAX_PER_TERM = 2000  # runaway guard; the API itself stops at 10,000 hits
+
+
+def _terms(search: Iterable[str]) -> list[str]:
+    """Cleaned, unique search terms; a trailing filter wildcard ("recruit*") is dropped."""
+    terms = [t.strip().rstrip("*").strip().lower() for t in search]
+    return list(dict.fromkeys(t for t in terms if t)) or [""]
+
+
+def _posted(raw: str | None) -> str | None:
+    """'October  6, 2026' -> '2026-10-06'."""
+    try:
+        return datetime.strptime(" ".join((raw or "").split()), "%B %d, %Y").date().isoformat()
+    except ValueError:
+        return None
+
+
+def _body(raw: dict) -> str:
+    parts = [to_text(raw.get("description"))]
+    for label, key in (("Basic qualifications", "basic_qualifications"),
+                       ("Preferred qualifications", "preferred_qualifications")):
+        if text := to_text(raw.get(key)):
+            parts.append(f"{label}:\n{text}")
+    return "\n\n".join(p for p in parts if p)
+
+
+def normalize(company: Company, raw: dict) -> Job:
+    location = raw.get("normalized_location") or raw.get("location") or ""
+    where = f"{raw.get('location', '')} {location} {raw.get('title', '')}".lower()
+    return Job(
+        source="amazon",
+        company=company.name,
+        company_slug=company.slug,
+        external_id=str(raw.get("id_icims") or raw["id"]),
+        title=raw.get("title", ""),
+        location=location,
+        remote=True if "virtual" in where or "remote" in where else None,
+        url=SITE + (raw.get("job_path") or ""),
+        body=_body(raw),
+        posted_at=_posted(raw.get("posted_date")),
+    )
+
+
+def _page(company: Company, client: httpx.Client, term: str, offset: int) -> tuple[list[dict], int]:
+    params = {
+        "base_query": term,
+        "normalized_country_code[]": company.slug,
+        "result_limit": PAGE_SIZE,
+        "offset": offset,
+        "sort": "recent",
+    }
+    resp = client.get(BASE, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("error"):
+        raise ValueError(f"amazon search {term!r}: {data['error']}")
+    return data.get("jobs") or [], int(data.get("hits") or 0)
+
+
+def fetch(
+    company: Company,
+    client: httpx.Client,
+    search: Iterable[str] = (),
+    max_pages: int | None = None,
+) -> list[Job]:
+    """Every posting any of the search terms finds, in the board's country."""
+    found: dict[str, Job] = {}
+    for term in _terms(search):
+        offset = pages = 0
+        while offset < MAX_PER_TERM and (max_pages is None or pages < max_pages):
+            postings, hits = _page(company, client, term, offset)
+            pages += 1
+            for raw in with_ids(company, postings):
+                job = normalize(company, raw)
+                found.setdefault(job.external_id, job)
+            offset += len(postings)
+            if not postings or offset >= hits:  # an empty page ends it, whatever hits says
+                break
+    log.info("amazon %s: %d jobs", company.slug, len(found))
+    return list(found.values())

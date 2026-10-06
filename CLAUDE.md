@@ -95,8 +95,12 @@ Agreed future work, in rough priority order. Each item still follows the workflo
    - **Workable and BambooHR** *(done)*. Neither documents these endpoints; both are what each account's own careers page calls.
      - Workable: `sources/workable.py`, one request per board with descriptions included. A board is `slug: <account>`; an unknown account is a 404. `jobhunt.slugs` harvests `apply.workable.com/<account>` and the older `<account>.workable.com/jobs|j/...`.
      - BambooHR: `sources/bamboohr.py`, a listing plus one detail request per wanted posting (the same `wants_body` check). A board is `slug: <tenant>`. An unknown tenant redirects to bamboohr.com, which `cli._board_gone` counts like a 404; the adapter never follows redirects. Every tenant has its own subdomain, but they share one rate group. `jobhunt.slugs` harvests `<tenant>.bamboohr.com/careers|jobs/...`.
-3. **Companies with no ATS (e.g., Apple).** These are case-by-case and may need crawling HTML rather than calling an API, so treat this as a separate flow, not another `sources/` adapter.
+3. **Companies with no ATS (e.g., Apple).** These are case-by-case and may need crawling HTML rather than calling an API.
    - **Investigate first.** For each company, check whether its careers site is backed by a JSON endpoint before writing a crawler.
+   - **Search, don't list.** These employers post tens of thousands of roles, so their adapters live in `sources/` but run one search per term: `fetch` passes the title filter's `must_include_any` words (`SEARCH_FETCHERS` in `sources/__init__.py`). The normal filter still runs afterwards.
+   - **Amazon** *(done)*: `sources/amazon.py`, the public `amazon.jobs/en/search.json`; a board is `ats: amazon`, `slug: <ISO alpha-3 country>`.
+   - **Planned, in order:** Eightfold (generic; Microsoft, HP, Eaton, Corteva, Estée Lauder), Oracle Recruiting Cloud (generic; `*.oraclecloud.com/hcmUI/CandidateExperience/.../sites/<site>`), Apple (embedded JSON in server-rendered HTML), then an S&P 500 survey script that finds each constituent's careers platform.
+   - **Off-limits:** Google (robots.txt disallows its job pages), Meta (its terms forbid automated collection without written permission), classic iCIMS portals (`Disallow: /`).
    - **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.
    - **Fit the existing pipeline.** Output must still be `Job` models so filter, score, and letter stay unchanged.
    - **Stay a CLI.** No scheduler or database (see below).

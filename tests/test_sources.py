@@ -12,6 +12,7 @@ import respx
 
 from jobhunt.schema import Company
 from jobhunt.sources import (
+    amazon,
     ashby,
     bamboohr,
     fetch_company,
@@ -526,6 +527,95 @@ def test_fetch_company_passes_wants_body_to_bamboohr(bamboohr_company, fixture_j
         assert detail.call_count == 3
 
 
+# ------------------------------------------------------------------ Amazon (search, not a full listing)
+
+AZ = "https://www.amazon.jobs/en/search.json"
+
+
+@respx.mock
+def test_amazon_searches_each_term_and_normalizes(amazon_company, fixture_json):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json=fixture_json("amazon_search.json")))
+    with httpx.Client() as client:
+        jobs = amazon.fetch(amazon_company, client, ["director", "senior manager"])
+    assert route.call_count == 2  # one page each: 3 hits fit in one page
+    params = [call.request.url.params for call in route.calls]
+    assert [p["base_query"] for p in params] == ["director", "senior manager"]
+    assert all(p["normalized_country_code[]"] == "USA" and p["result_limit"] == "100" for p in params)
+    assert [j.external_id for j in jobs] == ["10000001", "10000002", "10000003"]  # deduped across terms
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("amazon", "Amazon", "USA")
+    assert first.title == "Director, Platform Engineering"
+    assert first.location == "Seattle, Washington, USA"
+    assert first.url == "https://www.amazon.jobs/en/jobs/10000001/director-platform-engineering"
+    assert first.posted_at == "2026-10-06"  # "October  6, 2026"
+    assert first.body.startswith("Lead our platform & infrastructure org.")
+    assert "Basic qualifications" in first.body and "Experience with AWS" in first.body
+    assert "Preferred qualifications" in first.body
+    assert first.remote is None
+    assert jobs[1].remote is True  # "US, Virtual"
+
+
+@respx.mock
+def test_amazon_pages_until_the_hits_are_in(amazon_company):
+    def page(request):
+        offset = int(request.url.params["offset"])
+        n = max(0, min(100, 250 - offset))
+        jobs = [{"id": f"u{offset + i}", "id_icims": str(offset + i), "title": "Director", "location": "US, WA, Seattle",
+                 "job_path": f"/en/jobs/{offset + i}/x", "description": ""} for i in range(n)]
+        return httpx.Response(200, json={"error": None, "hits": 250, "jobs": jobs})
+
+    route = respx.get(AZ).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = amazon.fetch(amazon_company, client, ["director"])
+        assert len(jobs) == 250 and route.call_count == 3
+        assert len(amazon.fetch(amazon_company, client, ["director"], max_pages=1)) == 100
+
+
+@respx.mock
+def test_amazon_an_empty_page_ends_the_listing(amazon_company):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": None, "hits": 5000, "jobs": []}))
+    with httpx.Client() as client:
+        assert amazon.fetch(amazon_company, client, ["director"]) == []
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("terms", "queries"),
+    [
+        ([], [""]),  # no terms: one unfiltered search (slugs --check)
+        (["director", "Director ", "recruit*", "  "], ["director", "recruit"]),
+    ],
+)
+@respx.mock
+def test_amazon_search_terms_are_cleaned_up(amazon_company, terms, queries):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": None, "hits": 0, "jobs": []}))
+    with httpx.Client() as client:
+        amazon.fetch(amazon_company, client, terms)
+    assert [call.request.url.params["base_query"] for call in route.calls] == queries
+
+
+@respx.mock
+def test_amazon_reports_an_error_in_the_payload(amazon_company):
+    respx.get(AZ).mock(return_value=httpx.Response(200, json={"error": "bad query", "hits": 0, "jobs": []}))
+    with httpx.Client() as client, pytest.raises(ValueError, match="bad query"):
+        amazon.fetch(amazon_company, client, ["director"])
+
+
+@pytest.mark.parametrize("raw", ["", "not a date", None])
+def test_amazon_an_unreadable_date_is_left_out(raw):
+    assert amazon._posted(raw) is None
+
+
+@respx.mock
+def test_fetch_company_passes_search_terms_only_to_search_sources(amazon_company, gh_company, fixture_json):
+    route = respx.get(AZ).mock(return_value=httpx.Response(200, json=fixture_json("amazon_search.json")))
+    respx.get(GH_JOBS_URL).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    with httpx.Client() as client:
+        fetch_company(amazon_company, client, search=["vice president"])
+        assert route.calls.last.request.url.params["base_query"] == "vice president"
+        assert len(fetch_company(gh_company, client, search=["vice president"])) == 4  # ignored
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
@@ -538,6 +628,7 @@ SOURCES_WITH_IDS = [
     (smartrecruiters, "smartrecruiters_company", "GET", SR, "smartrecruiters_postings.json", "content", "id"),
     (workable, "workable_company", "GET", WK, "workable_account.json", "jobs", "shortcode"),
     (bamboohr, "bamboohr_company", "GET", BH + "/list", "bamboohr_list.json", "result", "id"),
+    (amazon, "amazon_company", "GET", AZ, "amazon_search.json", "jobs", "id"),
 ]
 
 
@@ -585,6 +676,7 @@ def _requests_made(company, mocks):
         ("smartrecruiters_company", [("GET", SR + "/", "smartrecruiters_posting.json"), ("GET", SR, "smartrecruiters_postings.json")]),
         ("workable_company", [("GET", WK, "workable_account.json")]),
         ("bamboohr_company", [("GET", BH + "/list", "bamboohr_list.json"), ("GET", BH + "/", "bamboohr_job.json")]),
+        ("amazon_company", [("GET", AZ, "amazon_search.json")]),
     ],
 )
 def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
@@ -602,6 +694,7 @@ def test_rate_groups():
     # every BambooHR tenant has its own host, but they are one service
     assert request_group(httpx.URL("https://acme.bamboohr.com/careers/list")) == "bamboohr"
     assert request_group(httpx.URL("https://apply.workable.com/api/v1/widget/accounts/a")) == "workable"
+    assert request_group(httpx.URL("https://www.amazon.jobs/en/search.json")) == "amazon"
     assert request_group(httpx.URL("https://www.bamboohr.com.evil.example/x")) == "www.bamboohr.com.evil.example"
 
 
