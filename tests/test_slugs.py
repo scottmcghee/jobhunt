@@ -38,6 +38,12 @@ from jobhunt.schema import Company
         ("https://acme.bamboohr.com/jobs/view.php?id=12", ("bamboohr", "acme")),
         ("https://acme.bamboohr.com/careers/list", ("bamboohr", "acme")),
         ("https://eaton.eightfold.ai/careers/job/687239400802", ("eightfold", "eaton.eightfold.ai")),
+        ("https://fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/118142",
+         ("oracle", "fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/CX_1")),
+        ("https://EEHO.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/fr-CA/sites/CX_45001/requisitions?keyword=x",
+         ("oracle", "eeho.fa.us2.oraclecloud.com/CX_45001")),
+        ("https://efzu.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CityOfParramattaCareers",
+         ("oracle", "efzu.fa.em2.oraclecloud.com/CityOfParramattaCareers")),
         ("https://Eaton.eightfold.ai/careers?query=director&pid=1", ("eightfold", "eaton.eightfold.ai")),
         ("https://350.bamboohr.com/careers/32", ("bamboohr", "350")),  # all-digit names are real
         ("https://apply.workable.com/1871", ("workable", "1871")),
@@ -82,6 +88,10 @@ from jobhunt.schema import Company
         ("https://workablelifesolutions.com/careers", None),
         ("https://acme.bamboohr.com.evil.example/careers", None),
         ("https://eightfold.ai/careers", None),  # Eightfold's own site
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/", None),
+        ("https://eeho.fa.us2.oraclecloud.com/hcmUI/faces/AtkHomePageWelcome", None),  # the HCM app itself
+        ("https://www.oracle.com/careers/", None),
+        ("https://eeho.fa.us2.oraclecloud.com.evil.example/hcmUI/CandidateExperience/en/sites/CX_1", None),
         ("https://www.eightfold.ai/careers", None),
         ("https://app.eightfold.ai/careers", None),
         ("https://community.eightfold.ai/careers", None),

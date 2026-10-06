@@ -64,6 +64,9 @@ _BAMBOOHR_HOST = re.compile(r"([a-z0-9-]+)\.bamboohr\.com")
 # <tenant>.eightfold.ai/careers/...; a company on its own host (Microsoft) can't be found this way.
 _EIGHTFOLD_HOST = re.compile(r"([a-z0-9-]+)\.eightfold\.ai")
 _EIGHTFOLD_OWN = {"www", "app", "community", "learn", "blog", "docs", "help", "status", "api"}
+# <host>.oraclecloud.com/hcmUI/CandidateExperience/<lang>/sites/<site>/...; one host, many sites
+_ORACLE_HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)*\.oraclecloud\.com")
+_ORACLE_SITE = re.compile(r"[A-Za-z0-9_-]+")
 _BAMBOOHR_OWN = {
     "www", "app", "api", "documentation", "help", "marketplace", "partners", "status", "newsroom"
 }
@@ -106,12 +109,24 @@ def _named(ats: ATSName, slug: str) -> Company | None:
     return Company(name=slug, ats=ats, slug=slug)
 
 
+def _oracle_board(host: str, segments: list[str]) -> Company | None:
+    """/hcmUI/CandidateExperience/<lang>/sites/<site>/... names the board host/site."""
+    if segments[:2] != ["hcmUI", "CandidateExperience"] or segments[3:4] != ["sites"]:
+        return None
+    site = segments[4] if len(segments) > 4 else ""
+    if not _ORACLE_SITE.fullmatch(site):
+        return None
+    return Company(name=f"{host.split('.')[0]}/{site}", ats="oracle", slug=f"{host}/{site}")
+
+
 def _workable_or_bamboohr(host: str, segments: list[str]) -> Company | None:
     first = segments[0].lower() if segments else ""
     if host == _WORKABLE_APPLY:
         return None if first in _NOT_WORKABLE_ACCOUNTS else _named("workable", first)
     if (m := _WORKABLE_ACCOUNT_HOST.fullmatch(host)) and m.group(1) not in _WORKABLE_OWN:
         return _named("workable", m.group(1)) if first in ("jobs", "j") else None
+    if _ORACLE_HOST.fullmatch(host):
+        return _oracle_board(host, segments)
     if (m := _EIGHTFOLD_HOST.fullmatch(host)) and m.group(1) not in _EIGHTFOLD_OWN:
         if first != "careers" or not _SLUG.fullmatch(m.group(1)):
             return None

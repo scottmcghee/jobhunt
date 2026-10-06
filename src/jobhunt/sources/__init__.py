@@ -16,6 +16,7 @@ from jobhunt.sources import (
     eightfold,
     greenhouse,
     lever,
+    oracle,
     smartrecruiters,
     workable,
     workday,
@@ -47,6 +48,7 @@ SearchFetcher = Callable[
 SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "amazon": amazon.fetch,
     "eightfold": eightfold.fetch,
+    "oracle": oracle.fetch,
 }
 
 
@@ -101,6 +103,8 @@ def rate_group(company: Company) -> str:
         return f"workday:{company.datacenter}"
     if company.ats == "eightfold":  # a careers site's own host; limits seen so far are per host
         return company.slug.lower()
+    if company.ats == "oracle":  # each tenant has its own host, which may serve several sites
+        return company.slug.partition("/")[0].lower()
     return company.ats
 
 
