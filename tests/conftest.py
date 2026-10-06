@@ -91,6 +91,11 @@ def oracle_company() -> Company:
 
 
 @pytest.fixture
+def apple_company() -> Company:
+    return Company(name="Apple", ats="apple", slug="united-states-USA")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

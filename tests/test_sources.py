@@ -14,6 +14,7 @@ from jobhunt.filter import check_location
 from jobhunt.schema import Company
 from jobhunt.sources import (
     amazon,
+    apple,
     ashby,
     bamboohr,
     eightfold,
@@ -1018,6 +1019,149 @@ def test_an_oracle_slug_is_host_slash_site(slug):
         Company(name="x", ats="oracle", slug=slug)
 
 
+# ------------------------------------------------------------------ Apple (search; server-rendered HTML)
+
+AP = "https://jobs.apple.com/en-us"
+
+
+def _apple_routes():
+    search = respx.get(AP + "/search").mock(
+        return_value=httpx.Response(200, text=(FIXTURES / "apple_search.html").read_text())
+    )
+    detail = respx.get(url__startswith=AP + "/details/").mock(
+        return_value=httpx.Response(200, text=(FIXTURES / "apple_details.html").read_text())
+    )
+    return search, detail
+
+
+@respx.mock
+def test_apple_searches_each_term_and_normalizes(apple_company):
+    search, detail = _apple_routes()
+    with httpx.Client() as client:
+        jobs = apple.fetch(apple_company, client, ["director", "senior manager"], wants_body=lambda j: j.external_id == "200000001-0001")
+    params = [call.request.url.params for call in search.calls]
+    assert [p["search"] for p in params] == ["director", '"senior manager"']  # a phrase, or Apple matches either word
+    assert all(p["location"] == "united-states-USA" and p["page"] == "1" for p in params)
+    assert [j.external_id for j in jobs] == ["200000001-0001", "200000002-0001", "200000003-0001"]  # deduped
+    assert detail.call_count == 1
+    assert str(detail.calls.last.request.url) == AP + "/details/200000001-0001/director-platform-engineering"
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("apple", "Apple", "united-states-USA")
+    assert first.url == AP + "/details/200000001-0001/director-platform-engineering"
+    assert first.location == "Seattle, United States of America; Cupertino, United States of America"
+    assert first.posted_at == "2026-09-21T17:19:04.171+00:00"
+    assert first.body.startswith("The Platform team builds the tools every Apple engineer uses.\n\nLead our platform")
+    for part in ("Own reliability", "Minimum qualifications:\n10+ years", "Preferred qualifications:\nExperience with internal"):
+        assert part in first.body
+    assert first.remote is None  # homeOffice false says nothing more
+    assert jobs[1].remote is True and jobs[1].body == ""  # homeOffice true
+
+
+@respx.mock
+def test_apple_pages_by_twenty_until_the_total_is_in(apple_company):
+    def page(request):
+        n = int(request.url.params["page"])
+        first = (n - 1) * 20
+        rows = [{"id": f"r{first + i}", "postingTitle": "Director", "transformedPostingTitle": "d", "locations": []}
+                for i in range(max(0, min(20, 45 - first)))]
+        loader = {"search": {"searchResults": rows, "totalRecords": 45}}
+        body = f"<script>window.__staticRouterHydrationData = JSON.parse({json.dumps(json.dumps({'loaderData': loader}))});</script>"
+        return httpx.Response(200, text=body)
+
+    route = respx.get(AP + "/search").mock(side_effect=page)
+    with httpx.Client() as client:
+        assert len(apple.fetch(apple_company, client, ["director"], wants_body=lambda j: False)) == 45
+        assert [c.request.url.params["page"] for c in route.calls] == ["1", "2", "3"]
+        assert len(apple.fetch(apple_company, client, ["director"], max_pages=1, wants_body=lambda j: False)) == 20
+
+
+@respx.mock
+def test_apple_a_broad_term_stops_at_the_cap_and_says_so(apple_company, caplog):
+    def page(request):
+        n = int(request.url.params["page"])
+        rows = [{"id": f"r{n}-{i}", "postingTitle": "Manager", "transformedPostingTitle": "m", "locations": []} for i in range(20)]
+        loader = {"search": {"searchResults": rows, "totalRecords": 2297}}
+        return httpx.Response(200, text=f"<script>window.__staticRouterHydrationData = JSON.parse({json.dumps(json.dumps({'loaderData': loader}))});</script>")
+
+    route = respx.get(AP + "/search").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = apple.fetch(apple_company, client, ["manager"], wants_body=lambda j: False)
+        assert len(jobs) == apple.MAX_PER_TERM and route.call_count == apple.MAX_PER_TERM // 20
+        assert "'manager' has 2297 hits; kept the first" in caplog.text
+        caplog.clear()
+        apple.fetch(apple_company, client, ["manager"], max_pages=1, wants_body=lambda j: False)
+    assert "kept the first" not in caplog.text
+
+
+@respx.mock
+def test_apple_a_page_without_its_data_is_an_error(apple_company):
+    respx.get(AP + "/search").mock(return_value=httpx.Response(200, text="<html>maintenance</html>"))
+    with httpx.Client() as client, pytest.raises(ValueError, match="no job data"):
+        apple.fetch(apple_company, client, ["director"])
+
+
+@respx.mock
+def test_apple_failed_detail_keeps_job_without_body(apple_company, caplog):
+    _apple_routes()
+    respx.get(url__startswith=AP + "/details/").mock(return_value=httpx.Response(200, text="<html>nope</html>"))
+    with httpx.Client() as client:
+        jobs = apple.fetch(apple_company, client, ["director"], wants_body=lambda j: j.external_id == "200000001-0001")
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert "apple united-states-USA: no description for 200000001-0001" in caplog.text
+
+
+@respx.mock
+def test_apple_detail_http_error_keeps_job_without_body(apple_company, caplog):
+    _apple_routes()
+    respx.get(url__startswith=AP + "/details/").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client:
+        jobs = apple.fetch(apple_company, client, ["director"], wants_body=lambda j: j.external_id == "200000001-0001")
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert "apple united-states-USA: no description for 200000001-0001 (Client error '404 Not Found'" in caplog.text
+
+
+@respx.mock
+def test_apple_warns_about_a_board_with_no_postings(apple_company, caplog):
+    loader = {"search": {"searchResults": [], "totalRecords": 0}}
+    page = f"<script>window.__staticRouterHydrationData = JSON.parse({json.dumps(json.dumps({'loaderData': loader}))});</script>"
+    respx.get(AP + "/search").mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        assert apple.fetch(apple_company, client, ["director", "vp"]) == []
+    assert caplog.messages == [
+        "apple united-states-USA: 0 postings — check the location filter (e.g. united-states-USA)"
+    ]
+
+
+@respx.mock
+def test_apple_descriptions_go_through_the_pool(apple_company):
+    _, detail = _apple_routes()
+    used = []
+
+    class Pool(ThreadPoolExecutor):
+        def map(self, *a, **kw):
+            used.append(True)
+            return super().map(*a, **kw)
+
+    with httpx.Client() as client, Pool(2) as pool:
+        fetch_company(apple_company, client, pool=pool, search=["director"])
+    assert used and detail.call_count == 3
+
+
+@pytest.mark.parametrize(
+    ("locations", "expected"),
+    [
+        ([{"city": "Austin", "stateProvince": "Texas", "countryName": "United States of America", "name": "Austin"}],
+         "Austin, Texas, United States of America"),
+        ([{"name": "Sunnyvale", "countryName": "United States of America"}], "Sunnyvale, United States of America"),
+        ([{"name": "United States", "countryName": "United States of America"}], "United States, United States of America"),
+        ([], ""),
+        (["junk", None], ""),
+    ],
+)
+def test_apple_location(locations, expected):
+    assert apple._location({"locations": locations}) == expected
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",
@@ -1098,6 +1242,7 @@ def test_rate_groups():
     assert request_group(httpx.URL("https://apply.workable.com/api/v1/widget/accounts/a")) == "workable"
     assert request_group(httpx.URL("https://www.amazon.jobs/en/search.json")) == "amazon"
     # an Eightfold board is its own host: rate limits seen so far are per host
+    assert request_group(httpx.URL(AP + "/search")) == rate_group(Company(name="Apple", ats="apple", slug="united-states-USA")) == "apple"
     oc = Company(name="x", ats="oracle", slug="Example.fa.us2.oraclecloud.com/CX_1")
     assert rate_group(oc) == "example.fa.us2.oraclecloud.com"
     assert request_group(httpx.URL(OR + "/recruitingCEJobRequisitions")) == rate_group(oc)

@@ -1,6 +1,6 @@
 """Search terms for sources that search instead of listing every posting.
 
-Amazon, Eightfold and Oracle.
+Amazon, Eightfold, Oracle and Apple.
 """
 
 from __future__ import annotations

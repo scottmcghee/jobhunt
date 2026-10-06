@@ -49,13 +49,14 @@ fetch:
   # case-sensitive; an Eightfold board's group is its careers host, and an Oracle board's its
   # tenant host (e.g. eeho.fa.us2.oraclecloud.com). Workable's Cloudflare bans an IP for a
   # minute or so after a burst of about 50 requests in 10 s. Setting the map (here or in
-  # the environment) replaces it whole, so keep workable and apply.careers.microsoft.com in it to
-  # keep their caps; {} removes every cap.
-  # Env: JOBHUNT_FETCH_MAX_RATE as JSON, e.g. '{"workable": 3, "apply.careers.microsoft.com": 0.5}'
+  # the environment) replaces it whole, so keep workable, apply.careers.microsoft.com and apple in
+  # it to keep their caps; {} removes every cap. Env: JOBHUNT_FETCH_MAX_RATE as JSON, e.g.
+  # '{"workable": 3, "apply.careers.microsoft.com": 0.5, "apple": 1}'
   # Microsoft's careers site (Eightfold) answered 429 to requests one second apart.
   max_rate:
     workable: 2.0
     apply.careers.microsoft.com: 0.5
+    apple: 1.0  # each Apple search or job page is a ~300 KB server-rendered page
 
 paths:
   # ~ expands, and a relative path is under the repo (like the defaults), whatever directory

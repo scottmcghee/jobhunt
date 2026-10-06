@@ -11,6 +11,7 @@ import httpx
 from jobhunt.schema import ATSName, Company, Job
 from jobhunt.sources import (
     amazon,
+    apple,
     ashby,
     bamboohr,
     eightfold,
@@ -49,6 +50,7 @@ SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "amazon": amazon.fetch,
     "eightfold": eightfold.fetch,
     "oracle": oracle.fetch,
+    "apple": apple.fetch,
 }
 
 
@@ -63,17 +65,18 @@ def fetch_company(
     """Dispatch to the right ATS adapter for this company.
 
     ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters,
-    BambooHR, Eightfold, Oracle):
+    BambooHR, Eightfold, Oracle, Apple):
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
     source) early; the others are one request.
 
-    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle): they search per
-    term instead (``fetch`` passes the title filter's target-level words). Others ignore it.
-    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold and Oracle fetch later pages and
-    descriptions concurrently on it (BambooHR and Oracle only descriptions).
+    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple): they
+    search per term instead (``fetch`` passes the title filter's target-level words). Others
+    ignore it.
+    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle and Apple fetch later pages
+    and descriptions concurrently on it (BambooHR, Oracle and Apple only descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
         return SEARCH_FETCHERS[company.ats](company, client, search, max_pages, wants_body, pool)
@@ -92,6 +95,7 @@ _API_HOSTS: dict[str, str] = {
     "api.smartrecruiters.com": "smartrecruiters",
     "apply.workable.com": "workable",
     "www.amazon.jobs": "amazon",
+    "jobs.apple.com": "apple",
 }
 _WORKDAY_HOST = re.compile(r"[a-z0-9-]+\.(wd\d+)\.myworkdayjobs\.com")
 _BAMBOOHR_HOST = re.compile(r"[a-z0-9-]+\.bamboohr\.com")
