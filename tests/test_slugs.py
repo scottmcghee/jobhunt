@@ -322,6 +322,18 @@ def test_check_drops_a_board_it_cannot_read_and_carries_on(caplog):
 
 
 @respx.mock
+def test_check_keeps_a_board_that_answers_with_a_page_that_is_not_json(caplog):
+    # a gateway or proxy page served with 200: the board can't be checked right now, not dead
+    respx.get(GH.format("proxied")).mock(
+        return_value=httpx.Response(200, text="<html>502 Bad Gateway</html>", headers={"content-type": "text/html"})
+    )
+    boards = [Company(name="proxied", ats="greenhouse", slug="proxied")]
+    with httpx.Client() as client:
+        assert slugs.check(boards, client, workers=1) == boards
+    assert "proxied: kept, could not check (not JSON" in caplog.text
+
+
+@respx.mock
 def test_check_keeps_boards_it_could_not_reach(caplog):
     respx.get(GH.format("flaky")).mock(return_value=httpx.Response(503))
     respx.get(GH.format("slow")).mock(side_effect=httpx.ConnectTimeout("timed out"))

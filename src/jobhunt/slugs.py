@@ -11,8 +11,10 @@ and re-pasted as more data arrives.
 Without ``--check`` this runs offline. With it, the first page of each new board is fetched
 through its source adapter (no descriptions), and the board is dropped if it has no open postings
 or answers with any status below 500 other than 429: a SmartRecruiters identifier with no
-postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). Boards
-that time out, are rate limited, or fail with a 5xx are kept.
+postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). It is
+also dropped if its adapter can't read it as configured (an Eightfold page with no domain).
+Boards that time out, are rate limited, fail with a 5xx, or answer 200 with something that
+isn't JSON (a gateway or proxy page) are kept.
 """
 
 from __future__ import annotations
@@ -227,7 +229,11 @@ def check_workers() -> int:
 
 
 def _has_jobs(company: Company, client: httpx.Client) -> bool:
-    """Whether a board is worth listing. Boards that can't be checked right now are kept."""
+    """Whether a board is worth listing.
+
+    Boards that can't be checked right now (timeouts, 429, 5xx, a 200 that isn't JSON) are kept.
+    Boards its adapter can't read as configured (any other ValueError) are dropped.
+    """
     try:
         jobs = fetch_company(company, client, wants_body=lambda job: False, max_pages=1)
     except httpx.HTTPStatusError as e:
@@ -239,6 +245,9 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
         return True
     except httpx.HTTPError as e:
         log.warning("%s: kept, could not check (%s)", company.key, e)
+        return True
+    except json.JSONDecodeError as e:  # a 200 that isn't the API, e.g. a gateway page
+        log.warning("%s: kept, could not check (not JSON: %s)", company.key, e)
         return True
     except ValueError as e:  # the adapters' signal for data they can't read
         log.warning("dropped %s: can't fetch it as configured (%s)", company.key, e)
