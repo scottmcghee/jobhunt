@@ -37,6 +37,9 @@ from jobhunt.schema import Company
         ("https://Evolve.bamboohr.com/careers/46?source=x", ("bamboohr", "evolve")),
         ("https://acme.bamboohr.com/jobs/view.php?id=12", ("bamboohr", "acme")),
         ("https://acme.bamboohr.com/careers/list", ("bamboohr", "acme")),
+        ("https://350.bamboohr.com/careers/32", ("bamboohr", "350")),  # all-digit names are real
+        ("https://apply.workable.com/1871", ("workable", "1871")),
+        ("https://apply.workable.com/12345/j/A1B2C3D4E5", ("workable", "12345")),
         ("https://jobs.ashbyhq.com/Some%20Co", ("ashby", "Some Co")),
         ("https://jobs.smartrecruiters.com/AbbVie/3743990009679496-manager?trid=x", ("smartrecruiters", "AbbVie")),
         ("https://careers.smartrecruiters.com/AveryDennison", ("smartrecruiters", "AveryDennison")),
@@ -60,7 +63,6 @@ from jobhunt.schema import Company
         ("https://apply.workable.com/", None),
         ("https://apply.workable.com/j/A1B2C3D4E5", None),  # a short link names no account
         ("https://apply.workable.com/api/v1/widget/accounts/acme", None),
-        ("https://apply.workable.com/12345/j/A1B2C3D4E5", None),
         ("https://apply.workable.com/robots.txt", None),
         ("https://jobs.workable.com/company/1kLpatGRMtQjAU1NRRNCyp/jobs-at-acme", None),  # Workable's job search
         ("https://resources.workable.com/stories-and-insights/x", None),

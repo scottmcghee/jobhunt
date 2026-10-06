@@ -45,7 +45,8 @@ def fetch_company(
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters) early; the others are one request.
-    With ``pool``, those two fetch later pages and descriptions concurrently on it.
+    With ``pool``, Workday, SmartRecruiters and BambooHR fetch later pages and descriptions
+    concurrently on it (BambooHR has only descriptions).
     """
     if company.ats in ON_DEMAND_FETCHERS:
         return ON_DEMAND_FETCHERS[company.ats](company, client, wants_body, max_pages, pool)

@@ -10,8 +10,9 @@ and re-pasted as more data arrives.
 
 Without ``--check`` this runs offline. With it, the first page of each new board is fetched
 through its source adapter (no descriptions), and the board is dropped if it has no open postings
-or answers with a 4xx other than 429: a SmartRecruiters identifier with no postings, say, or a
-Greenhouse slug that 404s. Boards that time out, are rate limited, or fail with a 5xx are kept.
+or answers with any status below 500 other than 429: a SmartRecruiters identifier with no
+postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). Boards
+that time out, are rate limited, or fail with a 5xx are kept.
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ def _workday_board(tenant: str, datacenter: str, segments: list[str]) -> Company
 
 def _named(ats: ATSName, slug: str) -> Company | None:
     slug = slug.lower()
-    if not _SLUG.fullmatch(slug) or slug in _NOT_SLUGS or slug.isdigit():
+    if not _SLUG.fullmatch(slug) or slug in _NOT_SLUGS:
         return None
     return Company(name=slug, ats=ats, slug=slug)
 

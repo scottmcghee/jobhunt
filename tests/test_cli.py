@@ -225,21 +225,31 @@ def test_other_workday_errors_dont_count(tmp_path, response):
     assert _misses(tmp_path).counts == {}
 
 
+def _redirect(status: int, location: str) -> httpx.Response:
+    return httpx.Response(status, headers={"Location": location})
+
+
 @pytest.mark.parametrize(
-    ("location", "counts"),
-    [("https://www.bamboohr.com/", 1), ("https://www.bamboohr.com/login", 1), ("https://acme.example.com/jobs", 0)],
+    ("response", "counts"),
+    [
+        (_redirect(302, "https://www.bamboohr.com/"), 1),
+        (_redirect(302, "https://www.bamboohr.com/login"), 1),
+        (_redirect(302, "https://bamboohr.com/"), 1),
+        (_redirect(302, "https://acme.example.com/jobs"), 0),
+        (_redirect(500, "https://www.bamboohr.com/"), 0),  # not a redirect, whatever its Location
+        (_redirect(500, "https://www.bamboohr.com:abc/"), 0),  # an unparseable Location doesn't abort the run
+        (_redirect(302, "https://www.bamboohr.com:abc/"), 0),
+    ],
 )
 @respx.mock
-def test_a_bamboohr_tenant_that_redirects_to_bamboohr_counts_like_a_404(tmp_path, location, counts):
+def test_a_bamboohr_tenant_that_redirects_to_bamboohr_counts_like_a_404(tmp_path, response, counts):
     companies = tmp_path / "companies.yaml"
     companies.write_text(
         "companies:\n  - name: Live\n    ats: greenhouse\n    slug: live\n\n"
         "  - name: acme\n    ats: bamboohr\n    slug: acme\n"
     )
     respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
-    respx.get("https://acme.bamboohr.com/careers/list").mock(
-        return_value=httpx.Response(302, headers={"Location": location})
-    )
+    respx.get("https://acme.bamboohr.com/careers/list").mock(return_value=response)
     assert _fetch(tmp_path, companies) == 0
     assert _misses(tmp_path).counts == ({"bamboohr:acme": 1} if counts else {})
 

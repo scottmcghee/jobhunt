@@ -394,6 +394,19 @@ def test_workable_location_falls_back_to_the_top_level_fields():
     assert workable._location(raw) == "Paris, Île-de-France, France"
 
 
+@pytest.mark.parametrize(
+    ("raw", "field", "expected"),
+    [
+        ({}, "url", "https://apply.workable.com/examplecorp/j/K1L2M3N4O5"),  # no url: built from the shortcode
+        ({"locations": [{"city": "Austin", "country": "US"}] * 2}, "location", "Austin, US"),  # duplicates dropped
+        ({"created_at": "2026-09-01"}, "posted_at", "2026-09-01"),  # no published_on
+    ],
+)
+def test_workable_normalize_fallbacks(workable_company, raw, field, expected):
+    job = workable.normalize(workable_company, {"shortcode": "K1L2M3N4O5", **raw})
+    assert getattr(job, field) == expected
+
+
 @respx.mock
 def test_workable_unknown_account_raises_404(workable_company):
     respx.get(WK).mock(return_value=httpx.Response(404, text="Not Found"))
@@ -427,7 +440,10 @@ def test_bamboohr_lists_everything_but_fetches_bodies_only_when_wanted(bamboohr_
 
 @pytest.mark.parametrize(
     ("location_type", "is_remote", "expected"),
-    [("0", None, False), ("1", None, True), ("2", None, False), (None, True, True), (None, None, None), ("9", None, None)],
+    [
+        ("0", None, False), ("1", None, True), ("2", None, False), (1, None, True),  # an integer means the same
+        (None, True, True), (None, None, None), ("9", None, None),
+    ],
 )
 def test_bamboohr_remote(location_type, is_remote, expected):
     assert bamboohr._is_remote({"locationType": location_type, "isRemote": is_remote}) is expected
@@ -436,6 +452,35 @@ def test_bamboohr_remote(location_type, is_remote, expected):
 def test_bamboohr_remote_with_no_place_says_remote():
     raw = {"locationType": "1", "location": {"city": None, "state": None}, "atsLocation": None}
     assert bamboohr._location(raw) == "Remote"
+
+
+def test_bamboohr_location_falls_back_to_the_province():
+    raw = {"location": {"city": None, "state": None}, "atsLocation": {"province": "Ontario", "country": "Canada"}}
+    assert bamboohr._location(raw) == "Ontario, Canada"
+
+
+@pytest.mark.parametrize(
+    ("opening", "expected"),
+    [
+        ({"description": "<p>Lead.</p>", "compensation": "$1"}, "Lead.\n\nCompensation: $1"),
+        ({"description": None, "compensation": "$1"}, "Compensation: $1"),
+        ({"description": "<p>Lead.</p>", "compensation": " "}, "Lead."),
+    ],
+)
+def test_bamboohr_body(opening, expected):
+    assert bamboohr._body(opening) == expected
+
+
+@respx.mock
+def test_bamboohr_detail_redirect_isnt_followed(bamboohr_company, fixture_json):
+    respx.get(BH + "/list").mock(return_value=httpx.Response(200, json=fixture_json("bamboohr_list.json")))
+    respx.get(BH + "/101/detail").mock(return_value=httpx.Response(302, headers={"Location": "https://elsewhere.example/x"}))
+    elsewhere = respx.get("https://elsewhere.example/x").mock(
+        return_value=httpx.Response(200, json=fixture_json("bamboohr_job.json"))
+    )
+    with httpx.Client(follow_redirects=True) as client:
+        jobs = bamboohr.fetch(bamboohr_company, client, lambda job: job.external_id == "101")
+    assert len(jobs) == 3 and jobs[0].body == "" and elsewhere.call_count == 0
 
 
 @respx.mock
