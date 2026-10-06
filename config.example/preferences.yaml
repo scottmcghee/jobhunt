@@ -445,6 +445,17 @@ location:
     - seattle
     - tacoma
     - "wa,"
+  # Many postings don't say whether they're remote. With this on, such a role is checked against
+  # onsite_accept_any (like an on-site one) when neither its location nor its text mentions remote
+  # work: "New York, NY, United States" names where the job is, so "united states" in accept_any
+  # isn't enough. A location that is only a country (exactly one of country_wide_any) is left to
+  # accept_any. Needs onsite_accept_any; false (the default) turns this off.
+  unknown_remote_is_onsite: true
+  country_wide_any:
+    - "united states"
+    - "united states of america"
+    - "us"
+    - "usa"
   # Remote roles whose text names one of these are rejected (foreign-only remote).
   reject_any:
     - "canada only"

@@ -163,8 +163,89 @@ def test_onsite_role_inside_onsite_region_passes(prefs):
 @pytest.mark.parametrize("remote", [True, None])
 def test_onsite_rule_ignores_remote_and_unknown(prefs, remote):
     job = _job("Director of Platform Engineering", "Austin, TX, United States", remote=remote)
-    assert jfilter.evaluate(job, _onsite(prefs, "seattle")).passed
+    assert jfilter.evaluate(job, _unknown_is_onsite(_onsite(prefs, "seattle"), False)).passed
 
 
 def test_example_preferences_turn_the_onsite_rule_on(prefs):
     assert "seattle" in prefs.location.onsite_accept_any
+
+
+def _unknown_is_onsite(prefs, on=True):
+    loc = prefs.location.model_copy(update={"unknown_remote_is_onsite": on})
+    return prefs.model_copy(update={"location": loc})
+
+
+def test_unknown_remote_in_a_named_city_is_treated_as_onsite(prefs):
+    # Remote status unknown, a city far from the on-site list, and nothing says remote:
+    # "united states" in accept_any shouldn't be enough.
+    job = _job("Director of Platform Engineering", "New York, New York, United States")
+    assert jfilter.evaluate(job, _unknown_is_onsite(prefs, False)).passed  # rule off: unchanged
+    r = jfilter.evaluate(job, _unknown_is_onsite(prefs))
+    assert not r.passed
+    assert "unknown" in r.reason and "New York" in r.reason
+
+
+def test_unknown_remote_inside_the_onsite_region_passes(prefs):
+    job = _job("Director of Platform Engineering", "Bellevue, WA, United States")
+    assert jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+@pytest.mark.parametrize(
+    ("location", "body"),
+    [
+        ("New York, NY, United States", "This role is fully remote within the US."),
+        ("New York, NY, United States", "x" * 5000 + " Remote candidates welcome."),  # past 2,000
+        ("New York, NY, United States", "You can work from home."),
+        ("New York, NY, United States (Remote)", ""),
+        ("AMER - United States - Washington - Offsite/Home", ""),
+        ("United States - Home Based", ""),
+    ],
+)
+def test_unknown_remote_that_mentions_remote_anywhere_passes(prefs, location, body):
+    job = _job("Director of Platform Engineering", location, body=f"platform. {body}")
+    assert jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+@pytest.mark.parametrize("location", ["United States", "USA", " united states of america "])
+def test_unknown_remote_with_only_a_country_is_left_to_accept_any(prefs, location):
+    assert "usa" in prefs.location.country_wide_any
+    job = _job("Director of Platform Engineering", location)
+    assert jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+def test_a_country_inside_a_longer_location_is_not_country_wide(prefs):
+    job = _job("Director of Platform Engineering", "Tampa Florida United States; USA")
+    assert not jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+def test_home_counts_as_remote_only_in_the_location(prefs):
+    body = "platform. Our home is New York, and our offsite is in June."
+    job = _job("Director of Platform Engineering", "New York, NY, United States", body=body)
+    assert not jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+def test_remote_words_dont_help_when_remote_isnt_allowed(prefs):
+    loc = prefs.location.model_copy(update={"unknown_remote_is_onsite": True, "allow_remote": False})
+    job = _job("Director of Platform Engineering", "New York, NY, United States", body="remote ok")
+    assert not jfilter.evaluate(job, prefs.model_copy(update={"location": loc})).passed
+
+
+def test_unknown_remote_rule_needs_an_onsite_list(prefs):
+    job = _job("Director of Platform Engineering", "New York, New York, United States")
+    assert jfilter.evaluate(job, _unknown_is_onsite(_onsite(prefs))).passed
+
+
+def test_unknown_remote_rule_leaves_known_remote_alone(prefs):
+    job = _job("Director of Platform Engineering", "New York, NY, United States", remote=True)
+    assert jfilter.evaluate(job, _unknown_is_onsite(prefs)).passed
+
+
+def test_example_preferences_turn_the_unknown_remote_rule_on(prefs):
+    assert prefs.location.unknown_remote_is_onsite
+
+
+def test_unknown_remote_rule_is_off_by_default():
+    from jobhunt.config import LocationRules
+
+    rules = LocationRules()
+    assert rules.unknown_remote_is_onsite is False and rules.country_wide_any == []
