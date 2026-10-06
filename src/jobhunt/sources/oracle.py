@@ -15,8 +15,8 @@ board per host, or every posting is fetched, scored and written up once per boar
 
 Keyword search matches descriptions too, so a broad term can return thousands: ``fetch`` searches
 once per term, 200 a page, up to ``MAX_PER_TERM`` with a warning, and asks for a description only
-for postings that pass ``wants_body``. Most postings leave the workplace type blank; Oracle counts
-that as on-site.
+for postings that pass ``wants_body``. Most postings leave the workplace type blank; that is
+unknown, not on-site, so the location filter decides (it reads the body).
 """
 
 from __future__ import annotations
@@ -56,14 +56,14 @@ def _location(raw: dict) -> str:
     return "; ".join(dict.fromkeys(p.strip() for p in places if isinstance(p, str) and p.strip()))
 
 
-def _remote(raw: dict, location: str) -> bool:
-    """The code if there is one; else remote only if the location or title says so.
+def _remote(raw: dict, location: str) -> bool | None:
+    """The code if there is one; else True if the location or title says remote; else None.
 
-    Oracle's own workplace-type facet counts a blank code as on-site.
+    A blank code is unknown, not on-site: the location filter decides, and it reads the body.
     """
     if (remote := _REMOTE.get(raw.get("WorkplaceTypeCode") or "")) is not None:
         return remote
-    return "remote" in f"{location} {raw.get('Title', '')}".lower()
+    return True if "remote" in f"{location} {raw.get('Title', '')}".lower() else None
 
 
 def normalize(company: Company, raw: dict, detail: dict | None = None) -> Job:

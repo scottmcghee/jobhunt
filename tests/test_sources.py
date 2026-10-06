@@ -919,12 +919,18 @@ def test_oracle_searches_each_term_and_normalizes(oracle_company, fixture_json):
         ("ORA_ON_SITE", "Remote, US", "Director", False),  # the code wins over text
         ("ORA_HYBRID", "Austin, TX", "Director", False),
         (None, "Austin, TX", "Director (Remote)", True),
-        (None, "Austin, TX", "Director", False),  # Oracle's own facet counts blank as on-site
-        ("", "", "", False),
+        (None, "Austin, TX", "Director", None),  # blank is unknown: the location filter decides
+        ("", "", "", None),
     ],
 )
 def test_oracle_remote(code, location, title, expected):
     assert oracle._remote({"WorkplaceTypeCode": code, "Title": title}, location) is expected
+
+
+def test_oracle_a_blank_code_with_a_remote_body_passes_the_location_filter(oracle_company, prefs):
+    raw = {"Id": "1", "Title": "Director, Platform Engineering", "PrimaryLocation": "United States", "WorkplaceTypeCode": None}
+    detail = {"ExternalDescriptionStr": "<p>Lead our cloud platform team. Position is remote.</p>"}
+    assert check_location(oracle.normalize(oracle_company, raw, detail), prefs) is None
 
 
 @respx.mock
