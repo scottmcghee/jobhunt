@@ -27,7 +27,8 @@
 #               Amazon matches whole words only: a wildcard term like "recruit*" searches just
 #               "recruit" (fetch warns), so list "recruiter" and the other endings you want.
 #               A wrong country code finds nothing rather than a 404, so the board is never
-#               removed; fetch warns about it instead. Each term keeps its 2,000 newest postings.
+#               removed; fetch warns about it instead. Each term keeps the first 2,000
+#               postings in Amazon's "recent" order (not strictly by posting date).
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help`: it finds board URLs in any text
 # file, such as lines grepped from Common Crawl index files. Add --check to drop boards that have

@@ -542,7 +542,7 @@ def test_amazon_searches_each_term_and_normalizes(amazon_company, fixture_json):
     params = [call.request.url.params for call in route.calls]
     assert [p["base_query"] for p in params] == ["director", "senior manager"]
     assert all(p["normalized_country_code[]"] == "USA" and p["result_limit"] == "100" for p in params)
-    assert all(p["sort"] == "recent" for p in params)  # newest first, so a capped term keeps the new ones
+    assert all(p["sort"] == "recent" for p in params)  # roughly newest first, so a capped term keeps mostly new ones
     assert [j.external_id for j in jobs] == ["10000001", "10000002", "10000003", "10000004"]  # deduped
     first = jobs[0]
     assert (first.source, first.company, first.company_slug) == ("amazon", "Amazon", "USA")
@@ -632,7 +632,7 @@ def test_amazon_a_broad_term_stops_at_the_cap_and_says_so(amazon_company, caplog
     with httpx.Client() as client, caplog.at_level("WARNING"):
         jobs = amazon.fetch(amazon_company, client, ["manager"])
     assert route.call_count == 20 and len(jobs) == 2000
-    assert "amazon USA: manager has 5883 hits; kept the 2000 most recent" in caplog.messages
+    assert "amazon USA: manager has 5883 hits; kept the first 2000 in Amazon's 'recent' order (not strictly by posting date)" in caplog.messages
 
 
 @respx.mock

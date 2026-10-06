@@ -8,7 +8,9 @@ the /internal pages):
 
 Amazon lists tens of thousands of roles, so ``fetch`` searches instead of listing everything:
 one query per search term (``fetch`` passes the title filter's target-level words), paged 100 at
-a time, results deduped across terms. Descriptions come in the search results.
+a time, results deduped across terms. Descriptions come in the search results. A term keeps
+at most its first 2,000 hits in Amazon's ``sort=recent`` order, which is roughly but not
+strictly by posting date.
 
 A board is ``ats: amazon`` with ``slug:`` an ISO 3166 alpha-3 country code (``USA``), the
 country the search is limited to.
@@ -145,7 +147,8 @@ def fetch(
         else:
             if offset >= MAX_PER_TERM:
                 log.warning(
-                    "amazon %s: %s has %d hits; kept the %d most recent",
+                    "amazon %s: %s has %d hits; kept the first %d in Amazon's 'recent' order"
+                    " (not strictly by posting date)",
                     company.slug, term, hits, offset,
                 )
     if not found:
