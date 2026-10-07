@@ -14,9 +14,11 @@ From an RSS feed, every posting comes in one request. From a plain sitemap, each
 a URL, whose path holds the title and the place (``Richmond-Senior-Manager-VA-23230``). The
 title is one run of those words, so a page is fetched if ``wants_body`` passes any run of them,
 with "_" read as "." (``Sr_`` is how the URLs write "Sr.") and words the URL joined by dropping a
-"/" (``ManagerDirector``) split apart. That fetches some pages whose title then fails the filter,
-but skips none it would pass. The page's schema.org microdata gives the real title, location, date
-posted and description. The others keep what their URL says.
+"/" (``ManagerDirector``, ``VPDirector``, ``SVPGM``) split apart. That fetches some pages whose
+title then fails the filter. It can still skip one if the URL joined two lowercase words, or
+joined all-caps words more than once in a title or into one longer than 8 letters. The page's
+schema.org microdata gives the real title, location, date posted and description. The others
+keep what their URL says.
 
 Not every site the survey sees SuccessFactors on is Career Site Builder (careers.netapp.com is
 another platform in front of it). Its sitemap lists no job URLs in this shape, so ``fetch``
@@ -52,9 +54,11 @@ _GOOGLE_NS = "{http://base.google.com/ns/1.0}"
 _ITEMPROP_OPEN = re.compile(r'<(\w+)\b[^>]*\bitemprop="(title|description)"[^>]*>', re.I)
 _META = re.compile(r'<meta\s+itemprop="(\w+)"\s+content="([^"]*)"', re.I)
 _ADDRESS = ("addressLocality", "addressRegion", "addressCountry", "postalCode")
-_JOINED = re.compile(r"(?<=[a-z])(?=[A-Z])")  # "ManagerDirector": the URL dropped a "/"
+# "ManagerDirector", "VPDirector": the URL dropped a "/"
+_JOINED = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_CAPS = re.compile(r"\b[A-Z]{2,8}\b")  # "SVPGM" may be "SVP/GM": each two-way split is a reading
 _TOKEN = re.compile(r"[^\W_]+")
-_EDGES = re.compile(r"^[\W_]+|[\W_]+$")
+_EDGES = re.compile(r"^[\W_]+|[^\w.]+$")  # keeps the end of "D.C." and "U.S."
 
 
 def _url(company: Company, path: str) -> str:
@@ -128,11 +132,17 @@ def _listed(company: Company, url: str, words: str, job_id: str) -> Job:
 def _wanted(job: Job, wants_body: Callable[[Job], bool]) -> bool:
     """Whether ``wants_body`` passes any run of a listed posting's URL words, as the title.
 
-    The real title is one of those runs, read with "_" as "." and joined words split.
+    The real title is one of those runs, read with "_" as "." and joined words split: at a
+    capital after a lowercase letter or before one, or anywhere in one all-caps word.
     """
     dotted = job.title.replace("_", ".")
+    split = _JOINED.sub(" ", dotted)
+    readings = [job.title, dotted, split]
+    for m in _CAPS.finditer(split):
+        for k in range(1, len(m.group())):
+            readings.append(f"{split[: m.start() + k]} {split[m.start() + k :]}")
     tried: set[str] = set()
-    for reading in dict.fromkeys((job.title, dotted, _JOINED.sub(" ", dotted))):
+    for reading in dict.fromkeys(readings):
         words = reading.split()
         for n in range(len(words), 0, -1):
             for i in range(len(words) - n + 1):
@@ -174,8 +184,9 @@ def _place_from_url(words: str, title: str) -> str:
 
     'Richmond Senior Manager Marketing VA 23230' with title 'Senior Manager - Marketing' ->
     'Richmond, VA 23230'.
-    If the title isn't there, the URL's words, place and all.
+    If the title isn't there, the URL's words, place and all. Either way "_" reads as ".".
     """
+    words = words.replace("_", ".")
     tokens = list(_TOKEN.finditer(words))
     have = [t.group().lower() for t in tokens]
     want = [t.lower() for t in _TOKEN.findall(title)]

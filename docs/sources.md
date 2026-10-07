@@ -265,13 +265,16 @@ what the sites allow: the sitemap, and job pages.
 - **Descriptions:** in the feed, or one page each for postings that pass the title filter. A job
   URL's words (`Richmond Senior Manager VA 23230`) stand in for the title in that check. The title
   is one run of those words, so a page is fetched if any run passes, with `_` read as `.` (the
-  URLs write `Sr.` as `Sr_`) and words joined by a dropped `/` (`ManagerDirector`) split apart.
-  That fetches some pages whose title then fails the filter, but skips none it would pass. A page's
+  URLs write `Sr.` as `Sr_`) and words joined by a dropped `/` (`ManagerDirector`, `VPDirector`,
+  `SVPGM`) split apart. That fetches some pages whose title then fails the filter. It can still
+  skip one if the URL joined two lowercase words, or joined all-caps words more than once in a
+  title or into one longer than 8 letters. A page's
   schema.org microdata gives the real title, location, date posted and description; postings not
   fetched keep the URL's words as their title.
 - **Location:** the feed's location, or the page's address. A page without one gets the URL's
   words before and after the title, matched word by word and ignoring punctuation
-  (`Richmond, VA 23230`); if the title isn't in the URL, all of its words.
+  (`Richmond, VA 23230`); if the title isn't in the URL, all of its words. Either way `_` reads
+  as `.` (`St_ Louis` is `St. Louis`).
 - **Remote:** yes if the location or title says "remote", else unknown.
 - **Unknown board:** a host with no sitemap answers 404 and is removed. A site that isn't Career
   Site Builder (careers.netapp.com mentions SuccessFactors but runs another platform) lists no job

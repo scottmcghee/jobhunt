@@ -874,9 +874,18 @@ def _csb_site(page_text):
     respx.get("https://careers.acme.com/").mock(return_value=httpx.Response(200, text=page_text))
 
 
+@pytest.mark.parametrize(
+    "page",
+    [
+        CSB_PAGE,
+        # a page that loads only a /platform/csb/ asset
+        ('<html><link rel="stylesheet" href="/platform/csb/css/customHeader.css?h=1">'
+         '<img src="https://rmkcdn.successfactors.com/x/logo.png"></html>'),
+    ],
+)
 @respx.mock
-def test_a_career_site_builder_page_is_a_successfactors_board_for_its_host():
-    _csb_site(CSB_PAGE)
+def test_a_career_site_builder_page_is_a_successfactors_board_for_its_host(page):
+    _csb_site(page)
     result = _survey_acme()
     assert result.platforms == ["successfactors"]
     assert [(b.ats, b.slug, b.name) for b in result.boards] == [("successfactors", "careers.acme.com", "Acme Corp")]

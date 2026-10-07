@@ -1578,6 +1578,10 @@ def _sf_one(path, page):
         ("/job/Seattle-Sr_-Manager%2C-Platform-Engineering-WA-98101/1/", "Sr. Manager, Platform Engineering"),
         # and drops "/" (Manager/Director -> ManagerDirector)
         ("/job/Seattle-Senior-ManagerDirector%2C-Platform-Engineering-WA-98101/4/", "Senior Manager/Director, Platform Engineering"),
+        # a dropped "/" between capitals (careers.hubbell.com writes WDK/Killark as WDKKillark)
+        ("/job/Seattle-VPDirector%2C-Platform-Engineering-WA-98101/5/", "VP/Director, Platform Engineering"),
+        ("/job/Seattle-AVPDirector%2C-Platform-WA-98101/6/", "AVP/Director, Platform"),
+        ("/job/Seattle-SVPGM%2C-Platform-WA-98101/7/", "SVP/GM, Platform"),
         # place words that are excluded terms: Puerto Rico's "PR", Commerce, CA
         ("/job/San-Juan-Director%2C-Platform-Engineering-PR-00901/2/", "Director, Platform Engineering"),
         ("/job/Commerce-Director%2C-Platform-Engineering-CA-90040/3/", "Director, Platform Engineering"),
@@ -1602,6 +1606,11 @@ def test_successfactors_fetches_every_page_whose_title_could_pass(sf_company, pr
         ("/job/Seattle-Head-of-Platform-WA-98101/9/", "Seattle Head of Platform WA 98101"),
         # the URL is just the title: no place
         ("/job/Senior-Manager-Platform-Engineering/9/", ""),
+        # "_" is how the URL writes "." (careers.hubbell.com/job/St_-Louis-..., ...-D_C_-...)
+        ("/job/St_-Louis-Senior-Manager-Platform-Engineering-MO-63101/9/", "St. Louis, MO 63101"),
+        ("/job/Washington-Senior-Manager-Platform-Engineering-D_C_-20001/9/", "Washington, D.C. 20001"),
+        ("/job/Remote-Senior-Manager-Platform-Engineering-U_S_/9/", "Remote, U.S."),
+        ("/job/St_-Louis-Head-of-Platform-MO-63101/9/", "St. Louis Head of Platform MO 63101"),
     ],
 )
 @respx.mock
