@@ -7,6 +7,14 @@ allows /careers and /api/pcsx):
     GET https://{host}/api/pcsx/search?domain=...&query=...&start=N[&location=...]
     GET https://{host}/api/pcsx/position_details?position_id=...&domain=...
 
+Some tenants are still on Eightfold's older interface: there /api/pcsx answers 403 with JSON
+``{"message": "PCSX is not enabled for this user."}`` and the same data comes from the older API,
+which ``fetch`` switches to for the rest of the board's run. Any other 403 (a WAF or rate-limit
+block, usually an HTML page) is raised as is:
+
+    GET https://{host}/api/apply/v2/jobs?domain=...&query=...&start=N&num=10[&location=...]
+    GET https://{host}/api/apply/v2/jobs/{id}?domain=...
+
 A board is ``ats: eightfold`` with ``slug:`` the careers site's host, e.g. ``eaton.eightfold.ai``
 or ``apply.careers.microsoft.com``, and optionally ``location:`` (e.g. ``United States``) to limit
 its searches to one place. The API needs the company's ``domain`` (``eaton.com``), which the
@@ -25,6 +33,7 @@ import re
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -85,30 +94,77 @@ def _careers_domain(company: Company, client: httpx.Client) -> str:
     raise ValueError(f"no Eightfold domain on https://{company.slug}/careers")
 
 
-def _page(
-    company: Company, client: httpx.Client, domain: str, term: str, start: int
-) -> tuple[list[dict], int]:
-    params = {"domain": domain, "query": term, "start": start}
-    if company.location:
-        params["location"] = company.location
-    resp = client.get(f"https://{company.slug.lower()}/api/pcsx/search", params=params)
-    resp.raise_for_status()
-    data = resp.json().get("data") or {}
-    return data.get("positions") or [], int(data.get("count") or 0)
-
-
-def _detail(company: Company, client: httpx.Client, domain: str, posting_id: str) -> dict | None:
+def _pcsx_off(resp: httpx.Response) -> bool:
+    """Whether a response is an older-interface tenant's 403 for /api/pcsx, not a block."""
+    if resp.status_code != 403:
+        return False
     try:
-        resp = client.get(
-            f"https://{company.slug.lower()}/api/pcsx/position_details",
-            params={"position_id": posting_id, "domain": domain, "hl": "en"},
-        )
+        message = resp.json().get("message")
+    except (ValueError, AttributeError):  # not JSON, or not an object
+        return False
+    return isinstance(message, str) and "pcsx" in message.lower()
+
+
+class _Board:
+    """One board's API, for one run: the current one, or the older one once PCSX said it is off."""
+
+    def __init__(self, company: Company, client: httpx.Client, domain: str):
+        self.company, self.client, self.domain = company, client, domain
+        self.base = f"https://{company.slug.lower()}"
+        self.older = False
+
+    def page(self, term: str, start: int) -> tuple[list[dict], int]:
+        params: dict[str, str | int] = {"domain": self.domain, "query": term, "start": start}
+        if self.company.location:
+            params["location"] = self.company.location
+        if not self.older:
+            resp = self.client.get(f"{self.base}/api/pcsx/search", params=params)
+            if not _pcsx_off(resp):
+                resp.raise_for_status()
+                data = resp.json().get("data") or {}
+                return data.get("positions") or [], int(data.get("count") or 0)
+            log.info("eightfold %s: /api/pcsx forbidden; using the older API", self.company.slug)
+            self.older = True
+        older = {**params, "num": PAGE_SIZE}
+        resp = self.client.get(f"{self.base}/api/apply/v2/jobs", params=older)
         resp.raise_for_status()
-        return resp.json().get("data") or None
-    except (httpx.HTTPError, ValueError) as e:
-        error = " ".join(str(e).split())  # httpx's messages can span lines
-        log.warning("eightfold %s: no description for %s (%s)", company.slug, posting_id, error)
-        return None
+        data = resp.json()
+        rows = [_from_older(row) for row in data.get("positions") or []]
+        return rows, int(data.get("count") or 0)
+
+    def detail(self, posting_id: str) -> dict | None:
+        try:
+            if self.older:
+                resp = self.client.get(
+                    f"{self.base}/api/apply/v2/jobs/{posting_id}", params={"domain": self.domain}
+                )
+                resp.raise_for_status()
+                return {"jobDescription": resp.json().get("job_description")}
+            resp = self.client.get(
+                f"{self.base}/api/pcsx/position_details",
+                params={"position_id": posting_id, "domain": self.domain, "hl": "en"},
+            )
+            resp.raise_for_status()
+            return resp.json().get("data") or None
+        except (httpx.HTTPError, ValueError) as e:
+            error = " ".join(str(e).split())  # httpx's messages can span lines
+            slug = self.company.slug
+            log.warning("eightfold %s: no description for %s (%s)", slug, posting_id, error)
+            return None
+
+
+def _from_older(row: dict) -> dict:
+    """An older-API listing row, in the current API's shape (the fields ``normalize`` reads)."""
+    locations = row.get("locations") or ([row["location"]] if row.get("location") else [])
+    url = row.get("canonicalPositionUrl")
+    return {
+        "id": row.get("id"),
+        "name": row.get("name") or row.get("posting_name") or "",
+        "locations": locations,
+        "postedTs": row.get("t_create"),
+        "workLocationOption": row.get("work_location_option"),
+        "positionUrl": urlsplit(url).path if url else None,
+    }
 
 
 def fetch(
@@ -120,12 +176,12 @@ def fetch(
     pool: Executor | None = None,
 ) -> list[Job]:
     """Every posting any search term finds; descriptions for those ``wants_body`` accepts."""
-    domain = _careers_domain(company, client)
+    board = _Board(company, client, _careers_domain(company, client))
     found: dict[str, tuple[dict, Job]] = {}
     for term in terms(search, source="eightfold"):
         start = pages = 0
         while start < MAX_PER_TERM and (max_pages is None or pages < max_pages):
-            positions, count = _page(company, client, domain, term, start)
+            positions, count = board.page(term, start)
             pages += 1
             for raw in with_ids(company, positions):
                 job = normalize(company, raw)
@@ -141,7 +197,7 @@ def fetch(
                 )
     wanted = [(raw, job) for raw, job in found.values() if wants_body(job)]
     run = pool.map if pool is not None else map
-    details = run(lambda pair: _detail(company, client, domain, pair[1].external_id), wanted)
+    details = run(lambda pair: board.detail(pair[1].external_id), wanted)
     for (raw, job), detail in zip(wanted, details, strict=True):
         if detail:
             found[job.external_id] = (raw, normalize(company, raw, detail))
