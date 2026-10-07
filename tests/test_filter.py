@@ -270,3 +270,46 @@ def test_unknown_remote_rule_is_off_by_default():
 
     rules = LocationRules()
     assert rules.unknown_remote_is_onsite is False and rules.country_wide_any == []
+
+
+# ------------------------------------------------------------------ extra target words by tag
+
+def test_a_tagged_board_accepts_its_extra_target_words(prefs):
+    assert prefs.title.include_for_tags == {"big-tech": ["manager"]}
+    job = _job("Observability SRE Manager - Services Engineering", "Seattle, WA", body="platform")
+    assert jfilter.check_title(job, prefs) == "title lacks a target level keyword"
+    assert jfilter.check_title(job, prefs, tags=["big-tech"]) is None
+    assert jfilter.check_title(job, prefs, tags=["Big-Tech"]) is None  # tags compare without case
+    assert jfilter.check_title(job, prefs, tags=["saas"]) == "title lacks a target level keyword"
+
+
+def test_exclusions_still_apply_to_extra_target_words(prefs):
+    job = _job("Senior Product Manager, Platform", "Seattle, WA", body="platform")
+    assert "product manager" in jfilter.check_title(job, prefs, tags=["big-tech"])
+
+
+def test_targets_are_the_include_words_plus_the_tags_extras(prefs):
+    base = prefs.title.must_include_any
+    assert prefs.title.targets() == base
+    assert prefs.title.targets(["saas", "big-tech"]) == [*base, "manager"]
+    rules = prefs.title.model_copy(update={"include_for_tags": {"a": ["manager", "director"], "b": ["manager"]}})
+    assert rules.targets(["a", "b"]) == [*base, "manager"]  # no repeats
+    rules = prefs.title.model_copy(update={"include_for_tags": {"Big-Tech": ["manager"]}})
+    assert rules.targets(["big-tech"]) == [*base, "manager"]  # the key side ignores case too
+
+
+def test_extras_never_narrow_an_empty_include_list(prefs):
+    """No include words means any title passes; a tag's extras must not turn that into a filter."""
+    rules = prefs.title.model_copy(update={"must_include_any": [], "include_for_tags": {"big-tech": ["manager"]}})
+    assert rules.targets(["big-tech"]) == []  # so search sources still run their unfiltered search
+    open_prefs = prefs.model_copy(update={"title": rules})
+    job = _job("Principal Engineer", "Seattle, WA", body="platform")
+    assert jfilter.check_title(job, open_prefs, tags=["big-tech"]) is None
+
+
+def test_evaluate_and_apply_pass_the_tags_on(prefs):
+    job = _job("Observability SRE Manager", "Seattle, WA", body="platform")
+    assert not jfilter.evaluate(job, prefs).passed
+    assert jfilter.evaluate(job, prefs, tags=["big-tech"]).passed
+    passed, rejected = jfilter.apply([job], prefs, tags=["big-tech"])
+    assert passed == [job] and rejected == []

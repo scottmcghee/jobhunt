@@ -7,6 +7,7 @@ out the obvious misses first — and to do it in a way that is fully testable.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 
@@ -44,9 +45,11 @@ def _any_in(needles: list[str], haystack: str) -> str | None:
     return None
 
 
-def check_title(job: Job, prefs: Preferences) -> str | None:
+def check_title(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> str | None:
+    """``tags`` are the board's; a tag in ``include_for_tags`` adds target words."""
     rules = prefs.title
-    if rules.must_include_any and not _any_in(rules.must_include_any, job.title):
+    targets = rules.targets(tags)
+    if targets and not _any_in(targets, job.title):
         return "title lacks a target level keyword"
     hit = _any_in(rules.must_exclude_any, job.title)
     if hit:
@@ -121,19 +124,27 @@ def check_location(job: Job, prefs: Preferences) -> str | None:
     return f"location '{job.location or 'unknown'}' not in accepted list"
 
 
-def evaluate(job: Job, prefs: Preferences) -> FilterResult:
-    for check in (check_title, check_domain, check_location):
-        reason = check(job, prefs)
-        if reason:
+def evaluate(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> FilterResult:
+    tags = list(tags)
+    checks = (
+        lambda: check_title(job, prefs, tags),
+        lambda: check_domain(job, prefs),
+        lambda: check_location(job, prefs),
+    )
+    for check in checks:  # in order, stopping at the first failure
+        if reason := check():
             return FilterResult(job=job, passed=False, reason=reason)
     return FilterResult(job=job, passed=True, reason="")
 
 
-def apply(jobs: list[Job], prefs: Preferences) -> tuple[list[Job], list[FilterResult]]:
+def apply(
+    jobs: list[Job], prefs: Preferences, tags: Iterable[str] = ()
+) -> tuple[list[Job], list[FilterResult]]:
     """Return (passing jobs, rejected results with reasons)."""
+    tags = list(tags)
     passed: list[Job] = []
     rejected: list[FilterResult] = []
     for j in jobs:
-        r = evaluate(j, prefs)
+        r = evaluate(j, prefs, tags)
         (passed.append(j) if r.passed else rejected.append(r))
     return passed, rejected

@@ -338,6 +338,56 @@ def test_fetch_passes_the_title_terms_as_search_terms(tmp_path, monkeypatch, fix
     assert seen and all(s == terms for s in seen)
 
 
+def _manager_job(slug):
+    return {"jobs": [{"id": 7, "title": "Observability SRE Manager", "location": {"name": "Seattle, WA"},
+                      "absolute_url": f"https://boards.greenhouse.io/{slug}/jobs/7", "content": "Run our platform."}]}
+
+
+@respx.mock
+def test_a_tagged_board_takes_its_extra_target_words(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n  - name: Big\n    ats: greenhouse\n    slug: big\n    tags: [big-tech]\n\n"
+        "  - name: Small\n    ats: greenhouse\n    slug: small\n"
+    )
+    respx.get(GH.format("big")).mock(return_value=httpx.Response(200, json=_manager_job("big")))
+    respx.get(GH.format("small")).mock(return_value=httpx.Response(200, json=_manager_job("small")))
+    seen = {}
+    real = cli.fetch_company
+
+    def fetch(company, client, **kw):
+        job = cli.Job(source="greenhouse", company=company.name, company_slug=company.slug, external_id="x",
+                      title="Observability SRE Manager", location="Seattle, WA", url="https://x")
+        seen[company.slug] = (kw["search"], kw["wants_body"](job))
+        return real(company, client, **kw)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, companies) == 0
+    assert [j.company_slug for j in storage.load_jobs(tmp_path / "data")] == ["big"]
+    base = cli.config.load_preferences().title.must_include_any
+    assert seen["big"] == ([*base, "manager"], True)  # searched, and its description is wanted
+    assert seen["small"] == (base, False)
+
+
+@respx.mock
+def test_search_caps_come_from_settings(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n  - name: Amazon\n    ats: amazon\n    slug: USA\n\n"
+        "  - name: Live\n    ats: greenhouse\n    slug: live\n"
+    )
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_PER_TERM", '{"amazon": 7}')
+    seen = {}
+
+    def fetch(company, client, **kw):
+        seen[company.ats] = kw.get("max_per_term")
+        return []
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert seen == {"amazon": 7, "greenhouse": None}  # each board gets its own source's cap
+
+
 @respx.mock
 def test_dry_run_does_not_count_404s(tmp_path, fixture_json):
     companies = _two_company_config(tmp_path)

@@ -34,12 +34,14 @@
 #               Searched like Amazon (below). A wrong location filter finds nothing rather than a
 #               404, so the board is never removed; fetch warns about it instead.
 #   Amazon:     amazon.jobs has its own search, not an ATS. slug is the country to search (ISO
-#               alpha-3, e.g. USA). fetch searches once per word in preferences.yaml title.must_include_any.
+#               alpha-3, e.g. USA). fetch searches once per word in preferences.yaml title.must_include_any,
+#               plus any title.include_for_tags words for the board's tags.
 #               Amazon matches whole words only: a wildcard term like "recruit*" searches just
 #               "recruit" (fetch warns), so list "recruiter" and the other endings you want.
 #               A wrong country code finds nothing rather than a 404, so the board is never
-#               removed; fetch warns about it instead. Each term keeps the first 2,000
-#               postings in Amazon's "recent" order (not strictly by posting date).
+#               removed; fetch warns about it instead. Each term keeps its first postings in
+#               Amazon's "recent" order (not strictly by posting date), up to the source's
+#               fetch.max_per_term in settings.yaml (default 2,000).
 #
 # To find many slugs at once, see `python -m jobhunt.slugs --help`: it finds board URLs in any text
 # file, such as lines grepped from Common Crawl index files. Add --check to drop boards that have

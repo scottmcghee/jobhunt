@@ -191,6 +191,7 @@ def _fetch_board(
     stopping: Callable[[], bool] = lambda: False,
     pool: Executor | None = None,
     search: Sequence[str] = (),
+    max_per_term: int | None = None,
 ) -> BoardOutcome:
     """Fetch one board. Touches no shared state, and a failing board never stops the run.
 
@@ -198,7 +199,14 @@ def _fetch_board(
     under boards still in flight, and the runner discards their outcomes anyway.
     """
     try:
-        jobs = fetch_company(company, client, wants_body=wants_body, pool=pool, search=search)
+        jobs = fetch_company(
+            company,
+            client,
+            wants_body=wants_body,
+            pool=pool,
+            search=search,
+            max_per_term=max_per_term,
+        )
         return BoardOutcome(company, jobs=jobs)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
@@ -239,7 +247,7 @@ def _record(
             dead.add(company.key)
         return
     misses.clear(company.key)
-    passed, rejected = jfilter.apply(outcome.jobs, prefs)
+    passed, rejected = jfilter.apply(outcome.jobs, prefs, company.tags)
     fresh = [j for j in passed if j.key not in seen]
     counts = f"total={len(outcome.jobs):<4} passed={len(passed):<3} new={len(fresh)}"
     print(f"{company.name:<16} {counts}")
@@ -260,8 +268,8 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     seen = storage.SeenSet(data_dir / "seen.json")
     misses = storage.MissLedger(data_dir / "misses.json")
 
-    def title_passes(job: Job) -> bool:
-        return jfilter.check_title(job, prefs) is None
+    def title_passes(company: Company) -> Callable[[Job], bool]:
+        return lambda job: jfilter.check_title(job, prefs, company.tags) is None
 
     new_jobs: list[Job] = []
     dead: set[str] = set()
@@ -279,11 +287,13 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             lambda company: _fetch_board(
                 company,
                 client,
-                title_passes,
+                title_passes(company),
                 args.verbose,
                 lambda: boards.stopping,
                 pools.get(rate_group(company)),
-                prefs.title.must_include_any,  # search terms for sites too big to list (Amazon)
+                # search terms for sites too big to list, with the board's tag extras
+                prefs.title.targets(company.tags),
+                fetch.max_per_term.get(company.ats),
             ),
             group_of=rate_group,
             per_group=args.per_host,

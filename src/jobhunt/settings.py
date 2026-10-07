@@ -18,10 +18,10 @@ import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
 
 from jobhunt import config, storage
 
@@ -67,7 +67,15 @@ class FetchSettings(_Section):
         default_factory=lambda: {"workable": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0}
     )
 
-    @field_validator("max_rate", mode="before")
+    # Most postings each search term may bring in, per search source (amazon, apple, eightfold,
+    # oracle). A term with more hits stops there, with a warning. Amazon can't page past 9,900.
+    max_per_term: dict[
+        Literal["amazon", "apple", "eightfold", "oracle"], Annotated[StrictInt, Field(ge=1)]
+    ] = Field(
+        default_factory=lambda: {"amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000}
+    )
+
+    @field_validator("max_rate", "max_per_term", mode="before")
     @classmethod
     def _rate_from_json(cls, value: Any) -> Any:
         """An environment variable holds the map as JSON, e.g. '{"workable": 3}'."""

@@ -9,7 +9,7 @@ import logging
 import re
 import textwrap
 from collections import Counter
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +37,24 @@ def _read(path: Path) -> str:
 class TitleRules(BaseModel):
     must_include_any: list[str] = Field(default_factory=list)
     must_exclude_any: list[str] = Field(default_factory=list)
+    # Extra target words for boards carrying a tag, e.g. {"big-tech": ["manager"]}.
+    include_for_tags: dict[str, list[str]] = Field(default_factory=dict)
+
+    def targets(self, tags: Iterable[str] = ()) -> list[str]:
+        """The target-level words for a board with these tags: the usual ones, then its extras.
+
+        No usual words means any title passes, so extras add nothing: they would narrow it.
+        """
+        if not self.must_include_any:
+            return []
+        wanted = {t.lower() for t in tags}
+        extra = [
+            word
+            for tag, words in self.include_for_tags.items()
+            if tag.lower() in wanted
+            for word in words
+        ]
+        return list(dict.fromkeys([*self.must_include_any, *extra]))
 
 
 class DomainRules(BaseModel):

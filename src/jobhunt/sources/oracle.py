@@ -14,9 +14,10 @@ URL: the search returns the host's postings whatever the site (even a made-up on
 board per host, or every posting is fetched, scored and written up once per board.
 
 Keyword search matches descriptions too, so a broad term can return thousands: ``fetch`` searches
-once per term, 200 a page, up to ``MAX_PER_TERM`` with a warning, and asks for a description only
-for postings that pass ``wants_body``. Most postings leave the workplace type blank; that is
-unknown, not on-site, so the location filter decides (it reads the body).
+once per term, 200 a page, up to ``max_per_term`` (settings ``fetch.max_per_term``; default
+1,000) with a warning, and asks for a description only for postings that pass ``wants_body``.
+Most postings leave the workplace type blank; that is unknown, not on-site, so the location
+filter decides (it reads the body).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from jobhunt.sources._search import terms
 log = logging.getLogger(__name__)
 
 PAGE_SIZE = 200  # the most the API returns per page
-MAX_PER_TERM = 1000  # 5 requests; a runaway guard for broad terms
+MAX_PER_TERM = 1000  # default per-term cap (fetch.max_per_term); a runaway guard for broad terms
 _REMOTE = {"ORA_REMOTE": True, "ORA_ON_SITE": False, "ORA_HYBRID": False}
 _BODY = ("ExternalDescriptionStr", "ExternalResponsibilitiesStr", "ExternalQualificationsStr")
 
@@ -115,13 +116,16 @@ def fetch(
     max_pages: int | None = None,
     wants_body: Callable[[Job], bool] = lambda job: True,
     pool: Executor | None = None,
+    max_per_term: int | None = None,
 ) -> list[Job]:
     """Every posting any search term finds; descriptions for those ``wants_body`` accepts."""
+    cap = max_per_term or MAX_PER_TERM
     found: dict[str, tuple[dict, Job]] = {}
     for term in terms(search, source="oracle"):
         offset = pages = 0
-        while offset < MAX_PER_TERM and (max_pages is None or pages < max_pages):
+        while offset < cap and (max_pages is None or pages < max_pages):
             reqs, total = _page(company, client, term, offset)
+            reqs = reqs[: cap - offset]  # the cap may end mid-page
             pages += 1
             for raw in with_ids(company, reqs, field="Id"):
                 job = normalize(company, raw)
@@ -130,10 +134,10 @@ def fetch(
             if not reqs or offset >= total:
                 break
         else:  # the loop's own condition stopped it: the cap, or max_pages
-            if offset >= MAX_PER_TERM:
+            if offset >= cap:
                 log.warning(
                     "oracle %s: %r has %d hits; kept the first %d",
-                    company.slug, term, total, MAX_PER_TERM,
+                    company.slug, term, total, offset,
                 )
     wanted = [(raw, job) for raw, job in found.values() if wants_body(job)]
     run = pool.map if pool is not None else map
