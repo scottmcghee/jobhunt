@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from jobhunt import storage
+from jobhunt import config, storage
 from jobhunt.schema import Company, Job
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "tag_companies.py"
@@ -108,6 +108,8 @@ def test_vocabulary():
         (Company(name="eeho/CX_45001", ats="oracle", slug="eeho.fa.us2.oraclecloud.com/CX_45001"), True),
         (Company(name="googlefiber", ats="greenhouse", slug="googlefiber"), False),
         (Company(name="Applecart", ats="lever", slug="applecart"), False),
+        (Company(name="Careers", ats="eightfold", slug="apply.careers.microsoft.com"), True),  # host only
+        (Company(name="Netflix", ats="lever", slug="nflx"), True),  # name only
     ],
 )
 def test_big_tech(board, expected):
@@ -116,7 +118,7 @@ def test_big_tech(board, expected):
 
 def test_sp500_boards_come_from_the_survey(tmp_path):
     sp = tagger.sp500_boards(_survey(tmp_path))
-    howmet = "oracle:fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/cx_1"
+    howmet = "oracle:fa-exty-saasfaprod1.fa.ocs.oraclecloud.com"  # Oracle: by host, any site
     assert sp[howmet] == ("HWM", "Industrials")
     assert tagger.sector_tags("Industrials") == ["manufacturing"]
     assert tagger.sector_tags("Health Care") == ["healthcare"]
@@ -140,6 +142,13 @@ def test_classify_batches_caches_and_keeps_only_known_industries(tmp_path):
     more = [*boards, Company(name="New", ats="lever", slug="new")]
     tagger.classify(more, model, cache, titles, batch_size=2)
     assert len(model.calls) == 4 and "lever:new" in model.calls[-1]
+
+
+def test_classify_normalizes_near_miss_answers(tmp_path):
+    boards = [Company(name="A", ats="greenhouse", slug="a")]
+    model = FakeModel({"greenhouse:a": [" Healthcare", "public sector", 3]})
+    got = tagger.classify(boards, model, tmp_path / "c.json", {})
+    assert got == {"greenhouse:a": ["healthcare", "public-sector"]}
 
 
 def test_classify_survives_a_bad_answer(tmp_path, caplog):
@@ -219,3 +228,101 @@ def test_an_entry_whose_tags_dont_change_is_left_exactly_as_written(tmp_path):
     p = _companies(tmp_path)
     tagger.apply_tags(p, {"greenhouse:acmelearning": ["edtech"]}, {})
     assert "    tags:\n      - remote\n      - edtech\n" in p.read_text()
+
+
+def test_a_board_with_no_industry_answer_keeps_its_industries(tmp_path):
+    text = "companies:\n  - name: A\n    ats: lever\n    slug: a\n    tags: [security, remote, sp500]\n"
+    p = _companies(tmp_path, text)
+    tagger.apply_tags(p, {}, {})  # no answer for lever:a: not "no industries"
+    assert _load(p)["lever:a"] == ["remote", "security"]  # sp500 is still recomputed
+    tagger.apply_tags(p, {"lever:a": []}, {})  # an answer of none clears them
+    assert _load(p)["lever:a"] == ["remote"]
+
+
+def test_no_llm_without_a_cache_keeps_the_example_industries(tmp_path, monkeypatch):
+    example = Path(__file__).resolve().parents[1] / "config.example" / "companies.yaml"
+    p = _companies(tmp_path, example.read_text())
+    before = _load(p)
+    data = tmp_path / "data"
+    data.mkdir()
+    assert tagger.main(["--companies", str(p), "--data-dir", str(data), "--no-llm"]) == 0
+    after = _load(p)
+    for key, tags in before.items():
+        industries = [t for t in tags if t in tagger.INDUSTRIES]
+        assert [t for t in after[key] if t in tagger.INDUSTRIES] == industries, key
+
+
+def test_oracle_boards_match_the_survey_by_host(tmp_path):
+    host = "fa-exty-saasfaprod1.fa.ocs.oraclecloud.com"
+    text = (f"companies:\n  - name: Howmet\n    ats: oracle\n    slug: {host}/CX\n\n"
+            "  - name: nvidia\n    ats: workday\n    slug: nvidia/OtherSite\n    datacenter: wd5\n")
+    p = _companies(tmp_path, text)
+    tagger.apply_tags(p, {}, tagger.sp500_boards(_survey(tmp_path)))  # the survey has host/CX_1
+    tags = _load(p)
+    assert tags[f"oracle:{host}/CX"] == ["sp500", "manufacturing"]
+    assert tags["workday:nvidia/OtherSite"] == ["big-tech"]  # Workday: the site must match too
+
+
+def _run(tmp_path, text, industry):
+    p = _companies(tmp_path, text)
+    tagger.apply_tags(p, industry, {})
+    return p
+
+
+ENTRY = "companies:\n  - name: A\n    ats: lever\n    slug: a\n"
+
+
+@pytest.mark.parametrize("tag", ['"2024"', '"yes"', '"null"', '"a, b"', '"#1"', "'on'"])
+def test_quoted_hand_tags_stay_strings(tmp_path, tag):
+    p = _run(tmp_path, f"{ENTRY}    tags: [{tag}]\n", {"lever:a": ["ai"]})
+    assert [c.tags for c in config.load_companies(p)] == [[yaml.safe_load(tag), "ai"]]
+
+
+@pytest.mark.parametrize(
+    "tags_text",
+    [
+        "    tags:\n    - remote\n",  # an indentless list
+        "    tags:  # hand tags\n      - remote\n",  # a comment on the tags line
+        "    tags:\n      # mine\n      - remote\n",  # a comment inside the list
+    ],
+)
+def test_block_list_shapes(tmp_path, tags_text):
+    text = f"{ENTRY}{tags_text}\n  - name: B\n    ats: lever\n    slug: b\n"
+    p = _run(tmp_path, text, {"lever:a": ["ai"]})
+    assert [c.tags for c in config.load_companies(p)] == [["remote", "ai"], []]
+    assert "    slug: a\n    tags: [remote, ai]" in p.read_text()
+    assert "\n\n  - name: B\n" in p.read_text()  # the blank line between entries stays
+
+
+def test_a_comment_on_the_tags_line_is_kept(tmp_path):
+    p = _run(tmp_path, f"{ENTRY}    tags: [remote]  # why\n", {"lever:a": ["ai"]})
+    assert "    tags: [remote, ai]  # why\n" in p.read_text()
+
+
+def test_an_entry_whose_first_key_is_tags(tmp_path):
+    text = "companies:\n  - tags: [remote]\n    name: A\n    ats: lever\n    slug: a\n"
+    p = _run(tmp_path, text, {"lever:a": ["ai"]})
+    assert p.read_text().count("tags:") == 1
+    assert "  - tags: [remote, ai]\n    name: A\n" in p.read_text()
+
+
+def test_last_entry_without_a_final_newline(tmp_path):
+    p = _run(tmp_path, ENTRY.rstrip("\n"), {"lever:a": ["ai"]})
+    assert [c.tags for c in config.load_companies(p)] == [["ai"]]
+
+
+def test_content_after_the_companies_list_is_kept(tmp_path):
+    p = _run(tmp_path, f"{ENTRY}    tags: []\nsettings_note: keep me\n", {"lever:a": ["ai"]})
+    assert p.read_text().endswith("    tags: [ai]\nsettings_note: keep me\n")
+
+
+def test_a_bad_rewrite_is_never_written(tmp_path, monkeypatch):
+    p = _companies(tmp_path, f"{ENTRY}    tags: []\n")
+    before = p.read_text()
+    monkeypatch.setattr(tagger, "_rewrite", lambda entry, tags: [*entry, "      - stray\n"])
+    with pytest.raises(ValueError):
+        tagger.apply_tags(p, {"lever:a": ["ai"]}, {})
+    monkeypatch.setattr(tagger, "_rewrite", lambda entry, tags: entry)  # parses, but wrong tags
+    with pytest.raises(ValueError):
+        tagger.apply_tags(p, {"lever:a": ["ai"]}, {})
+    assert p.read_text() == before

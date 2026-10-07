@@ -96,7 +96,14 @@ def sector_tags(sector: str) -> list[str]:
 
 
 def _key(board: Company) -> str:
-    """A board's identity, case-insensitively (the survey and the config may differ in case)."""
+    """A board's identity, case-insensitively (the survey and the config may differ in case).
+
+    An Oracle board is its host: the search returns the host's postings whatever the site, and the
+    config keeps one board per host, often not the site the survey recorded. Workday keeps the
+    site, since one tenant can host several companies' or divisions' sites.
+    """
+    if board.ats == "oracle":
+        return f"oracle:{board.slug.split('/')[0].lower()}"
     return board.key.lower()
 
 
@@ -149,8 +156,9 @@ def classify(
             continue
         for b in batch:
             got = answer.get(b.key)
-            if isinstance(got, list):
-                cache[b.key] = [t for t in got if t in INDUSTRIES][:MAX_INDUSTRIES]
+            if isinstance(got, list):  # "Public sector" -> public-sector
+                said = [re.sub(r"[ _]", "-", t.strip().lower()) for t in got if isinstance(t, str)]
+                cache[b.key] = [t for t in said if t in INDUSTRIES][:MAX_INDUSTRIES]
         cache_path.write_text(json.dumps(cache, indent=1, sort_keys=True) + "\n")
         log.info("classified batch %d of %d", n + 1, len(batches))
     return {b.key: cache[b.key] for b in boards if b.key in cache}
@@ -165,32 +173,63 @@ def managed_tags(
     if (hit := sp500.get(_key(board))) is not None:
         tags.append("sp500")
         tags += sector_tags(hit[1])
-    tags += industry.get(board.key, [])
+    if board.key in industry:
+        tags += industry[board.key]
+    else:  # no answer (not asked, or a skipped batch) isn't "no industries": keep what's there
+        tags += [t for t in board.tags if t in INDUSTRIES]
     return list(dict.fromkeys(tags))
 
 
-_TAGS_LINE = re.compile(r"^(\s+)tags:(.*)$")
+_TAGS_LINE = re.compile(r"^(\s+(?:- )?)tags:(.*?)\n?$")
+
+
+def _quote(tag: str) -> str:
+    """A tag as YAML that reads back as the same string ("2024", "yes", "a, b" need quotes)."""
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", tag) and yaml.safe_load(tag) == tag:
+        return tag
+    return json.dumps(tag)
+
+
+def _split_comment(value: str) -> tuple[str, str]:
+    """A tags line's value and its trailing comment, if any (a "#" inside quotes isn't one)."""
+    whole = yaml.safe_load(f"x:{value}")
+    for m in re.finditer(r"\s+#", value):
+        try:
+            if yaml.safe_load(f"x:{value[: m.start()]}") == whole:
+                return value[: m.start()], value[m.start() :]
+        except yaml.YAMLError:
+            continue
+    return value, ""
 
 
 def _rewrite(entry: list[str], tags: list[str]) -> list[str]:
     """An entry's lines with its tags set to ``tags``, as one flow-list line."""
     first_key = next(i for i, line in enumerate(entry) if re.match(r"^\s*- \w", line))
     indent = " " * (len(entry[first_key]) - len(entry[first_key].lstrip(" -")))
-    line = f"{indent}tags: [{', '.join(tags)}]\n"
+    flow = f"tags: [{', '.join(_quote(t) for t in tags)}]"
     out, i = [], 0
     while i < len(entry):
         if m := _TAGS_LINE.match(entry[i]):
-            out.append(line)
+            value, comment = _split_comment(m.group(2))
+            out.append(f"{m.group(1)}{flow}{comment}\n")
             i += 1
-            if not m.group(2).strip():  # a block list: drop its "- item" lines
-                while i < len(entry) and re.match(rf"^{m.group(1)}\s+- ", entry[i]):
-                    i += 1
+            if not value.strip():  # a block list: drop its "- item" lines, and comments among them
+                column = len(m.group(1))
+                j, end = i, i
+                while j < len(entry) and (not entry[j].strip() or entry[j].lstrip().startswith("#")
+                                          or re.match(rf"^ {{{column},}}- ", entry[j])):
+                    j += 1
+                    if entry[j - 1].strip().startswith("- "):
+                        end = j  # up to the last item: a blank line after it ends the entry
+                i = end
             continue
         out.append(entry[i])
         i += 1
     if not any(_TAGS_LINE.match(x) for x in entry):  # no tags line: add one after the last key
         last = max(i for i, x in enumerate(out) if x.strip() and not x.lstrip().startswith("#"))
-        out.insert(last + 1, line)
+        if not out[last].endswith("\n"):
+            out[last] += "\n"
+        out.insert(last + 1, f"{indent}{flow}\n")
     return out
 
 
@@ -206,18 +245,35 @@ def apply_tags(
     changed = 0
     spans = config._entry_spans(lines)
     out += lines[: spans[0][0]] if spans else lines
+    expected = []
     for lo, hi in spans:
         entry = lines[lo:hi]
         board = Company.model_validate(yaml.safe_load(textwrap.dedent("".join(entry)))[0])
         keep = [t for t in board.tags if t not in VOCABULARY]
         tags = keep + managed_tags(board, industry, sp500)
+        expected.append(board.model_copy(update={"tags": tags}))
         if tags != board.tags:
             changed += 1
             entry = _rewrite(entry, tags)
         out += entry
+    out += lines[spans[-1][1] :] if spans else []
+    if changed:
+        _check("".join(lines), "".join(out), expected)
     if changed and not dry_run:
         path.write_text("".join(out))
     return changed
+
+
+def _check(before: str, after: str, expected: list[Company]) -> None:
+    """Raise unless ``after`` reads back as ``expected`` with the rest of ``before`` unchanged."""
+    try:
+        old, new = yaml.safe_load(before), yaml.safe_load(after)
+        got = [Company.model_validate(e) for e in new.pop("companies")]
+    except Exception as e:
+        raise ValueError(f"rewriting companies.yaml broke it ({e}); left it unchanged") from e
+    old.pop("companies")
+    if got != expected or new != old:
+        raise ValueError("rewriting companies.yaml changed more than tags; left it unchanged")
 
 
 def main(argv: list[str] | None = None) -> int:
