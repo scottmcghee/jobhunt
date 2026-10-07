@@ -298,7 +298,11 @@ class _Polite:
             resp = self._fetch(url, follow_redirects=False)
             if resp is None or not resp.is_redirect or "location" not in resp.headers:
                 return resp  # a 3xx with no Location goes nowhere: it is the answer
-            url = urljoin(url, resp.headers["location"])
+            try:
+                url = urljoin(url, resp.headers["location"])
+            except ValueError:  # a malformed Location, like http://[oops: it is the answer
+                self.errors.append(f"{url}: bad redirect")
+                return resp
         self.errors.append(f"{url}: too many redirects")
         return None
 
@@ -444,8 +448,8 @@ def main(argv: list[str] | None = None) -> int:
     headers = {"User-Agent": fetch.user_agent}
     # Through fetch's throttle: one request at a time, and 429s (Wikidata answers a burst of
     # batches with one) are retried after Retry-After or a backoff instead of ending the run.
-    # No transient retries: guesses like careers.<host> often don't resolve, and retrying each
-    # with a backoff would add seconds per company.
+    # No transient or connect retries: guesses like careers.<host> often don't resolve, and
+    # retrying each would add seconds (up to fetch.timeout per attempt) per company.
     transport = throttle.ThrottledTransport(
         start=1,
         ceiling=1,
@@ -453,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
         max_retries=fetch.max_retries,
         max_retry_after=fetch.max_retry_after,
         transient_retries=0,
+        connect_retries=0,
     )
     with httpx.Client(
         headers=headers, timeout=fetch.timeout, follow_redirects=True, transport=transport
