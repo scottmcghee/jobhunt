@@ -61,9 +61,9 @@ companies.yaml ──► fetch ──► filter ──► score ──► letter
 
 `jobhunt fetch` reads every board in `config/companies.yaml`. It supports seven
 applicant-tracking systems (Greenhouse, Lever, Ashby, Workable, Workday, SmartRecruiters and
-BambooHR), plus Amazon, Apple, Eightfold and Oracle Recruiting Cloud sites, which are too big to
-list and are searched by your target title words instead. It calls the public endpoints the
-companies' own careers pages use, so no accounts are needed.
+BambooHR), plus Amazon, Apple, Eightfold, Oracle Recruiting Cloud and Phenom sites, which are too
+big to list and are searched by your target title words instead. It calls the public endpoints
+the companies' own careers pages use, so no accounts are needed.
 
 New postings that pass the filter are appended to `data/jobs.jsonl`. `data/seen.json` remembers
 what was already recorded, so running `fetch` again never adds a duplicate. A board found gone

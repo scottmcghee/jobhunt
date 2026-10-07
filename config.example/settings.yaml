@@ -66,6 +66,7 @@ fetch:
     apple: 400  # 20 a page
     eightfold: 500  # 10 a page
     oracle: 1000  # 200 a page
+    phenom: 500  # 100 a page
 
 paths:
   # ~ expands, and a relative path is under the repo (like the defaults), whatever directory

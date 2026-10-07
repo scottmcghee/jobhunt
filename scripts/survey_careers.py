@@ -41,6 +41,7 @@ import httpx
 
 from jobhunt import config, settings, slugs, throttle
 from jobhunt.schema import Company
+from jobhunt.sources import phenom
 
 DEFAULT_OUT = Path("data/sp500")
 WIKI_URL = "https://en.wikipedia.org/w/index.php"
@@ -91,6 +92,8 @@ _PLATFORMS = {name: re.compile(pattern, re.I) for name, pattern in PLATFORMS.ite
 _URL = re.compile(r"""https?://[^\s"'<>\\)]+""")
 _HREF = re.compile(r"""href\s*=\s*["']([^"'#]+)""", re.I)
 _CAREERS = re.compile(r"career|jobs?\b|join-?us", re.I)
+_COUNTRY = re.compile(r"[a-z]{2,10}")  # a Phenom site's /us/en/ or /global/en/
+_LANGUAGE = re.compile(r"[a-z]{2}")
 
 
 @dataclass(frozen=True)
@@ -279,10 +282,15 @@ class _Polite:
         self.errors: list[str] = []  # requests that got no response
         self.responses = 0
 
-    def _fetch(self, url: str, follow_redirects: bool) -> httpx.Response | None:
+    def _fetch(
+        self, url: str, follow_redirects: bool, json: dict | None = None
+    ) -> httpx.Response | None:
         time.sleep(self.delay)
         try:
-            resp = self.client.get(url, follow_redirects=follow_redirects)
+            if json is None:
+                resp = self.client.get(url, follow_redirects=follow_redirects)
+            else:
+                resp = self.client.post(url, json=json, follow_redirects=follow_redirects)
         except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:  # ValueError: a bad IDNA host
             self.errors.append(f"{url}: {type(e).__name__}")
             return None
@@ -305,6 +313,13 @@ class _Polite:
                 return resp
         self.errors.append(f"{url}: too many redirects")
         return None
+
+    def post(self, url: str, body: dict) -> httpx.Response | None:
+        """POST within robots.txt; no redirects (an API call that redirects has moved)."""
+        if not self.allowed(url):
+            self.skipped.append(url)
+            return None
+        return self._fetch(url, follow_redirects=False, json=body)
 
     def allowed(self, url: str) -> bool:
         parts = urlsplit(url)
@@ -333,6 +348,43 @@ def _read(page: httpx.Response, company: Constituent) -> tuple[set[str], list[Co
     return found, boards
 
 
+def phenom_board(url: str, name: str) -> Company | None:
+    """The Phenom board a page of the site is on: its host, and the /us/en/ in its path if any."""
+    parts = urlsplit(url)
+    segments = [s for s in parts.path.split("/") if s]
+    locale = segments[:2]
+    if len(locale) < 2 or not (_COUNTRY.fullmatch(locale[0]) and _LANGUAGE.fullmatch(locale[1])):
+        locale = []
+    slug = "/".join([(parts.hostname or "").lower(), *locale])
+    try:
+        return Company(name=name, ats="phenom", slug=slug)
+    except ValueError:
+        return None
+
+
+def phenom_boards(polite: _Polite, url: str, name: str) -> list[Company]:
+    """A Phenom site's board, or the boards its postings apply on if jobhunt reads those.
+
+    Phenom fronts an ATS (often Workday); the ATS lists everything, and fetching both would fetch
+    every job twice. One search page (no keywords) shows where postings apply. A site whose
+    search finds nothing (or that isn't the Phenom site, only a page linking to it) gives none.
+    """
+    board = phenom_board(url, name)
+    if board is None or (resp := polite.post(*phenom.search_request(board, ""))) is None:
+        return []
+    try:
+        resp.raise_for_status()
+        rows, _ = phenom.search_results(resp.json())
+    except (httpx.HTTPStatusError, ValueError):
+        return []
+    fronted: dict[str, Company] = {}
+    for raw in rows:
+        apply = raw.get("applyUrl") if isinstance(raw, dict) else None
+        if isinstance(apply, str) and (found := slugs.board_from_url(apply)):
+            fronted.setdefault(found.key.lower(), found.model_copy(update={"name": name}))
+    return list(fronted.values()) or ([board] if rows else [])
+
+
 def survey_company(
     company: Constituent, site: str | None, client: httpx.Client, delay: float = 1.0
 ) -> Result:
@@ -352,6 +404,8 @@ def survey_company(
         found, boards = _read(page, company)
         if not (found or boards):
             return False
+        if "phenom" in found and not boards:
+            boards = phenom_boards(polite, str(page.url), company.name)
         result.pages.append(str(page.url))
         result.platforms = sorted(found)
         seen: set[str] = set()

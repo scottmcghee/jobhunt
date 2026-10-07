@@ -68,11 +68,15 @@ class FetchSettings(_Section):
     )
 
     # Most postings each search term may bring in, per search source (amazon, apple, eightfold,
-    # oracle). A term with more hits stops there, with a warning. Amazon can't page past 9,900.
+    # oracle, phenom). A term with more hits stops there, with a warning. Amazon can't page past
+    # 9,900.
     max_per_term: dict[
-        Literal["amazon", "apple", "eightfold", "oracle"], Annotated[StrictInt, Field(ge=1)]
+        Literal["amazon", "apple", "eightfold", "oracle", "phenom"],
+        Annotated[StrictInt, Field(ge=1)],
     ] = Field(
-        default_factory=lambda: {"amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000}
+        default_factory=lambda: {
+            "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500
+        }
     )
 
     @field_validator("max_rate", "max_per_term", mode="before")

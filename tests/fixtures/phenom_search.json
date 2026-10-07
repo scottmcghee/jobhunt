@@ -1,0 +1,131 @@
+{
+ "refineSearch": {
+  "status": 200,
+  "hits": 3,
+  "totalHits": 3,
+  "data": {
+   "jobs": [
+    {
+     "RemoteType": "Hybrid",
+     "applyUrl": "https://example.wd1.myworkdayjobs.com/External/job/R1001/apply",
+     "badge": "",
+     "category": "Engineering",
+     "city": "Seattle",
+     "cityStateCountry": "Seattle, Washington, United States of America",
+     "country": "United States of America",
+     "dateCreated": "2026-03-19T20:30:29.934+0000",
+     "descriptionTeaser": "Lead the platform engineering group.",
+     "externalApply": false,
+     "isMultiCategory": false,
+     "isMultiLocation": true,
+     "jobId": "R1001",
+     "jobSeqNo": "EXCOUSR1001EXTERNALENUS",
+     "jobVisibility": [
+      "external"
+     ],
+     "locale": "en_US",
+     "location": "Seattle, Washington, United States of America",
+     "multi_category": [
+      "Engineering"
+     ],
+     "multi_location": [
+      "Seattle, Washington, United States of America",
+      "Austin, Texas, United States of America"
+     ],
+     "multi_location_array": [
+      {
+       "location": "Seattle, Washington, United States of America"
+      },
+      {
+       "location": "Austin, Texas, United States of America"
+      }
+     ],
+     "postedDate": "2026-09-18T00:00:00.000+0000",
+     "reqId": "R1001",
+     "siteType": "external",
+     "title": "Director, Platform Engineering",
+     "type": "Full time",
+     "visibilityType": "External"
+    },
+    {
+     "RemoteType": "Remote",
+     "applyUrl": "https://example.wd1.myworkdayjobs.com/External/job/R1002/apply",
+     "badge": "",
+     "category": "Engineering",
+     "city": "Remote",
+     "cityStateCountry": "Remote, United States of America",
+     "country": "United States of America",
+     "dateCreated": "2026-03-19T20:30:29.934+0000",
+     "descriptionTeaser": "Run a team of data engineers.",
+     "externalApply": false,
+     "isMultiCategory": false,
+     "isMultiLocation": false,
+     "jobId": "R1002",
+     "jobSeqNo": "EXCOUSR1002EXTERNALENUS",
+     "jobVisibility": [
+      "external"
+     ],
+     "locale": "en_US",
+     "location": "Remote, United States of America",
+     "multi_category": [
+      "Engineering"
+     ],
+     "multi_location": [
+      "Remote, United States of America"
+     ],
+     "multi_location_array": [
+      {
+       "location": "Remote, United States of America"
+      }
+     ],
+     "postedDate": "2026-09-20T00:00:00.000+0000",
+     "reqId": "R1002",
+     "siteType": "external",
+     "title": "Senior Manager, Data Engineering",
+     "type": "Full time",
+     "visibilityType": "External"
+    },
+    {
+     "RemoteType": "",
+     "applyUrl": "https://example.wd1.myworkdayjobs.com/External/job/R1003/apply",
+     "badge": "",
+     "category": "Engineering",
+     "city": "Denver",
+     "cityStateCountry": "Denver, Colorado, United States of America",
+     "country": "United States of America",
+     "dateCreated": "2026-03-19T20:30:29.934+0000",
+     "descriptionTeaser": "Own product security.",
+     "externalApply": false,
+     "isMultiCategory": false,
+     "isMultiLocation": false,
+     "jobId": "R1003",
+     "jobSeqNo": "EXCOUSR1003EXTERNALENUS",
+     "jobVisibility": [
+      "external"
+     ],
+     "locale": "en_US",
+     "location": "Denver, Colorado, United States of America",
+     "multi_category": [
+      "Engineering"
+     ],
+     "multi_location": [
+      "Denver, Colorado, United States of America"
+     ],
+     "multi_location_array": [
+      {
+       "location": "Denver, Colorado, United States of America"
+      }
+     ],
+     "postedDate": "2026-09-22T00:00:00.000+0000",
+     "reqId": "R1003",
+     "siteType": "external",
+     "title": "Director of Product Security",
+     "type": "Full time",
+     "visibilityType": "External"
+    }
+   ],
+   "aggregations": []
+  },
+  "eid": "x"
+ }
+}

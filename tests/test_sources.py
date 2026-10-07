@@ -22,6 +22,7 @@ from jobhunt.sources import (
     greenhouse,
     lever,
     oracle,
+    phenom,
     rate_group,
     request_group,
     smartrecruiters,
@@ -1288,6 +1289,197 @@ def test_apple_location(locations, expected):
     assert apple._location({"locations": locations}) == expected
 
 
+# ------------------------------------------------------------------ Phenom (search; JSON widgets API)
+
+PH = "https://careers.example.com/widgets"
+
+
+def _phenom_routes(fixture_json, detail=None):
+    """One route for both calls (Phenom has one endpoint): searches get the search fixture."""
+    def answer(request):
+        sent = json.loads(request.content)
+        if sent["ddoKey"] == "jobDetail":
+            return detail if detail is not None else httpx.Response(200, json=fixture_json("phenom_job.json"))
+        return httpx.Response(200, json=fixture_json("phenom_search.json"))
+
+    return respx.post(PH).mock(side_effect=answer)
+
+
+def _sent(route, kind):
+    return [json.loads(c.request.content) for c in route.calls if json.loads(c.request.content)["ddoKey"] == kind]
+
+
+@respx.mock
+def test_phenom_searches_each_term_and_normalizes(phenom_company, fixture_json):
+    route = _phenom_routes(fixture_json)
+    with httpx.Client() as client:
+        jobs = phenom.fetch(phenom_company, client, ["director", "senior manager"], wants_body=lambda j: j.external_id == "R1001")
+    searches = _sent(route, "refineSearch")
+    assert [s["keywords"] for s in searches] == ["director", "senior manager"]
+    assert all((s["lang"], s["country"], s["from"], s["size"]) == ("en_us", "us", 0, 100) for s in searches)
+    assert [j.external_id for j in jobs] == ["R1001", "R1002", "R1003"]  # deduped across terms
+    assert [d["jobId"] for d in _sent(route, "jobDetail")] == ["R1001"]
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("phenom", "Example Co", "careers.example.com/us/en")
+    assert first.title == "Director, Platform Engineering"
+    assert first.url == "https://careers.example.com/us/en/job/R1001"
+    assert first.location == "Seattle, Washington, United States of America; Austin, Texas, United States of America"
+    assert first.posted_at == "2026-09-18T00:00:00.000+0000"
+    assert first.body.startswith("The Opportunity\n") and "Own reliability" in first.body
+    assert first.remote is False  # hybrid, and the detail says remote: No
+    assert jobs[1].remote is True and jobs[1].body == ""  # RemoteType: Remote; no description asked for
+    assert jobs[2].remote is None  # blank RemoteType says nothing
+
+
+@respx.mock
+def test_phenom_pages_by_a_hundred_until_the_total_is_in(phenom_company):
+    def page(request):
+        start = json.loads(request.content)["from"]
+        rows = [{"jobId": f"r{start + i}", "title": "Director"} for i in range(max(0, min(100, 250 - start)))]
+        return httpx.Response(200, json={"refineSearch": {"totalHits": 250, "data": {"jobs": rows}}})
+
+    route = respx.post(PH).mock(side_effect=page)
+    with httpx.Client() as client:
+        assert len(phenom.fetch(phenom_company, client, ["director"], wants_body=lambda j: False)) == 250
+        assert [json.loads(c.request.content)["from"] for c in route.calls] == [0, 100, 200]
+        assert len(phenom.fetch(phenom_company, client, ["director"], max_pages=1, wants_body=lambda j: False)) == 100
+
+
+@respx.mock
+def test_phenom_a_broad_term_stops_at_the_cap_and_says_so(phenom_company, caplog):
+    def page(request):
+        start = json.loads(request.content)["from"]
+        rows = [{"jobId": f"r{start + i}", "title": "Manager"} for i in range(100)]
+        return httpx.Response(200, json={"refineSearch": {"totalHits": 19122, "data": {"jobs": rows}}})
+
+    route = respx.post(PH).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = phenom.fetch(phenom_company, client, ["manager"], wants_body=lambda j: False, max_per_term=250)
+    assert len(jobs) == 250 and route.call_count == 3
+    assert "'manager' has 19122 hits; kept the first 250" in caplog.text
+
+
+@respx.mock
+def test_phenom_an_empty_page_ends_the_listing(phenom_company):
+    pages = [
+        {"refineSearch": {"totalHits": 900, "data": {"jobs": [{"jobId": "r0", "title": "Director"}, {"jobId": "r1", "title": "Director"}]}}},
+        {"refineSearch": {"totalHits": 900, "data": {"jobs": []}}},
+    ]
+    route = respx.post(PH).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
+    with httpx.Client() as client:
+        jobs = phenom.fetch(phenom_company, client, ["director"], wants_body=lambda j: False)
+    assert [j.external_id for j in jobs] == ["r0", "r1"]
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize("search", [
+    {"data": [1]},
+    {"data": "jobs"},
+    {"data": {"jobs": {"jobId": "r0"}}},
+    {"data": {"jobs": []}, "totalHits": {"value": 3}},
+    {"data": {"jobs": []}, "totalHits": "many"},
+])
+def test_phenom_a_malformed_search_answer_is_a_value_error(search):
+    with pytest.raises(ValueError):
+        phenom.search_results({"refineSearch": search})
+
+
+@respx.mock
+def test_phenom_an_answer_without_search_results_is_an_error(phenom_company):
+    respx.post(PH).mock(return_value=httpx.Response(200, json={"error": "bad request"}))
+    with httpx.Client() as client, pytest.raises(ValueError, match="no search results"):
+        phenom.fetch(phenom_company, client, ["director"])
+
+
+@respx.mock
+def test_phenom_a_missing_site_is_an_http_error(phenom_company):
+    respx.post(PH).mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        phenom.fetch(phenom_company, client, ["director"])
+
+
+@pytest.mark.parametrize("detail", [
+    httpx.Response(500),
+    httpx.Response(200, json={"jobDetail": {"data": {}}}),
+    httpx.Response(200, json={"jobDetail": "error"}),
+    httpx.Response(200, json={"jobDetail": {"data": "x"}}),
+    httpx.Response(200, json={"jobDetail": {"data": {"job": {"description": {"a": 1}}}}}),
+])
+@respx.mock
+def test_phenom_failed_detail_keeps_job_without_body(phenom_company, fixture_json, caplog, detail):
+    _phenom_routes(fixture_json, detail=detail)
+    with httpx.Client() as client:
+        jobs = phenom.fetch(phenom_company, client, ["director"], wants_body=lambda j: j.external_id == "R1001")
+    assert len(jobs) == 3 and jobs[0].body == ""
+    assert jobs[0].remote is False  # the listing's Hybrid still counts
+    assert "phenom careers.example.com/us/en: no description for R1001" in caplog.text
+
+
+@respx.mock
+def test_phenom_warns_about_a_board_with_no_postings(phenom_company, caplog):
+    respx.post(PH).mock(return_value=httpx.Response(200, json={"refineSearch": {"totalHits": 0, "data": {"jobs": []}}}))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        assert phenom.fetch(phenom_company, client, ["director", "vp"]) == []
+    assert caplog.messages == [
+        "phenom careers.example.com/us/en: 0 postings — check the slug (host/country/language, e.g. careers.example.com/us/en)"
+    ]
+
+
+@respx.mock
+def test_phenom_descriptions_go_through_the_pool(phenom_company, fixture_json):
+    route = _phenom_routes(fixture_json)
+    used = []
+
+    class Pool(ThreadPoolExecutor):
+        def map(self, *a, **kw):
+            used.append(True)
+            return super().map(*a, **kw)
+
+    with httpx.Client() as client, Pool(2) as pool:
+        fetch_company(phenom_company, client, pool=pool, search=["director"])
+    assert used and len(_sent(route, "jobDetail")) == 3
+
+
+@pytest.mark.parametrize(
+    ("raw", "detail", "expected"),
+    [
+        ({"RemoteType": "Remote"}, None, True),
+        ({"RemoteType": "Fully Remote"}, None, True),
+        ({"RemoteType": "Onsite Only"}, None, False),
+        ({"RemoteType": "Hybrid"}, None, False),
+        ({}, {"remote": "Remote"}, True),  # DaVita puts it in the detail
+        ({}, {"remote": "Yes"}, True),
+        ({}, {"remote": "No"}, False),  # Adobe
+        ({"RemoteType": ""}, {"remote": None}, None),
+        ({"location": "Remote, United States of America"}, None, True),  # no field: the location says so
+        ({}, None, None),
+    ],
+)
+def test_phenom_remote(raw, detail, expected):
+    assert phenom._remote(raw, detail) is expected
+
+
+@respx.mock
+def test_a_phenom_site_without_a_locale_in_its_urls(fixture_json):
+    """careers.davita.com has no /us/en in its URLs; its API still takes a country and language."""
+    route = _phenom_routes(fixture_json)
+    company = Company(name="Example Co", ats="phenom", slug="careers.example.com")
+    with httpx.Client() as client:
+        jobs = phenom.fetch(company, client, ["director"], wants_body=lambda j: False)
+    assert (_sent(route, "refineSearch")[0]["lang"], _sent(route, "refineSearch")[0]["country"]) == ("en_us", "us")
+    assert jobs[0].url == "https://careers.example.com/job/R1001"
+    assert rate_group(company) == "careers.example.com"
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["careers.example.com/us", "careers.example.com/us/en/x", "/us/en", "a b/us/en", "careers.example.com/u s/en"],
+)
+def test_a_phenom_slug_is_host_country_language(slug):
+    with pytest.raises(ValueError, match="host/country/language"):
+        Company(name="x", ats="phenom", slug=slug)
+
+
 # ------------------------------------------------------------------ per-term caps from settings
 
 @respx.mock
@@ -1461,6 +1653,8 @@ def test_rate_groups():
     oc = Company(name="x", ats="oracle", slug="Example.fa.us2.oraclecloud.com/CX_1")
     assert rate_group(oc) == "example.fa.us2.oraclecloud.com"
     assert request_group(httpx.URL(OR + "/recruitingCEJobRequisitions")) == rate_group(oc)
+    ph = Company(name="x", ats="phenom", slug="Careers.Example.com/us/en")  # each tenant is its own host
+    assert rate_group(ph) == "careers.example.com" == request_group(httpx.URL("https://careers.example.com/widgets"))
     ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")
     assert rate_group(ef) == "apply.careers.microsoft.com"
     assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)
