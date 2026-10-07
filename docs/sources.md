@@ -10,7 +10,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
   [Workable](#workable)
 - Listing sources with descriptions on demand: [Workday](#workday),
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr),
-  [SuccessFactors](#successfactors-career-site-builder)
+  [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
 - Search sources: [Amazon](#amazon), [Eightfold](#eightfold), [Oracle Recruiting Cloud](#oracle-recruiting-cloud),
   [Apple](#apple), [Phenom](#phenom)
 - [Politeness](#politeness)
@@ -42,7 +42,7 @@ Greenhouse, Lever, Ashby and Workable.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
 descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR, and
-SuccessFactors sites without a full feed.
+SuccessFactors sites without a full feed, Radancy and Paradox.
 `fetch` asks for a description only when the posting's title passes the title filter in
 `preferences.yaml`. Postings whose titles fail are rejected anyway, so nothing is lost.
 
@@ -85,6 +85,8 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
 | `bamboohr` | tenant | one request each | redirect to bamboohr.com, removed | `bamboohr` |
+| `radancy` | careers site host | one page each | no sitemap: 404, removed; no job URLs: empty, warned | the careers host |
+| `paradox` | careers site host | one page each | no sitemap: 404, removed; no job URLs: empty, warned | the careers host |
 | `successfactors` | careers site host | in the feed, or one page each | no sitemap: 404, removed; not Career Site Builder: empty, warned | the careers host |
 | `amazon` | country code | in the results | empty results, warned | `amazon` |
 | `eightfold` | careers host (+ optional `location`) | one request each | wrong domain: 404, removed; unknown `*.eightfold.ai` host: connection error, kept | the careers host |
@@ -261,7 +263,9 @@ what the sites allow: the sitemap, and job pages.
     description (25 to 30 MB for the biggest), so the whole board is one request. Most serve a
     plain sitemap of job page URLs.
   - `GET /job/<title-and-place>/<id>/` (some sites put a brand first: `/<brand>/job/...`) is one
-    posting's page.
+    posting's page. Job URLs on another host are ignored. Redirects (of the sitemap or a page)
+    are followed on the site's host only, each hop checked against robots.txt; a page that
+    redirects elsewhere is kept without a description.
 - **Descriptions:** in the feed, or one page each for postings that pass the title filter. A job
   URL's words (`Richmond Senior Manager VA 23230`) stand in for the title in that check. The title
   is one run of those words, so a page is fetched if any run passes, with `_` read as `.` (the
@@ -281,6 +285,53 @@ what the sites allow: the sitemap, and job pages.
 - **Unknown board:** a host with no sitemap answers 404 and is removed. A site that isn't Career
   Site Builder (careers.netapp.com mentions SuccessFactors but runs another platform) lists no job
   URLs in this shape; it is never removed, and `fetch` warns that it found nothing.
+- **Rate group:** the careers host.
+
+## Radancy and Paradox
+
+```yaml
+  - name: L3Harris
+    ats: radancy
+    slug: careers.l3harris.com
+
+  - name: ADP
+    ats: paradox
+    slug: jobs.adp.com
+```
+
+Radancy (TalentBrew) and Paradox build careers sites, usually in front of an ATS. Radancy's
+search (`/search-jobs/`) is disallowed by robots.txt. Paradox is best known for its "Olivia" chat
+assistant, which many sites on other platforms embed; only a company's own Paradox careers site
+is a `paradox` board. Both kinds of site allow what `jobhunt` reads: their sitemaps, and job pages
+that carry a schema.org `JobPosting` as JSON-LD. One module does the work for both; they differ
+only in their job URLs.
+
+- **Slug:** the careers site's host.
+- **Pages:**
+  - `GET /robots.txt` first. Job pages it disallows are kept without descriptions; a disallowed
+    sitemap is an error. Following RFC 9309, a robots.txt that answers 5xx disallows everything.
+  - The sitemaps robots.txt names on the site's host, else `/sitemap.xml`. Sitemap index files
+    are followed (FedEx splits its jobs into 31 files), up to 50 files a board, and so are
+    redirects on the same host (L3Harris's `/sitemap.xml` moved to `/en/sitemap.xml`), each hop
+    checked against robots.txt; job pages' redirects too. A sitemap or page that redirects off
+    the host isn't followed, and job URLs on another host are ignored. A sitemap that fails is
+    skipped with a warning, unless none of the starting ones answers.
+  - Radancy job URLs: `/[<lang>/]job/<city>/<title>/<org>/<id>`. Paradox job URLs:
+    `/[<lang>/]jobs/<id>/<title>/` (ADP, GM, Verizon; other languages' words for "jobs" too) or
+    `/<title>/job/<id>` (FedEx). A posting listed once per language is kept once, under its
+    English URL (`en`, `en-ca`, `en-gb`, ...).
+- **Descriptions:** one page each, for postings that pass the title filter by the same URL-word
+  rules as [SuccessFactors](#successfactors-career-site-builder) (Radancy's URL words are the city
+  and the title). The page's JSON-LD gives the title, description, location and date posted.
+- **Location:** the JSON-LD's places (city, region, country), joined with `;` when there are
+  several; without any, the URL's words around the title.
+- **Remote:** yes if the JSON-LD says `TELECOMMUTE` or the location or title says "remote", else
+  unknown.
+- **Same jobs twice:** many of these sites front Workday or another ATS `jobhunt` reads (a
+  posting's apply link says which). Add only one of the two boards; the survey gives the ATS
+  board when it can.
+- **Unknown board:** a host with no sitemap answers 404 and is removed. A sitemap with no job URLs
+  in these shapes is never removed; `fetch` warns that it found nothing.
 - **Rate group:** the careers host.
 
 ## Amazon
@@ -526,6 +577,11 @@ pages.
 
 A page that loads Career Site Builder's own scripts (`/platform/js/j2w/` or `/platform/csb`) gives a SuccessFactors
 board for its host; a page that only mentions SuccessFactors gives none.
+
+On a Radancy or Paradox site it reads the sitemaps (at most three files) until it finds a job
+URL, then that one posting's page. If the page's apply links point at a board `jobhunt`
+supports, such as Workday, it gives that board; otherwise the Radancy or Paradox board. A site
+whose sitemaps list no job URLs gives none: Paradox's chat widget on another platform's site.
 
 On a Phenom site it sends one search request (within robots.txt, like everything else) to read
 where the postings apply. If they apply on a board `jobhunt` supports, such as Workday, it gives

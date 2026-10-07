@@ -13,6 +13,7 @@ import respx
 from jobhunt.filter import check_location, check_title
 from jobhunt.schema import Company, Job
 from jobhunt.sources import (
+    _sitemap,
     amazon,
     apple,
     ashby,
@@ -22,7 +23,9 @@ from jobhunt.sources import (
     greenhouse,
     lever,
     oracle,
+    paradox,
     phenom,
+    radancy,
     rate_group,
     request_group,
     smartrecruiters,
@@ -1679,6 +1682,41 @@ def test_successfactors_follows_a_robots_txt_redirect(sf_company):
 
 
 @respx.mock
+def test_successfactors_follows_a_job_page_redirect_on_the_same_host(sf_company):
+    """/job/.../1430811000/ redirects to /job/.../3365-en_US/ on the same host."""
+    moved = SF + "/job/Seattle-Director/3365-en_US/"
+    _sf_routes(pages={SF_JOB1: httpx.Response(301, headers={"location": moved}), SF_JOB2: httpx.Response(404)})
+    respx.get(SF + "/job/Tulsa-Plant-Operator-OK-74101/1200000300/").mock(return_value=httpx.Response(404))
+    respx.get(moved).mock(return_value=httpx.Response(200, text=(FIXTURES / "successfactors_job.html").read_text()))
+    with httpx.Client(follow_redirects=True) as client:
+        jobs = successfactors.fetch(sf_company, client)
+    assert jobs[0].url == SF_JOB1 and jobs[0].body
+
+
+@respx.mock
+def test_successfactors_job_urls_on_another_host_are_ignored(sf_company):
+    off = "https://elsewhere.example.net/job/Seattle-Director/1200000900/"
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(return_value=_urlset(off, SF_JOB1))
+    elsewhere = respx.get(off).mock(return_value=httpx.Response(200, text=(FIXTURES / "successfactors_job.html").read_text()))
+    respx.get(SF_JOB1).mock(return_value=httpx.Response(200, text=(FIXTURES / "successfactors_job.html").read_text()))
+    with httpx.Client(follow_redirects=True) as client:
+        jobs = successfactors.fetch(sf_company, client)
+    assert [j.url for j in jobs] == [SF_JOB1]
+    assert elsewhere.call_count == 0
+
+
+@respx.mock
+def test_successfactors_a_sitemap_redirect_to_another_host_is_an_error(sf_company):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "https://elsewhere.example.net/sitemap.xml"}))
+    elsewhere = respx.get("https://elsewhere.example.net/sitemap.xml").mock(return_value=_urlset(SF_JOB1))
+    with httpx.Client(follow_redirects=True) as client, pytest.raises(ValueError, match="redirects to another host"):
+        successfactors.fetch(sf_company, client)
+    assert elsewhere.call_count == 0
+
+
+@respx.mock
 def test_successfactors_a_posting_twice_in_the_feed_comes_once(sf_company):
     feed = (FIXTURES / "successfactors_feed.xml").read_text()
     first_item = feed[feed.index("<item>"):feed.index("</item>") + len("</item>")]
@@ -1757,6 +1795,390 @@ def test_successfactors_posted_date(text, expected):
 def test_a_successfactors_slug_is_a_host(slug):
     with pytest.raises(ValueError, match="successfactors slug is a careers site host"):
         Company(name="x", ats="successfactors", slug=slug)
+
+
+# ------------------------------------------------------------------ Radancy and Paradox (sitemaps; JSON-LD job pages)
+
+RD = "https://careers.example.com"
+RD_JOB1 = RD + "/job/san-francisco/director-platform-engineering/45831/101650226640"
+RD_JOB2 = RD + "/en/job/remote/senior-manager-data/45831/101650226656"
+PX = "https://jobs.example.com"
+
+
+def _radancy_routes(robots=None, page=None):
+    respx.get(RD + "/robots.txt").mock(return_value=robots or httpx.Response(404))
+    sitemap = respx.get(RD + "/sitemap.xml").mock(
+        return_value=httpx.Response(200, content=(FIXTURES / "radancy_sitemap.xml").read_bytes())
+    )
+    page = page or httpx.Response(200, text=(FIXTURES / "radancy_job.html").read_text())
+    pages = respx.get(url__startswith=RD + "/").mock(return_value=page)
+    return sitemap, pages
+
+
+@respx.mock
+def test_radancy_reads_the_sitemap_and_fetches_only_the_pages_wanted(radancy_company):
+    _, pages = _radancy_routes()
+    with httpx.Client() as client:
+        jobs = radancy.fetch(radancy_company, client, lambda j: "director" in j.title.lower())
+    # the Spanish copy of 101650226640 is the same posting; non-job URLs are skipped
+    assert [j.external_id for j in jobs] == ["101650226640", "101650226656", "101650226672"]
+    fetched = [str(c.request.url) for c in pages.calls if "/job/" in str(c.request.url)]
+    assert fetched == [RD_JOB1]
+    first, second, third = jobs
+    assert (first.source, first.company, first.company_slug) == ("radancy", "Example Co", "careers.example.com")
+    assert first.title == "Director, Platform Engineering" and first.url == RD_JOB1
+    assert first.location == "San Francisco, California, United States of America; Seattle, United States of America"
+    assert first.posted_at == "2026-10-07"  # the site writes 2026-10-7
+    assert first.body.startswith("About this role") and "Own reliability" in first.body
+    assert first.remote is None
+    # not wanted: what the URL says (city and title words); "remote" in it is a hint
+    assert (second.title, second.body, second.url, second.remote) == ("remote senior manager data", "", RD_JOB2, True)
+    assert third.title == "tulsa plant operator"
+
+
+@respx.mock
+def test_radancy_page_without_a_job_posting_keeps_the_url_words(radancy_company, caplog):
+    _radancy_routes(page=httpx.Response(200, text="<html><h1>Maintenance</h1></html>"))
+    with httpx.Client() as client:
+        jobs = radancy.fetch(radancy_company, client, lambda j: "director" in j.title.lower())
+    assert jobs[0].title == "san francisco director platform engineering" and jobs[0].body == ""
+    assert "radancy careers.example.com: no description for 101650226640 (no JobPosting on the page)" in caplog.text
+
+
+@respx.mock
+def test_radancy_robots_txt_can_rule_out_the_job_pages(radancy_company, caplog):
+    _, pages = _radancy_routes(robots=httpx.Response(200, text="User-agent: *\nDisallow: /job/\nDisallow: /en/job/\n"))
+    with httpx.Client() as client:
+        jobs = radancy.fetch(radancy_company, client)
+    assert len(jobs) == 3 and all(j.body == "" for j in jobs)
+    assert not [c for c in pages.calls if "/job/" in str(c.request.url)]
+    assert "robots.txt disallows 3 job pages" in caplog.text
+
+
+@respx.mock
+def test_radancy_missing_sitemap_is_an_http_error(radancy_company):
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        radancy.fetch(radancy_company, client)
+
+
+@respx.mock
+def test_radancy_a_disallowed_sitemap_is_an_error(radancy_company):
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /sitemap.xml\n"))
+    sitemap = respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(200, content=b"<urlset/>"))
+    with httpx.Client() as client, pytest.raises(ValueError, match="robots.txt disallows it"):
+        radancy.fetch(radancy_company, client)
+    assert sitemap.call_count == 0
+
+
+@respx.mock
+def test_radancy_follows_a_sitemap_redirect_on_the_same_host(radancy_company):
+    """careers.l3harris.com/sitemap.xml redirects to /en/sitemap.xml."""
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": RD + "/en/sitemap.xml"}))
+    respx.get(RD + "/en/sitemap.xml").mock(
+        return_value=httpx.Response(200, content=(FIXTURES / "radancy_sitemap.xml").read_bytes()))
+    with httpx.Client() as client:
+        assert len(radancy.fetch(radancy_company, client, lambda j: False)) == 3
+
+
+@respx.mock
+def test_radancy_a_sitemap_redirect_to_another_host_is_an_error(radancy_company):
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "https://elsewhere.example.net/sitemap.xml"}))
+    elsewhere = respx.get("https://elsewhere.example.net/sitemap.xml").mock(return_value=httpx.Response(200, content=b"<urlset/>"))
+    with httpx.Client() as client, pytest.raises(ValueError, match="redirects to another host"):
+        radancy.fetch(radancy_company, client)
+    assert elsewhere.call_count == 0
+
+
+def _urlset(*urls):
+    locs = "".join(f"<url><loc>{u}</loc></url>" for u in urls)
+    return httpx.Response(200, text=f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>')
+
+
+@pytest.mark.parametrize(
+    ("robots", "target", "error"),
+    [
+        (httpx.Response(404), "https://elsewhere.example.net/sitemap.xml", "redirects to another host"),
+        (httpx.Response(200, text="User-agent: *\nDisallow: /private/\n"), RD + "/private/sitemap.xml", "robots.txt disallows it"),
+    ],
+)
+@respx.mock
+def test_sitemap_redirects_are_checked_even_by_a_client_that_follows_them(radancy_company, robots, target, error):
+    """cli._client follows redirects; the sitemap GET must still check each hop itself."""
+    respx.get(RD + "/robots.txt").mock(return_value=robots)
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": target}))
+    moved = respx.get(target).mock(return_value=_urlset(RD_JOB1))
+    with httpx.Client(follow_redirects=True) as client, pytest.raises(ValueError, match=error):
+        radancy.fetch(radancy_company, client, lambda j: False)
+    assert moved.call_count == 0
+
+
+@respx.mock
+def test_a_same_host_sitemap_redirect_is_followed_by_a_client_that_follows_them(radancy_company):
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": RD + "/en/sitemap.xml"}))
+    respx.get(RD + "/en/sitemap.xml").mock(return_value=_urlset(RD_JOB1))
+    with httpx.Client(follow_redirects=True) as client:
+        assert len(radancy.fetch(radancy_company, client, lambda j: False)) == 1
+
+
+@respx.mock
+def test_job_urls_on_another_host_are_ignored(radancy_company):
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=_urlset(
+        "https://elsewhere.example.net/job/x/director/1/2", RD_JOB1))
+    elsewhere = respx.get(url__startswith="https://elsewhere.example.net/").mock(return_value=httpx.Response(200))
+    respx.get(RD_JOB1).mock(return_value=httpx.Response(200, text=(FIXTURES / "radancy_job.html").read_text()))
+    with httpx.Client(follow_redirects=True) as client:
+        jobs = radancy.fetch(radancy_company, client)
+    assert [j.url for j in jobs] == [RD_JOB1]
+    assert elsewhere.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("robots", "target", "error"),
+    [
+        (httpx.Response(404), "https://elsewhere.example.net/job/1", "it redirects to another host"),
+        (httpx.Response(200, text="User-agent: *\nDisallow: /private/\n"), RD + "/private/job/1", "robots.txt disallows it"),
+    ],
+)
+@respx.mock
+def test_a_job_page_redirect_off_the_host_or_into_robots_txt_is_not_followed(radancy_company, caplog, robots, target, error):
+    respx.get(RD + "/robots.txt").mock(return_value=robots)
+    respx.get(RD + "/sitemap.xml").mock(return_value=_urlset(RD_JOB1))
+    respx.get(RD_JOB1).mock(return_value=httpx.Response(302, headers={"location": target}))
+    moved = respx.get(target).mock(return_value=httpx.Response(200, text=(FIXTURES / "radancy_job.html").read_text()))
+    with httpx.Client(follow_redirects=True) as client:
+        [job] = radancy.fetch(radancy_company, client)
+    assert moved.call_count == 0
+    assert job.url == RD_JOB1 and job.body == ""
+    assert f"radancy careers.example.com: no description for 101650226640 ({error}" in caplog.text
+
+
+@respx.mock
+def test_radancy_keeps_the_english_copy_whatever_its_region(radancy_company):
+    fr, en = RD + "/fr-ca/job/montreal/directeur-plateforme/1/99", RD + "/en-ca/job/montreal/director-platform/1/99"
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=_urlset(fr, en))
+    pages = respx.get(url__startswith=RD + "/en-ca/").mock(return_value=httpx.Response(200, text=(FIXTURES / "radancy_job.html").read_text()))
+    with httpx.Client() as client:
+        [job] = radancy.fetch(radancy_company, client, lambda j: "director" in j.title.lower())
+    assert job.url == en and job.title == "Director, Platform Engineering"
+    assert pages.call_count == 1
+
+
+@respx.mock
+def test_radancy_warns_about_a_sitemap_with_no_job_urls(radancy_company, caplog):
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(
+        200, content=b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://careers.example.com/</loc></url></urlset>'))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        assert radancy.fetch(radancy_company, client) == []
+    assert caplog.messages == ["radancy careers.example.com: 0 postings — no job URLs in its sitemaps"]
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (RD_JOB1, ("san francisco director platform engineering", "101650226640", 0)),
+        (RD + "/en/job/huntsville/senior-associate/4832/101657038528", ("huntsville senior associate", "101657038528", 0)),
+        (RD + "/es/job/madrid/director/4832/1", ("madrid director", "1", 1)),
+        (RD + "/en-ca/job/toronto/director/4832/2", ("toronto director", "2", 0)),
+        (RD + "/en-GB/job/london/director/4832/3", ("london director", "3", 0)),
+        (RD + "/fr-ca/job/montreal/directeur/4832/2", ("montreal directeur", "2", 1)),
+        (RD + "/job/new-york/sr%2C-manager/4832/7", ("new york sr, manager", "7", 0)),
+        (RD + "/business/custom_fields.facility/45831/x", None),
+        (RD + "/job/new-york/director/4832", None),
+    ],
+)
+def test_radancy_job_url(url, expected):
+    assert radancy.job_url(url) == expected
+
+
+def _paradox_routes():
+    robots = "User-agent: *\nAllow: /\nSitemap: https://jobs.example.com/sitemap_index.xml\n"
+    respx.get(PX + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    for path, fixture in (("/sitemap_index.xml", "paradox_sitemap_index.xml"),
+                          ("/en/jobs/sitemap.xml", "paradox_sitemap_jobs.xml"),
+                          ("/sitemap-pages.xml", "paradox_sitemap_pages.xml")):
+        respx.get(PX + path).mock(return_value=httpx.Response(200, content=(FIXTURES / fixture).read_bytes()))
+    return respx.get(url__regex=PX + r"/(en/jobs/\d|courier)").mock(
+        return_value=httpx.Response(200, text=(FIXTURES / "paradox_job.html").read_text())
+    )
+
+
+@respx.mock
+def test_paradox_follows_robots_sitemaps_and_index_files(paradox_company):
+    pages = _paradox_routes()
+    with httpx.Client() as client:
+        jobs = paradox.fetch(paradox_company, client, lambda j: "manager" in j.title.lower())
+    # the English URL of 277916 wins over the Spanish one; the other host's sitemap isn't read
+    assert [(j.external_id, j.url) for j in jobs] == [
+        ("277916", PX + "/en/jobs/277916/district-sales-manager-enterprise/"),
+        ("jr-202607049", PX + "/en/jobs/jr-202607049/senior-ai-ml-engineer/"),
+        ("P25-359042-1", PX + "/courier-2/job/P25-359042-1"),  # FedEx's shape
+    ]
+    assert pages.call_count == 1
+    first = jobs[0]
+    assert first.source == "paradox"
+    assert first.title == "District Sales Manager | Enterprise"  # from the escaped ld+json block
+    assert first.body == "Example Co is hiring a Sales Manager."
+    assert first.location == "Roseland, NJ, US"
+    assert first.remote is True  # jobLocationType TELECOMMUTE
+    assert first.posted_at == "2026-06-29"
+    assert (jobs[1].title, jobs[2].title) == ("senior ai ml engineer", "courier 2")
+
+
+@respx.mock
+def test_paradox_a_later_sitemap_that_fails_is_skipped(paradox_company, caplog):
+    _paradox_routes()
+    respx.get(PX + "/sitemap-pages.xml").mock(return_value=httpx.Response(500))
+    with httpx.Client() as client:
+        jobs = paradox.fetch(paradox_company, client, lambda j: False)
+    assert len(jobs) == 3
+    assert "paradox jobs.example.com: skipped sitemap https://jobs.example.com/sitemap-pages.xml" in caplog.text
+
+
+@respx.mock
+def test_one_dead_sitemap_of_several_robots_txt_names_is_skipped(paradox_company, caplog):
+    robots = f"User-agent: *\nSitemap: {PX}/old-sitemap.xml\nSitemap: {PX}/sitemap_index.xml\n"
+    respx.get(PX + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    respx.get(PX + "/old-sitemap.xml").mock(return_value=httpx.Response(404))
+    respx.get(PX + "/sitemap_index.xml").mock(return_value=_urlset(PX + "/en/jobs/1/director/"))
+    with httpx.Client() as client:
+        jobs = paradox.fetch(paradox_company, client, lambda j: False)
+    assert [j.external_id for j in jobs] == ["1"]
+    assert "paradox jobs.example.com: skipped sitemap https://jobs.example.com/old-sitemap.xml" in caplog.text
+
+
+@respx.mock
+def test_a_site_whose_named_sitemaps_all_fail_is_gone(paradox_company):
+    robots = f"User-agent: *\nSitemap: {PX}/a.xml\nSitemap: {PX}/b.xml\n"
+    respx.get(PX + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    respx.get(PX + "/a.xml").mock(return_value=httpx.Response(404))
+    respx.get(PX + "/b.xml").mock(return_value=httpx.Response(500))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError) as e:
+        paradox.fetch(paradox_company, client, lambda j: False)
+    assert e.value.response.status_code == 404  # the first error, so the board counts as gone
+
+
+@respx.mock
+def test_sitemaps_robots_txt_names_on_another_host_are_not_read(paradox_company):
+    robots = f"User-agent: *\nSitemap: https://elsewhere.example.net/sitemap.xml\nSitemap: {PX}/jobs.xml\n"
+    respx.get(PX + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    elsewhere = respx.get("https://elsewhere.example.net/sitemap.xml").mock(return_value=_urlset(PX + "/en/jobs/2/x/"))
+    respx.get(PX + "/jobs.xml").mock(return_value=_urlset(PX + "/en/jobs/1/director/"))
+    with httpx.Client() as client:
+        jobs = paradox.fetch(paradox_company, client, lambda j: False)
+    assert [j.external_id for j in jobs] == ["1"]
+    assert elsewhere.call_count == 0
+
+
+@respx.mock
+def test_only_sitemaps_on_another_host_named_falls_back_to_sitemap_xml(paradox_company):
+    robots = "User-agent: *\nSitemap: https://elsewhere.example.net/sitemap.xml\n"
+    respx.get(PX + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    elsewhere = respx.get("https://elsewhere.example.net/sitemap.xml").mock(return_value=_urlset(PX + "/en/jobs/2/x/"))
+    respx.get(PX + "/sitemap.xml").mock(return_value=_urlset(PX + "/en/jobs/1/director/"))
+    with httpx.Client() as client:
+        jobs = paradox.fetch(paradox_company, client, lambda j: False)
+    assert [j.external_id for j in jobs] == ["1"]
+    assert elsewhere.call_count == 0
+
+
+@respx.mock
+def test_sitemaps_stop_at_the_limit(paradox_company, caplog, monkeypatch):
+    monkeypatch.setattr(_sitemap, "MAX_SITEMAPS", 2)
+    _paradox_routes()
+    with httpx.Client() as client:
+        jobs = paradox.fetch(paradox_company, client, lambda j: False)
+    assert len(jobs) == 3  # the index and the jobs sitemap
+    assert "paradox jobs.example.com: read 2 sitemaps; skipped 1 more" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (PX + "/en/jobs/277916/district-sales-manager/", ("district sales manager", "277916", 0)),
+        (PX + "/jobs/r-1101033/ai-workflow-engineer/", ("ai workflow engineer", "r-1101033", 0)),
+        (PX + "/fr-ca/emplois/jr-1/directeur/", ("directeur", "jr-1", 1)),
+        (PX + "/en-ca/jobs/jr-1/director/", ("director", "jr-1", 0)),
+        (PX + "/en-gb/jobs/jr-1/director/", ("director", "jr-1", 0)),
+        (PX + "/courier-dot-1/job/P25-328782-6", ("courier dot 1", "P25-328782-6", 0)),
+        (PX + "/jobs/saved-jobs/", None),
+        (PX + "/jobs/apply-workday/completed/", None),
+        (PX + "/en/jobs/", None),
+        (PX + "/blog/our-culture/", None),
+    ],
+)
+def test_paradox_job_url(url, expected):
+    assert paradox.job_url(url) == expected
+
+
+@respx.mock
+def test_job_pages_go_through_the_pool(radancy_company):
+    _, pages = _radancy_routes()
+    used = []
+
+    class Pool(ThreadPoolExecutor):
+        def map(self, *a, **kw):
+            used.append(True)
+            return super().map(*a, **kw)
+
+    with httpx.Client() as client, Pool(2) as pool:
+        fetch_company(radancy_company, client, pool=pool)
+    assert used and len([c for c in pages.calls if "/job/" in str(c.request.url)]) == 3
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("2026-10-7", "2026-10-07"), ("2026-06-29", "2026-06-29"), ("2026-10-06T07:00:00+00:00", "2026-10-06T07:00:00+00:00"),
+     ("2026-13-40", None), ("", None), (None, None), (20261007, None)],
+)
+def test_json_ld_date(value, expected):
+    assert _sitemap.ld_date(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ({"@type": "Place", "address": "Remote - US"}, "Remote - US"),
+        ([{"address": {"addressLocality": "Austin", "addressRegion": "TX", "addressCountry": "US"}}, {"address": {"addressLocality": "Austin", "addressRegion": "TX", "addressCountry": "US"}}], "Austin, TX, US"),
+        ({"address": {"addressLocality": "", "addressCountry": {"name": "Canada"}}}, "Canada"),
+        (None, ""),
+        (["junk", 3], ""),
+        # GM: each address a list of PostalAddress
+        ([{"address": [{"addressLocality": "Remote", "addressRegion": "Washington", "addressCountry": "United States of America"}],
+           "name": "Remote United States of America"},
+          {"address": [{"addressLocality": "Sunnyvale", "addressRegion": "California", "addressCountry": "United States of America"}]}],
+         "Remote, Washington, United States of America; Sunnyvale, California, United States of America"),
+        ({"name": "Dearborn, MI", "address": {}}, "Dearborn, MI"),  # no address parts: the place's name
+    ],
+)
+def test_json_ld_location(location, expected):
+    assert _sitemap.ld_location({"jobLocation": location}) == expected
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        '<script type="application/ld+json">[{"@type": "Organization"}, {"@type": "JobPosting", "title": "A"}]</script>',
+        '<script type="application/ld+json">{"@graph": [{"@type": ["JobPosting"], "title": "A"}]}</script>',
+        '<script type="application/ld+json">{bad json</script><script type="application/ld+json">{"@type": "JobPosting", "title": "A"}</script>',
+    ],
+)
+def test_json_ld_job_postings_are_found_in_lists_graphs_and_past_bad_blocks(page):
+    assert [p["title"] for p in _sitemap.job_postings(page)] == ["A"]
+
+
+@pytest.mark.parametrize("ats", ["radancy", "paradox"])
+@pytest.mark.parametrize("slug", ["careers.example.com/x", "careers", "https://careers.example.com"])
+def test_a_sitemap_source_slug_is_a_host(ats, slug):
+    with pytest.raises(ValueError, match=f"{ats} slug is a careers site host"):
+        Company(name="x", ats=ats, slug=slug)
 
 
 # ------------------------------------------------------------------ per-term caps from settings
@@ -1936,6 +2358,9 @@ def test_rate_groups():
     assert rate_group(ph) == "careers.example.com" == request_group(httpx.URL("https://careers.example.com/widgets"))
     sf = Company(name="x", ats="successfactors", slug="Careers.Example.com")  # each site is its own host
     assert rate_group(sf) == "careers.example.com" == request_group(httpx.URL("https://careers.example.com/sitemap.xml"))
+    for ats in ("radancy", "paradox"):  # each site is its own host
+        board = Company(name="x", ats=ats, slug="Jobs.Example.com")
+        assert rate_group(board) == "jobs.example.com" == request_group(httpx.URL("https://jobs.example.com/sitemap.xml"))
     ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")
     assert rate_group(ef) == "apply.careers.microsoft.com"
     assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)
