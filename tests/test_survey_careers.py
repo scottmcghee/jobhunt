@@ -669,3 +669,34 @@ def test_a_company_with_any_response_is_not_unreachable_and_is_not_retried(tmp_p
     calls = len(respx.calls)
     assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
     assert len(respx.calls) == calls
+
+
+def test_main_sends_everything_through_the_throttled_transport(tmp_path, monkeypatch):
+    # Wikidata answered a burst of back-to-back batches with 429; the throttle retries it
+    seen = {}
+
+    def constituents(client):
+        seen["transport"] = client._transport
+        return []
+
+    monkeypatch.setattr(survey, "fetch_constituents", constituents)
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {})
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    assert survey.main([str(tmp_path / "out"), "--companies", str(known)]) == 0
+    transport = seen["transport"]
+    assert isinstance(transport, survey.throttle.ThrottledTransport)
+    assert transport.limiter("www.wikidata.org").ceiling == 1  # one request at a time per host
+    assert transport._transient_retries == 0  # a host that doesn't resolve isn't retried
+
+
+@respx.mock
+def test_a_redirect_without_a_location_is_the_final_answer():
+    # a live site answered 302 with no Location header; looking it up crashed the whole run
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(302))
+    with _client() as client:
+        polite = survey._Polite(client, delay=0)
+        resp = polite.get(ACME + "/careers")
+    assert resp is not None and resp.status_code == 302
