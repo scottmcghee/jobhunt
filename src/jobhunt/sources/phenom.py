@@ -74,7 +74,12 @@ def search_results(data: object) -> tuple[list[dict], int]:
     search = data.get("refineSearch") if isinstance(data, dict) else None
     if not isinstance(search, dict):
         raise ValueError("no search results in the answer")
-    return (search.get("data") or {}).get("jobs") or [], int(search.get("totalHits") or 0)
+    found = search.get("data") or {}
+    jobs = (found.get("jobs") or []) if isinstance(found, dict) else None
+    total = search.get("totalHits") or 0
+    if not isinstance(jobs, list) or not isinstance(total, int | str):
+        raise ValueError("malformed search results in the answer")
+    return jobs, int(total)
 
 
 def _post(client: httpx.Client, request: tuple[str, dict]) -> object:

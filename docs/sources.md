@@ -479,4 +479,5 @@ pages.
 
 On a Phenom site it sends one search request (within robots.txt, like everything else) to read
 where the postings apply. If they apply on a board `jobhunt` supports, such as Workday, it gives
-that board; otherwise it gives the Phenom board.
+that board; otherwise it gives the Phenom board, and none if the search is disallowed, fails
+or finds nothing.

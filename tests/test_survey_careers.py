@@ -827,7 +827,8 @@ def test_a_phenom_site_in_front_of_an_unsupported_ats_is_a_phenom_board():
 
 
 @pytest.mark.parametrize("answer", [httpx.Response(400), httpx.Response(200, json={"status": "error"}),
-                                    httpx.Response(200, json={"refineSearch": {"totalHits": 0, "data": {"jobs": []}}})])
+                                    httpx.Response(200, json={"refineSearch": {"totalHits": 0, "data": {"jobs": []}}}),
+                                    httpx.Response(200, json={"refineSearch": {"data": [1]}})])
 @respx.mock
 def test_a_phenom_site_whose_search_finds_nothing_gives_no_board(answer):
     _phenom_site([], widgets=answer)

@@ -1360,6 +1360,31 @@ def test_phenom_a_broad_term_stops_at_the_cap_and_says_so(phenom_company, caplog
 
 
 @respx.mock
+def test_phenom_an_empty_page_ends_the_listing(phenom_company):
+    pages = [
+        {"refineSearch": {"totalHits": 900, "data": {"jobs": [{"jobId": "r0", "title": "Director"}, {"jobId": "r1", "title": "Director"}]}}},
+        {"refineSearch": {"totalHits": 900, "data": {"jobs": []}}},
+    ]
+    route = respx.post(PH).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
+    with httpx.Client() as client:
+        jobs = phenom.fetch(phenom_company, client, ["director"], wants_body=lambda j: False)
+    assert [j.external_id for j in jobs] == ["r0", "r1"]
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize("search", [
+    {"data": [1]},
+    {"data": "jobs"},
+    {"data": {"jobs": {"jobId": "r0"}}},
+    {"data": {"jobs": []}, "totalHits": {"value": 3}},
+    {"data": {"jobs": []}, "totalHits": "many"},
+])
+def test_phenom_a_malformed_search_answer_is_a_value_error(search):
+    with pytest.raises(ValueError):
+        phenom.search_results({"refineSearch": search})
+
+
+@respx.mock
 def test_phenom_an_answer_without_search_results_is_an_error(phenom_company):
     respx.post(PH).mock(return_value=httpx.Response(200, json={"error": "bad request"}))
     with httpx.Client() as client, pytest.raises(ValueError, match="no search results"):
