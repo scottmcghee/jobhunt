@@ -118,10 +118,19 @@ class FetchProgress:
         self.path.unlink(missing_ok=True)
 
 
+def _ends_mid_line(path: Path) -> bool:
+    if not path.exists() or not path.stat().st_size:
+        return False
+    with path.open("rb") as f:
+        f.seek(-1, os.SEEK_END)
+        return f.read(1) != b"\n"
+
+
 def append_jsonl(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    torn = _ends_mid_line(path)  # half a line from a run killed mid-append: start a new one
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(("\n" if torn else "") + json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def read_jsonl(path: Path) -> list[dict]:

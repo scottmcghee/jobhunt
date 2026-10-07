@@ -562,8 +562,10 @@ doesn't count. To get through a strict host, lower `--workers` and `--per-host`;
 
 ### Interrupting
 
-Ctrl-C stops sending requests, lets the ones already sent finish, and keeps every board that
-finished, including those that finished ahead of their turn. The next run picks up the rest.
+Each board is saved as it finishes. Ctrl-C, closing the terminal (SIGHUP) and SIGTERM all stop
+the run the same way: no new requests, the ones already sent finish, and every finished board is
+kept, including those that finished ahead of their turn. `jobhunt fetch --resume` fetches the
+rest; a plain `jobhunt fetch` starts over.
 
 ### Proxies
 

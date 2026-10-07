@@ -134,6 +134,15 @@ def test_seen_set_skips_a_truncated_line_in_jobs_jsonl(tmp_path, platform_direct
     assert "jobs.jsonl" in caplog.text
 
 
+def test_append_jsonl_after_a_truncated_line_starts_a_new_line(tmp_path, platform_director_job):
+    # The next fetch's first job must not be glued onto half a line from a killed run.
+    jobs = tmp_path / "jobs.jsonl"
+    jobs.write_text('{"source": "greenhouse", "company_sl', encoding="utf-8")
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
+    assert platform_director_job.key in seen
+
+
 def test_seen_set_without_a_jobs_file(tmp_path):
     seen = storage.SeenSet(tmp_path / "seen.json", jobs=tmp_path / "jobs.jsonl")
     assert len(seen) == 0

@@ -345,7 +345,8 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     prune = fetch.prune_after_404s
 
     def book(outcome: BoardOutcome) -> None:
-        """Record one board, then save it: its new jobs, then the seen set, then progress."""
+        """Record one board, then save it: its new jobs, the seen set and misses, then progress."""
+        before = misses.counts.get(outcome.company.key)
         fresh = _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose, prune)
         if args.dry_run or outcome.skipped:  # a skipped board is retried by --resume
             return
@@ -354,6 +355,8 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
                 storage.append_jsonl(jobs_path, j.model_dump())
                 seen.add(j.key)
             seen.save()
+        if misses.counts.get(outcome.company.key) != before:  # --resume won't fetch it again
+            misses.save()
         if progress is not None:
             progress.mark(outcome.company.key)
 

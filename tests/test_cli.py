@@ -1246,6 +1246,35 @@ def test_fetch_saves_each_board_as_it_finishes(tmp_path, fixture_json, monkeypat
 
 
 @respx.mock
+def test_fetch_saves_a_boards_misses_before_marking_it_done(tmp_path, fixture_json, monkeypatch):
+    # After a hard kill, --resume skips the boards marked done, so their misses must be on disk.
+    respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    misses = _misses(tmp_path)
+    misses.counts = {"greenhouse:examplecorp": 2}
+    misses.save()
+    on_disk = {}
+
+    def fetch(company, client, **kwargs):  # Last: look at the disk while the run is still going
+        for _ in range(500):
+            if _progress(tmp_path).exists() and len(_progress(tmp_path).read_text().split()) == 2:
+                break
+            time.sleep(0.01)
+        on_disk["misses"] = _misses(tmp_path).counts
+        return []
+
+    real = cli.fetch_company
+    monkeypatch.setattr(
+        cli, "fetch_company",
+        lambda company, client, **kw: (fetch if company.slug == "last" else real)(company, client, **kw),
+    )
+    assert _fetch(tmp_path, _three_boards(tmp_path), "--per-host", "1") == 0
+    assert on_disk == {"misses": {"greenhouse:dead": 1}}  # the clear and the miss, both saved
+
+
+@respx.mock
 def test_an_interrupted_fetch_keeps_its_progress_and_resume_skips_those_boards(
     tmp_path, fixture_json, monkeypatch, capsys
 ):
