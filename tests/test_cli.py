@@ -5,9 +5,13 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import queue
 import shutil
+import signal
+import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -1186,3 +1190,220 @@ def test_a_settings_edit_mid_run_does_not_change_the_letters_model(tmp_path, sco
     headers = [p.read_text().splitlines()[0] for p in (tmp_path / "out").glob("*.md")]
     assert len(headers) == 2
     assert all(" | claude-code:opus | " in h for h in headers)
+
+
+# --------------------------------------------------------------------------- saving as it goes
+
+
+def _three_boards(tmp_path):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n"
+        "  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n\n"
+        "  - name: Dead\n    ats: greenhouse\n    slug: dead\n\n"
+        "  - name: Last\n    ats: greenhouse\n    slug: last\n"
+    )
+    return p
+
+
+def _progress(tmp_path):
+    return tmp_path / "data" / "fetch_progress.txt"
+
+
+@respx.mock
+def test_fetch_saves_each_board_as_it_finishes(tmp_path, fixture_json, monkeypatch):
+    respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    data = tmp_path / "data"
+    on_disk = {}
+
+    def fetch(company, client, **kwargs):  # Last: look at the disk while the run is still going
+        assert company.slug == "last"
+        for _ in range(500):  # the main thread records the earlier boards meanwhile
+            if _progress(tmp_path).exists() and len(_progress(tmp_path).read_text().split()) == 2:
+                break
+            time.sleep(0.01)
+        on_disk["jobs"] = [j.title for j in storage.load_jobs(data)]
+        on_disk["seen"] = len(storage.SeenSet(data / "seen.json"))
+        on_disk["progress"] = _progress(tmp_path).read_text().split()
+        return []
+
+    real = cli.fetch_company
+    monkeypatch.setattr(
+        cli, "fetch_company",
+        lambda company, client, **kw: (fetch if company.slug == "last" else real)(company, client, **kw),
+    )
+    assert _fetch(tmp_path, _three_boards(tmp_path), "--per-host", "1") == 0
+    assert on_disk == {
+        "jobs": ["Director of Platform Engineering"],
+        "seen": 1,
+        "progress": ["greenhouse:examplecorp", "greenhouse:dead"],  # a gone board counts as done
+    }
+    assert not _progress(tmp_path).exists()  # a finished run leaves no progress behind
+    assert len(storage.load_jobs(data)) == 1  # recorded once, not again at the end
+
+
+@respx.mock
+def test_an_interrupted_fetch_keeps_its_progress_and_resume_skips_those_boards(
+    tmp_path, fixture_json, monkeypatch, capsys
+):
+    first = respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    dead = respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    last = respx.get(GH.format("last")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    companies = _three_boards(tmp_path)
+    real = cli.fetch_company
+    _failing_for("last", KeyboardInterrupt(), monkeypatch)
+
+    assert _fetch(tmp_path, companies, "--per-host", "1") == 130
+    assert "jobhunt fetch --resume" in capsys.readouterr().err
+    assert _progress(tmp_path).read_text().split() == ["greenhouse:examplecorp", "greenhouse:dead"]
+    assert _misses(tmp_path).counts == {"greenhouse:dead": 1}
+
+    monkeypatch.setattr(cli, "fetch_company", real)
+    assert _fetch(tmp_path, companies, "--resume") == 0
+    assert (first.call_count, dead.call_count, last.call_count) == (1, 1, 1)
+    assert _misses(tmp_path).counts == {"greenhouse:dead": 1}  # not counted twice in one run
+    assert not _progress(tmp_path).exists()
+    assert len(storage.load_jobs(tmp_path / "data")) == 1
+
+
+@respx.mock
+def test_resume_with_nothing_to_resume_fetches_everything(tmp_path, fixture_json, capsys):
+    route = respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    assert _fetch(tmp_path, companies, "--resume") == 0
+    assert route.call_count == 1
+    assert "nothing to resume" in capsys.readouterr().err
+
+
+@respx.mock
+def test_a_fresh_fetch_forgets_an_earlier_interrupted_one(tmp_path, fixture_json):
+    route = respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    _progress(tmp_path).parent.mkdir(parents=True)
+    _progress(tmp_path).write_text("greenhouse:examplecorp\n")
+    assert _fetch(tmp_path, companies) == 0
+    assert route.call_count == 1
+
+
+def test_resume_cannot_be_combined_with_company(tmp_path, capsys):
+    assert _fetch(tmp_path, _three_boards(tmp_path), "--resume", "--company", "Dead") == 2
+    assert "--resume" in capsys.readouterr().err
+
+
+@respx.mock
+def test_a_one_company_fetch_leaves_an_interrupted_run_alone(tmp_path, fixture_json):
+    respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    _progress(tmp_path).parent.mkdir(parents=True)
+    _progress(tmp_path).write_text("greenhouse:dead\n")
+    assert _fetch(tmp_path, _three_boards(tmp_path), "--company", "ExampleCorp") == 0
+    assert _progress(tmp_path).read_text() == "greenhouse:dead\n"
+
+
+@respx.mock
+def test_a_dry_run_resume_reads_progress_but_writes_none(tmp_path, fixture_json):
+    route = respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    respx.get(GH.format("last")).mock(return_value=httpx.Response(200, json={"jobs": []}))
+    _progress(tmp_path).parent.mkdir(parents=True)
+    _progress(tmp_path).write_text("greenhouse:examplecorp\ngreenhouse:dead\n")
+    assert _fetch(tmp_path, _three_boards(tmp_path), "--resume", "--dry-run") == 0
+    assert route.call_count == 0
+    assert _progress(tmp_path).read_text() == "greenhouse:examplecorp\ngreenhouse:dead\n"
+
+
+@pytest.mark.parametrize("cmd", ["fetch", "run"])
+def test_resume_flag(cmd):
+    assert cli.build_parser().parse_args([cmd, "--resume"]).resume is True
+    assert cli.build_parser().parse_args([cmd]).resume is False
+
+
+@pytest.mark.parametrize("signum", [signal.SIGHUP, signal.SIGTERM])
+def test_hangup_and_terminate_interrupt_like_ctrl_c(signum):
+    before = signal.getsignal(signum)
+    with pytest.raises(KeyboardInterrupt), cli._interrupt_on_signals():
+        os.kill(os.getpid(), signum)
+        for _ in range(1000):  # the handler runs on the main thread between bytecodes
+            pass
+    assert signal.getsignal(signum) == before
+
+
+def test_after_a_hangup_output_goes_nowhere_until_the_end(capsys):
+    stdout = sys.stdout
+    with contextlib.suppress(KeyboardInterrupt), cli._interrupt_on_signals():
+        try:
+            os.kill(os.getpid(), signal.SIGHUP)
+            for _ in range(1000):
+                pass
+        except KeyboardInterrupt:
+            assert sys.stdout is not stdout  # the terminal is gone: printing must not fail
+            print("lost")
+            raise
+    assert sys.stdout is stdout
+    assert "lost" not in capsys.readouterr().out
+
+
+def test_a_second_signal_does_not_interrupt_the_save():
+    with pytest.raises(KeyboardInterrupt), cli._interrupt_on_signals():
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+            for _ in range(1000):
+                pass
+        except KeyboardInterrupt:
+            os.kill(os.getpid(), signal.SIGTERM)  # while saving: ignored
+            for _ in range(1000):
+                pass
+            raise
+
+
+@respx.mock
+def test_a_hangup_mid_fetch_saves_and_keeps_progress(tmp_path, fixture_json, monkeypatch):
+    respx.get(GH.format("examplecorp")).mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    respx.get(GH.format("dead")).mock(return_value=httpx.Response(404))
+    release = threading.Event()
+    real = cli.fetch_company
+
+    def fetch(company, client, **kwargs):
+        if company.slug == "last":
+            for _ in range(500):  # once the earlier boards are saved, so the test is deterministic
+                if _progress(tmp_path).exists() and len(_progress(tmp_path).read_text().split()) == 2:
+                    break
+                time.sleep(0.01)
+            os.kill(os.getpid(), signal.SIGHUP)  # VS Code closed under the run
+            release.wait(5)
+            return []
+        return real(company, client, **kwargs)
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    try:
+        assert _fetch(tmp_path, _three_boards(tmp_path), "--per-host", "1") == 130
+    finally:
+        release.set()
+    assert [j.title for j in storage.load_jobs(tmp_path / "data")] == ["Director of Platform Engineering"]
+    assert _progress(tmp_path).read_text().split() == ["greenhouse:examplecorp", "greenhouse:dead"]
+    assert _misses(tmp_path).counts == {"greenhouse:dead": 1}
+
+
+def test_a_posting_listed_twice_on_one_board_is_recorded_once(tmp_path, platform_director_job, monkeypatch):
+    # Workable lists a posting once per location, every copy with the same shortcode.
+    elsewhere = platform_director_job.model_copy(update={"location": "Austin, Texas, United States"})
+    monkeypatch.setattr(cli, "fetch_company", lambda company, client, **kw: [platform_director_job, elsewhere])
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
+    assert _fetch(tmp_path, companies) == 0
+    assert [j.location for j in storage.load_jobs(tmp_path / "data")] == [platform_director_job.location]

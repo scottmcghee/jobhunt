@@ -1,6 +1,7 @@
 """Runtime state on disk. Deliberately boring: JSON and JSONL files under data/.
 
 - seen.json    : {job_key: first_seen_iso}. The idempotency ledger.
+- fetch_progress.txt : board keys an interrupted `fetch` finished, one a line, for `--resume`.
 - misses.json  : {board_key: fetches in a row that found the board gone (see cli._board_gone)}.
                  Boards that answered fine are absent.
 - jobs.jsonl   : every Job that passed the filter, appended once.
@@ -32,13 +33,19 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 class SeenSet:
-    """Persistent set of job keys we've already processed."""
+    """Persistent set of job keys we've already processed.
 
-    def __init__(self, path: Path):
+    With ``jobs`` (jobs.jsonl), every job recorded there counts as seen too, so a run killed
+    after appending a board's jobs but before saving this set doesn't record them again.
+    """
+
+    def __init__(self, path: Path, jobs: Path | None = None):
         self.path = path
         self._seen: dict[str, str] = {}
         if path.exists():
             self._seen = json.loads(path.read_text() or "{}")
+        for record in read_jsonl(jobs) if jobs else []:
+            self.add(Job.model_validate(record).key)
 
     def __contains__(self, key: str) -> bool:
         return key in self._seen
@@ -72,6 +79,36 @@ class MissLedger:
 
     def save(self) -> None:
         _write_atomic(self.path, json.dumps(self.counts, indent=2, sort_keys=True))
+
+
+class FetchProgress:
+    """Board keys the current full fetch has finished, so an interrupted one can be resumed.
+
+    Each key is appended as its board is recorded, so the file is current even after a kill.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.done: set[str] = set()
+        if path.exists():
+            self.done = set(path.read_text(encoding="utf-8").splitlines()) - {""}
+
+    def exists(self) -> bool:
+        return self.path.exists()
+
+    def start(self) -> None:
+        """Begin a fresh run: forget any earlier one."""
+        _write_atomic(self.path, "")
+        self.done = set()
+
+    def mark(self, key: str) -> None:
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(key + "\n")
+        self.done.add(key)
+
+    def finish(self) -> None:
+        """The run completed: nothing is left to resume."""
+        self.path.unlink(missing_ok=True)
 
 
 def append_jsonl(path: Path, record: dict) -> None:

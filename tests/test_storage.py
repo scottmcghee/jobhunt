@@ -111,3 +111,42 @@ def test_lettered_job_keys_finds_keys_with_spaces(tmp_path):
     letter = Letter(job_key="ashby:Some Co:3f2a", company="Some Co", title="VP Eng", modules_used=["m"], text="Hi", model="t")
     storage.write_letter(letter, tmp_path)
     assert storage.lettered_job_keys(tmp_path) == {"ashby:Some Co:3f2a"}
+
+
+def test_seen_set_counts_jobs_already_in_jobs_jsonl(tmp_path, platform_director_job):
+    # A run killed after appending a board's jobs but before saving seen.json must not
+    # record them again next time.
+    storage.append_jsonl(tmp_path / "jobs.jsonl", platform_director_job.model_dump())
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=tmp_path / "jobs.jsonl")
+    assert platform_director_job.key in seen
+    assert platform_director_job.key not in storage.SeenSet(tmp_path / "seen.json")
+
+
+def test_seen_set_without_a_jobs_file(tmp_path):
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=tmp_path / "jobs.jsonl")
+    assert len(seen) == 0
+
+
+def test_fetch_progress_lifecycle(tmp_path):
+    path = tmp_path / "fetch_progress.txt"
+    progress = storage.FetchProgress(path)
+    assert progress.done == set() and not progress.exists()
+
+    progress.start()
+    progress.mark("greenhouse:a")
+    progress.mark("lever:b")
+    assert storage.FetchProgress(path).done == {"greenhouse:a", "lever:b"}  # on disk at once
+
+    progress.start()  # a fresh run forgets the last one
+    assert storage.FetchProgress(path).done == set() and path.exists()
+
+    progress.finish()
+    assert not path.exists()
+    progress.finish()  # already gone is fine
+
+
+def test_fetch_progress_keeps_keys_with_spaces(tmp_path):
+    progress = storage.FetchProgress(tmp_path / "fetch_progress.txt")
+    progress.start()
+    progress.mark("ashby:Acme Labs")  # Ashby slugs keep spaces
+    assert storage.FetchProgress(progress.path).done == {"ashby:Acme Labs"}

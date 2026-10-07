@@ -5,7 +5,7 @@ Ashby, Workday, SmartRecruiters, Workable, BambooHR), drops those that fail the 
 config/preferences.yaml, has Claude score the rest 1-10 against config/profile.md, and assembles
 cover letters for the top scorers from the pre-written modules in config/kit/.
 
-    jobhunt fetch   [--company NAME] [--dry-run] [--workers N] [--per-host N]
+    jobhunt fetch   [--company NAME] [--dry-run] [--resume] [--workers N] [--per-host N]
                                                      pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
     jobhunt list    [--min-score N]                  show scored jobs and their keys
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import signal
 import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
@@ -178,6 +180,39 @@ def _stop_on_exit(transport: throttle.ThrottledTransport, pools: _GroupPools) ->
         pools.shutdown()
 
 
+@contextmanager
+def _interrupt_on_signals() -> Iterator[None]:
+    """Treat SIGHUP and SIGTERM like Ctrl-C, so closing the terminal still saves the run.
+
+    After a SIGHUP the terminal is gone, so output goes to /dev/null rather than failing
+    halfway through the save. Once one signal has arrived, more are ignored until the end.
+    """
+    signums = [getattr(signal, name) for name in ("SIGHUP", "SIGTERM") if hasattr(signal, name)]
+    previous = {signum: signal.getsignal(signum) for signum in signums}
+    stdout, stderr = sys.stdout, sys.stderr
+    devnull = None
+
+    def interrupt(signum: int, frame: object) -> None:
+        nonlocal devnull
+        for other in signums:
+            signal.signal(other, signal.SIG_IGN)
+        if signum == getattr(signal, "SIGHUP", None):
+            devnull = open(os.devnull, "w")  # noqa: SIM115 - closed on the way out
+            sys.stdout = sys.stderr = devnull
+        raise KeyboardInterrupt
+
+    for signum in signums:
+        signal.signal(signum, interrupt)
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        sys.stdout, sys.stderr = stdout, stderr
+        if devnull is not None:
+            devnull.close()
+
+
 def _refused(outcome: BoardOutcome) -> bool:
     """A host pushing back (rate limit or block), which feeds the runner's circuit breaker."""
     return outcome.refused
@@ -237,27 +272,43 @@ def _record(
     new_jobs: list[Job],
     verbose: bool,
     prune_after: int = MAX_CONSECUTIVE_404S,
-) -> None:
-    """Fold one board's outcome into the run's books and print its line. Main thread only."""
+) -> list[Job]:
+    """Fold one board's outcome into the run's books and print its line. Main thread only.
+
+    Returns the board's new jobs (also added to ``new_jobs``).
+    """
     company = outcome.company
     if outcome.skipped:
-        return
+        return []
     if outcome.jobs is None:
         if outcome.gone and misses.miss(company.key) >= prune_after:
             dead.add(company.key)
-        return
+        return []
     misses.clear(company.key)
     passed, rejected = jfilter.apply(outcome.jobs, prefs, company.tags)
-    fresh = [j for j in passed if j.key not in seen]
+    unique: dict[str, Job] = {}  # Workable lists a posting once per location, under one shortcode
+    for j in passed:
+        unique.setdefault(j.key, j)
+    fresh = [j for j in unique.values() if j.key not in seen]
     counts = f"total={len(outcome.jobs):<4} passed={len(passed):<3} new={len(fresh)}"
     print(f"{company.name:<16} {counts}")
     if verbose:
         for r in rejected:
             print(f"    - {r.job.title[:60]:<60} {r.reason}")
     new_jobs.extend(fresh)
+    return fresh
 
 
 def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
+    with _interrupt_on_signals():
+        return _cmd_fetch(args, data_dir)
+
+
+def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
+    """Each board's new jobs are saved as it finishes, so an interrupted run loses nothing."""
+    if args.resume and args.company:
+        print("--resume continues a full fetch; it can't be used with --company", file=sys.stderr)
+        return 2
     companies = config.load_companies(args.companies)
     if args.company:
         companies = [c for c in companies if c.name.lower() == args.company.lower()]
@@ -265,8 +316,20 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             print(f"no company named {args.company!r} in companies.yaml", file=sys.stderr)
             return 2
     prefs = config.load_preferences()
-    seen = storage.SeenSet(data_dir / "seen.json")
+    jobs_path = data_dir / "jobs.jsonl"
+    seen = storage.SeenSet(data_dir / "seen.json", jobs=jobs_path)
     misses = storage.MissLedger(data_dir / "misses.json")
+    # A full fetch notes each finished board for --resume; a one-company fetch leaves that alone.
+    progress = None if args.company else storage.FetchProgress(data_dir / "fetch_progress.txt")
+    resuming = args.resume and progress is not None and progress.exists()
+    if resuming:
+        companies = [c for c in companies if c.key not in progress.done]
+        done = len(progress.done)
+        print(f"resuming: {done} board(s) already fetched, {len(companies)} to go", file=sys.stderr)
+    elif args.resume:
+        print("nothing to resume: fetching every board", file=sys.stderr)
+    if progress is not None and not resuming and not args.dry_run:
+        progress.start()
 
     def title_passes(company: Company) -> Callable[[Job], bool]:
         return lambda job: jfilter.check_title(job, prefs, company.tags) is None
@@ -276,6 +339,20 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     interrupted = False
     fetch = args.settings.fetch
     prune = fetch.prune_after_404s
+
+    def book(outcome: BoardOutcome) -> None:
+        """Record one board, then save it: its new jobs, then the seen set, then progress."""
+        fresh = _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose, prune)
+        if args.dry_run or outcome.skipped:  # a skipped board is retried by --resume
+            return
+        if fresh:
+            for j in fresh:
+                storage.append_jsonl(jobs_path, j.model_dump())
+                seen.add(j.key)
+            seen.save()
+        if progress is not None:
+            progress.mark(outcome.company.key)
+
     transport = _transport(fetch, workers=args.workers, per_host=args.per_host)
     # Later pages and descriptions (Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple,
     # Phenom, SuccessFactors) go to their group's pool; the transport's per-host and global limits
@@ -303,7 +380,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         )
         try:
             for outcome in boards:  # in companies.yaml order, whatever order they finish in
-                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose, prune)
+                book(outcome)
         except KeyboardInterrupt:
             # Keep what the finished boards found; the next run picks up the rest.
             interrupted = True
@@ -312,7 +389,7 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             if any(o.jobs is not None and not o.skipped for o in late):  # only if a line follows
                 print("finished out of order:")
             for outcome in late:
-                _record(outcome, prefs, seen, misses, dead, new_jobs, args.verbose, prune)
+                book(outcome)
     if args.verbose:
         _print_stats(transport)
 
@@ -328,11 +405,11 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         misses.clear(key)
     misses.save()
 
-    for j in new_jobs:
-        storage.append_jsonl(data_dir / "jobs.jsonl", j.model_dump())
-        seen.add(j.key)
-    seen.save()
+    if progress is not None and not interrupted:
+        progress.finish()
     print(f"\n{len(new_jobs)} new job(s) recorded.")
+    if progress is not None and interrupted:
+        print(f"run `jobhunt {args.cmd} --resume` to fetch the rest", file=sys.stderr)
     return 130 if interrupted else 0
 
 
@@ -483,6 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     company_help = ("fetch only this company, matched case-insensitively against its name: "
                     "field in companies.yaml (not the slug)")
     dry_run_help = "show what would be recorded without recording it"
+    resume_help = "fetch only the boards an interrupted fetch didn't get to"
     limit_help = "score at most N jobs"
     rescore_help = "score jobs again even if they already have a score"
     force_help = "write letters again for jobs that already have one in the output directory"
@@ -494,6 +572,7 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="pull postings, filter, record new ones")
     f.add_argument("--company", metavar="NAME", help=company_help)
     f.add_argument("--dry-run", action="store_true", help=dry_run_help)
+    f.add_argument("--resume", action="store_true", help=resume_help)
     _concurrency_args(f)
 
     s = sub.add_parser("score", help="score unscored jobs with Claude")
@@ -511,6 +590,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="fetch -> score -> letter")
     r.add_argument("--company", metavar="NAME", help=company_help)
     r.add_argument("--dry-run", action="store_true", help=dry_run_help)
+    r.add_argument("--resume", action="store_true", help=resume_help)
     _concurrency_args(r)
     r.add_argument("--limit", type=int, metavar="N", help=limit_help)
     r.add_argument("--rescore", action="store_true", help=rescore_help)

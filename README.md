@@ -132,7 +132,7 @@ To make it yours, rewrite `profile.md` and the Kit in your own words, edit the f
 
 | Command | What it does | Common flags |
 |---|---|---|
-| `jobhunt fetch` | Pull postings, filter them, record the new ones | `--company NAME`, `--dry-run`, `--workers N`, `--per-host N` |
+| `jobhunt fetch` | Pull postings, filter them, record the new ones | `--company NAME`, `--dry-run`, `--resume`, `--workers N`, `--per-host N` |
 | `jobhunt score` | Score every recorded job that has no score yet | `--limit N`, `--rescore` |
 | `jobhunt list` | Show scored jobs, best first, with their keys | `--min-score N` |
 | `jobhunt letter` | Write letters for high scorers that don't have one | `--min-score N`, `--job KEY`, `--force` |
@@ -143,6 +143,8 @@ To make it yours, rewrite `profile.md` and the Kit in your own words, edit the f
   Adobe's sites. With `--dry-run` it's a quick way to check a new slug.
 - `--dry-run` records nothing and removes no boards. In `run`, it applies to the fetch step only;
   scoring and letters still run for jobs recorded earlier.
+- `--resume` fetches only the boards an interrupted fetch didn't finish (see below). It can't be
+  combined with `--company`.
 - `--workers` (default 32) caps requests in flight overall, and `--per-host` (default 6) caps
   them per host. `--workers 1 --per-host 1` is the gentlest setting.
 - `--job KEY` writes a letter for one job whatever its score. A key looks like
@@ -153,8 +155,12 @@ A few options go *before* the command: `-v` (log progress and print why each pos
 rejected), `--companies PATH`, `--data-dir PATH` and `--output-dir PATH`. For example:
 `jobhunt -v fetch --dry-run`.
 
-`jobhunt <command> --help` lists everything. Ctrl-C during a fetch keeps the boards finished so
-far, and the next run picks up the rest.
+`jobhunt <command> --help` lists everything.
+
+A fetch saves each board's new jobs as soon as that board is done, so stopping it never loses
+them: Ctrl-C, closing the terminal (or VS Code), `kill`, even a crash. The boards it finished
+are listed in `data/fetch_progress.txt`, and `jobhunt fetch --resume` fetches only the rest. A
+plain `jobhunt fetch` starts over with every board; a completed fetch deletes the file.
 
 ## Finding companies
 
