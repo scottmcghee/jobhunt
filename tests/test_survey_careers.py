@@ -857,3 +857,34 @@ def test_a_phenom_search_robots_txt_disallows_is_not_sent():
 )
 def test_a_phenom_board_from_a_page_url(url, slug):
     assert survey.phenom_board(url, "Acme").slug == slug
+
+
+# ------------------------------------------------------------------ SuccessFactors sites
+
+CSB_PAGE = ('<html><script src="/platform/js/j2w/min/j2w.core.min.js?h=1"></script>'
+            '<img src="https://rmkcdn.successfactors.com/x/logo.png"></html>')
+
+
+def _csb_site(page_text):
+    for host in (ACME, "https://acme.com"):
+        respx.get(host + "/robots.txt").mock(return_value=httpx.Response(404))
+        respx.get(host + "/careers").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/").mock(return_value=httpx.Response(404))
+    respx.get("https://careers.acme.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://careers.acme.com/").mock(return_value=httpx.Response(200, text=page_text))
+
+
+@respx.mock
+def test_a_career_site_builder_page_is_a_successfactors_board_for_its_host():
+    _csb_site(CSB_PAGE)
+    result = _survey_acme()
+    assert result.platforms == ["successfactors"]
+    assert [(b.ats, b.slug, b.name) for b in result.boards] == [("successfactors", "careers.acme.com", "Acme Corp")]
+
+
+@respx.mock
+def test_a_page_that_only_mentions_successfactors_gives_no_board():
+    """A corporate page linking to a SuccessFactors site, or another platform in front of it."""
+    _csb_site('<html><a href="https://career4.successfactors.com/career?company=acme">Jobs</a></html>')
+    result = _survey_acme()
+    assert result.platforms == ["successfactors"] and result.boards == []

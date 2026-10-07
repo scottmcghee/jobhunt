@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 ATSName = Literal[
     "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable", "bamboohr",
-    "amazon", "eightfold", "oracle", "apple", "phenom",
+    "amazon", "eightfold", "oracle", "apple", "phenom", "successfactors",
 ]
 
 _WORKDAY_DATACENTER = re.compile(r"wd\d+")
@@ -43,6 +43,8 @@ class Company(BaseModel):
                 raise ValueError("a workday board needs datacenter: wdN, e.g. wd5")
         if self.ats == "eightfold" and not _HOST.fullmatch(self.slug):
             raise ValueError("an eightfold slug is a careers site host, e.g. eaton.eightfold.ai")
+        if self.ats == "successfactors" and not _HOST.fullmatch(self.slug):
+            raise ValueError("a successfactors slug is a careers site host, e.g. jobs.ball.com")
         if self.ats == "oracle":
             host, _, site = self.slug.partition("/")
             if not _HOST.fullmatch(host) or not _SITE.fullmatch(site):

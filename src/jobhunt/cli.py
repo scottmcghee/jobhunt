@@ -278,8 +278,8 @@ def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     prune = fetch.prune_after_404s
     transport = _transport(fetch, workers=args.workers, per_host=args.per_host)
     # Later pages and descriptions (Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple,
-    # Phenom) go to their group's pool; the transport's per-host and global limits still decide
-    # how many are in flight.
+    # Phenom, SuccessFactors) go to their group's pool; the transport's per-host and global limits
+    # still decide how many are in flight.
     pools = _GroupPools(args.per_host)
     with _client(transport, fetch) as client, _stop_on_exit(transport, pools):
         boards = BoardRunner(

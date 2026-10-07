@@ -26,6 +26,7 @@ from jobhunt.sources import (
     rate_group,
     request_group,
     smartrecruiters,
+    successfactors,
     workable,
     workday,
 )
@@ -1480,6 +1481,200 @@ def test_a_phenom_slug_is_host_country_language(slug):
         Company(name="x", ats="phenom", slug=slug)
 
 
+# ------------------------------------------------------------------ SuccessFactors (sitemap; HTML job pages)
+
+SF = "https://careers.example.com"
+SF_JOB1 = SF + "/job/Seattle-Director%2C-Platform-Engineering-WA-98101/1200000100/"
+SF_JOB2 = SF + "/brand_two/job/Richmond-Senior-Manager%2C-Marketing-Strategy-VA-23230/1200000200/"
+
+
+def _sf_routes(sitemap="successfactors_sitemap.xml", robots=None, pages=None):
+    respx.get(SF + "/robots.txt").mock(return_value=robots or httpx.Response(404))
+    feed = respx.get(SF + "/sitemap.xml").mock(
+        return_value=httpx.Response(200, content=(FIXTURES / sitemap).read_bytes())
+    )
+    pages = pages if pages is not None else {
+        SF_JOB1: httpx.Response(200, text=(FIXTURES / "successfactors_job.html").read_text()),
+        SF_JOB2: httpx.Response(200, text=(FIXTURES / "successfactors_job_plain.html").read_text()),
+    }
+    job_routes = {url: respx.get(url).mock(return_value=resp) for url, resp in pages.items()}
+    return feed, job_routes
+
+
+@respx.mock
+def test_successfactors_rss_feed_is_every_posting_in_one_request(sf_company):
+    feed, pages = _sf_routes(sitemap="successfactors_feed.xml", pages={})
+    asked = []
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, lambda j: asked.append(j) or True)
+    assert feed.call_count == 1 and asked == []  # the feed has every description: nothing to ask
+    assert [j.external_id for j in jobs] == ["1100000100", "1100000200", "1100000300"]
+    first = jobs[0]
+    assert (first.source, first.company, first.company_slug) == ("successfactors", "Example Co", "careers.example.com")
+    assert first.title == "Director, Platform Engineering"  # the feed's "(Seattle, WA, US, 98101)" is the location
+    assert first.location == "Seattle, WA, US, 98101"
+    assert first.url == SF + "/job/Seattle-Director%2C-Platform-Engineering-WA-98101/1100000100/"
+    assert first.body == "Lead the platform group.\n\nOwn reliability"
+    assert first.remote is None and first.posted_at is None
+    assert jobs[1].title == "Senior Manager, Data" and jobs[1].remote is True  # "Remote, US"
+    assert jobs[1].url == SF + "/brand_two/job/Senior-Manager%2C-Data/1100000200/"
+    assert jobs[2].title == "Plant Operator"  # no location in the title to strip
+
+
+@respx.mock
+def test_successfactors_sitemap_fetches_only_the_pages_wanted(sf_company):
+    _, pages = _sf_routes()
+    seen = []
+
+    def wants(job):
+        seen.append(job.title)
+        return "Plant" not in job.title
+
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, wants)
+    # titles from the URLs (location words and all) decide which pages to fetch; /content/ isn't a job
+    assert seen == ["Seattle Director, Platform Engineering WA 98101",
+                    "Richmond Senior Manager, Marketing Strategy VA 23230", "Tulsa Plant Operator OK 74101"]
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+    assert pages[SF_JOB1].call_count == pages[SF_JOB2].call_count == 1
+    first, second, third = jobs
+    assert first.title == "Director, Platform Engineering"
+    assert first.location == "Seattle, WA, US, 98101"
+    assert first.posted_at == "2026-09-14T00:00:00+00:00"
+    assert first.url == SF_JOB1
+    assert first.body.startswith("Lead the platform group at Example Co.") and "Grow the team" in first.body
+    assert "Not part of the posting" not in first.body
+    # a page with no location data: the URL's words around the title
+    assert second.title == "Senior Manager, Marketing Strategy"
+    assert second.location == "Richmond, VA, 23230"
+    assert second.body.startswith("About us") and "based in Richmond, VA." in second.body
+    assert second.url == SF_JOB2 and second.posted_at is None
+    # not wanted: kept with what its URL says
+    assert (third.title, third.body, third.url) == ("Tulsa Plant Operator OK 74101", "", SF + "/job/Tulsa-Plant-Operator-OK-74101/1200000300/")
+
+
+@pytest.mark.parametrize("page", [httpx.Response(500), httpx.Response(200, text="<html>no posting here</html>")])
+@respx.mock
+def test_successfactors_failed_page_keeps_the_posting_from_its_url(sf_company, caplog, page):
+    _sf_routes(pages={SF_JOB1: page, SF_JOB2: page})
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, lambda j: "Director" in j.title)
+    assert jobs[0].title == "Seattle Director, Platform Engineering WA 98101" and jobs[0].body == ""
+    assert "successfactors careers.example.com: no description for 1200000100" in caplog.text
+
+
+@respx.mock
+def test_successfactors_robots_txt_can_rule_out_the_job_pages(sf_company, caplog):
+    _, pages = _sf_routes(robots=httpx.Response(200, text="User-agent: *\nDisallow: /job/\nDisallow: /brand_two/job/\n"))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client)
+    assert len(jobs) == 3 and all(j.body == "" for j in jobs)
+    assert all(route.call_count == 0 for route in pages.values())
+    assert caplog.text.count("robots.txt disallows") == 1
+
+
+@pytest.mark.parametrize("robots", [httpx.Response(200, text="User-agent: *\nDisallow: /sitemap.xml\n"), httpx.Response(503)])
+@respx.mock
+def test_successfactors_robots_txt_can_rule_out_the_sitemap(sf_company, caplog, robots):
+    feed, _ = _sf_routes(robots=robots)
+    with httpx.Client() as client:
+        assert successfactors.fetch(sf_company, client) == []
+    assert feed.call_count == 0  # RFC 9309: a robots.txt that answers 5xx disallows everything
+    assert "successfactors careers.example.com: robots.txt disallows /sitemap.xml" in caplog.text
+
+
+@respx.mock
+def test_successfactors_follows_a_robots_txt_redirect(sf_company):
+    """RFC 9309: robots.txt redirects are followed (read unfollowed, a redirect allows everything)."""
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(301, headers={"location": SF + "/en/robots.txt"}))
+    respx.get(SF + "/en/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /sitemap.xml\n"))
+    feed = respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, content=b"<urlset/>"))
+    with httpx.Client() as client:
+        assert successfactors.fetch(sf_company, client) == []
+    assert feed.call_count == 0
+
+
+@respx.mock
+def test_successfactors_a_posting_twice_in_the_feed_comes_once(sf_company):
+    feed = (FIXTURES / "successfactors_feed.xml").read_text()
+    first_item = feed[feed.index("<item>"):feed.index("</item>") + len("</item>")]
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, text=feed.replace("</channel>", first_item + "</channel>")))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client)
+    assert [j.external_id for j in jobs] == ["1100000100", "1100000200", "1100000300"]
+
+
+@respx.mock
+def test_successfactors_missing_sitemap_is_an_http_error(sf_company):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        successfactors.fetch(sf_company, client)
+
+
+@pytest.mark.parametrize("content", [b"<html>not a sitemap</html", b"<sitemapindex><sitemap/></sitemapindex>"])
+@respx.mock
+def test_successfactors_an_answer_that_isnt_a_sitemap_is_an_error(sf_company, content):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, content=content))
+    with httpx.Client() as client, pytest.raises(ValueError, match="sitemap"):
+        successfactors.fetch(sf_company, client)
+
+
+@respx.mock
+def test_successfactors_warns_about_a_site_with_no_job_links(sf_company, caplog):
+    """A careers site that isn't Career Site Builder (careers.netapp.com) lists other URLs."""
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    other = b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://careers.example.com/job/cork/software-engineer/27600/101648738688</loc></url></urlset>'
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, content=other))
+    with httpx.Client() as client, caplog.at_level("WARNING"):
+        assert successfactors.fetch(sf_company, client) == []
+    assert caplog.messages == ["successfactors careers.example.com: 0 postings — is it a Career Site Builder site?"]
+
+
+@respx.mock
+def test_successfactors_reads_a_sitemap_in_the_standard_namespace_too(sf_company):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    standard = (FIXTURES / "successfactors_sitemap.xml").read_bytes().replace(
+        b"http://www.google.com/schemas/sitemap/0.9", b"http://www.sitemaps.org/schemas/sitemap/0.9"
+    )
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, content=standard))
+    with httpx.Client() as client:
+        assert len(successfactors.fetch(sf_company, client, lambda j: False)) == 3
+
+
+@respx.mock
+def test_successfactors_pages_go_through_the_pool(sf_company):
+    _, pages = _sf_routes()
+    used = []
+
+    class Pool(ThreadPoolExecutor):
+        def map(self, *a, **kw):
+            used.append(True)
+            return super().map(*a, **kw)
+
+    respx.get(SF + "/job/Tulsa-Plant-Operator-OK-74101/1200000300/").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, Pool(2) as pool:
+        fetch_company(sf_company, client, pool=pool)
+    assert used and pages[SF_JOB1].call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("Mon Sep 14 00:00:00 UTC 2026", "2026-09-14T00:00:00+00:00"), ("Wed Sep 09 07:00:00 UTC 2026", "2026-09-09T07:00:00+00:00"),
+     ("", None), ("14/09/2026", None)],
+)
+def test_successfactors_posted_date(text, expected):
+    assert successfactors._posted(text) == expected
+
+
+@pytest.mark.parametrize("slug", ["careers.example.com/x", "careers", "a b.com", "https://careers.example.com"])
+def test_a_successfactors_slug_is_a_host(slug):
+    with pytest.raises(ValueError, match="successfactors slug is a careers site host"):
+        Company(name="x", ats="successfactors", slug=slug)
+
+
 # ------------------------------------------------------------------ per-term caps from settings
 
 @respx.mock
@@ -1655,6 +1850,8 @@ def test_rate_groups():
     assert request_group(httpx.URL(OR + "/recruitingCEJobRequisitions")) == rate_group(oc)
     ph = Company(name="x", ats="phenom", slug="Careers.Example.com/us/en")  # each tenant is its own host
     assert rate_group(ph) == "careers.example.com" == request_group(httpx.URL("https://careers.example.com/widgets"))
+    sf = Company(name="x", ats="successfactors", slug="Careers.Example.com")  # each site is its own host
+    assert rate_group(sf) == "careers.example.com" == request_group(httpx.URL("https://careers.example.com/sitemap.xml"))
     ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")
     assert rate_group(ef) == "apply.careers.microsoft.com"
     assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)

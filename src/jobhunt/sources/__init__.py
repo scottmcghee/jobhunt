@@ -20,6 +20,7 @@ from jobhunt.sources import (
     oracle,
     phenom,
     smartrecruiters,
+    successfactors,
     workable,
     workday,
 )
@@ -40,6 +41,7 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
     "workday": workday.fetch,
     "smartrecruiters": smartrecruiters.fetch,
     "bamboohr": bamboohr.fetch,
+    "successfactors": successfactors.fetch,
 }
 
 
@@ -69,7 +71,7 @@ def fetch_company(
     """Dispatch to the right ATS adapter for this company.
 
     ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters,
-    BambooHR, Eightfold, Oracle, Apple, Phenom):
+    BambooHR, Eightfold, Oracle, Apple, Phenom, and SuccessFactors sites without a feed):
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
@@ -80,9 +82,9 @@ def fetch_company(
     they search per term instead (``fetch`` passes the title filter's target-level words). Others
     ignore it. ``max_per_term`` caps how many postings one term may bring in (None: the source's
     own default; fetch passes fetch.max_per_term).
-    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple and Phenom fetch
-    later pages and descriptions concurrently on it (BambooHR, Oracle, Apple and Phenom only
-    descriptions).
+    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple, Phenom and
+    SuccessFactors fetch later pages and descriptions concurrently on it (BambooHR, Oracle, Apple,
+    Phenom and SuccessFactors only descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
         fetcher = SEARCH_FETCHERS[company.ats]
@@ -112,7 +114,7 @@ def rate_group(company: Company) -> str:
     """The rate-limit group a board's requests belong to, e.g. ``workday:wd5`` or ``lever``."""
     if company.ats == "workday":
         return f"workday:{company.datacenter}"
-    if company.ats == "eightfold":  # a careers site's own host; limits seen so far are per host
+    if company.ats in ("eightfold", "successfactors"):  # a careers site's own host
         return company.slug.lower()
     if company.ats in ("oracle", "phenom"):  # each tenant has its own host (and maybe sites)
         return company.slug.partition("/")[0].lower()

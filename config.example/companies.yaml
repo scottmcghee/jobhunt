@@ -22,6 +22,9 @@
 #   BambooHR:   <tenant>.bamboohr.com/careers
 #               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.
+#   SuccessFactors: a Career Site Builder site, e.g. jobs.<company>.com/job/<title>/<id>/ (its pages
+#               load /platform/js/j2w/). slug is that host. Read from /sitemap.xml and the job
+#               pages, within robots.txt.
 #   Eightfold:  <tenant>.eightfold.ai/careers, or a company's own host (Microsoft's is
 #               apply.careers.microsoft.com). slug is that host. Optional location: limits its
 #               searches to one place, e.g. "United States". Searched like Amazon (below).
@@ -131,3 +134,7 @@ companies:
   - name: STERIS
     ats: phenom
     slug: careers.steris.com/us/en
+
+  - name: Ball
+    ats: successfactors
+    slug: jobs.ball.com
