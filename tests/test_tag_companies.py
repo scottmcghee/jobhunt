@@ -343,13 +343,32 @@ def test_a_tags_shape_it_cant_rewrite_skips_only_that_entry(tmp_path, caplog, ta
     assert "lever:a" in caplog.text
 
 
-def test_a_missing_survey_keeps_sp500_tags(tmp_path, caplog):
-    p = _companies(tmp_path, f"{ENTRY}    tags: [sp500, retail]\n")
+@pytest.mark.parametrize(("tags", "cached"), [
+    ("[sp500, retail]", None),
+    ("[sp500, retail]", []),  # a cached answer doesn't drop the sector's industries
+    ("[sp500, retail, saas]", ["saas"]),
+])
+def test_a_missing_survey_keeps_sp500_tags(tmp_path, caplog, tags, cached):
+    p = _companies(tmp_path, f"{ENTRY}    tags: {tags}\n")
     before = p.read_text()
     data = tmp_path / "data"
     data.mkdir()
+    if cached is not None:
+        (data / "company_tags.json").write_text(json.dumps({"lever:a": cached}))
     args = ["--companies", str(p), "--data-dir", str(data), "--survey", str(tmp_path / "nope.json"), "--no-llm"]
     assert tagger.main(args) == 0
     assert tagger.main(args) == 0  # and again: still idempotent
     assert p.read_text() == before
     assert "nope.json" in caplog.text
+
+
+def test_a_missing_survey_keeps_a_workday_boards_sector_industry(tmp_path):
+    p = _companies(tmp_path, "companies:\n  - name: AT&T\n    ats: workday\n    slug: att/ATTGeneral\n"
+                             "    datacenter: wd1\n    tags: [sp500, media]\n")
+    before = p.read_text()
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "company_tags.json").write_text(json.dumps({"workday:att/ATTGeneral": []}))
+    args = ["--companies", str(p), "--data-dir", str(data), "--survey", str(tmp_path / "nope.json"), "--no-llm"]
+    assert tagger.main(args) == 0
+    assert p.read_text() == before

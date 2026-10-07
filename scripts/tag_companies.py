@@ -172,8 +172,9 @@ def managed_tags(
     if is_big_tech(board):
         tags.append("big-tech")
     if sp500 is None:
-        if "sp500" in board.tags:
+        if "sp500" in board.tags:  # and its sector's industries, which only the survey knows
             tags.append("sp500")
+            tags += [t for t in board.tags if t in INDUSTRIES]
     elif (hit := sp500.get(_key(board))) is not None:
         tags.append("sp500")
         tags += sector_tags(hit[1])
