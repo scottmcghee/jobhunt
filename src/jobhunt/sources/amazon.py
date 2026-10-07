@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 BASE = "https://www.amazon.jobs/en/search.json"
 SITE = "https://www.amazon.jobs"
 PAGE_SIZE = 100  # the most the API returns per page
-MAX_PER_TERM = 2000  # runaway guard; the API itself stops at 10,000 hits
+MAX_PER_TERM = 2000  # default per-term cap (fetch.max_per_term); a runaway guard
+API_WINDOW = 10000  # Amazon pages through at most this many results; past it, it errors
 
 
 def _posted(raw: str | None) -> str | None:
@@ -123,12 +124,15 @@ def fetch(
     max_pages: int | None = None,
     wants_body: Callable[[Job], bool] | None = None,  # descriptions come in the results
     pool: Executor | None = None,  # pages are fetched in order; nothing to spread
+    max_per_term: int | None = None,
 ) -> list[Job]:
     """Every posting any of the search terms finds, in the board's country."""
+    # offset + page must stay within the 10,000 results Amazon will page through
+    cap = min(max_per_term or MAX_PER_TERM, API_WINDOW - PAGE_SIZE)
     found: dict[str, Job] = {}
     for term in terms(search, source="amazon"):
         offset = pages = 0
-        while offset < MAX_PER_TERM and (max_pages is None or pages < max_pages):
+        while offset < cap and (max_pages is None or pages < max_pages):
             postings, hits = _page(company, client, term, offset)
             pages += 1
             for raw in with_ids(company, postings):
@@ -138,7 +142,7 @@ def fetch(
             if not postings or offset >= hits:  # an empty page ends it, whatever hits says
                 break
         else:
-            if offset >= MAX_PER_TERM:
+            if offset >= cap:
                 log.warning(
                     "amazon %s: %s has %d hits; kept the first %d in Amazon's 'recent' order"
                     " (not strictly by posting date)",

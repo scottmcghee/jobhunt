@@ -124,12 +124,14 @@ def fetch(
     max_pages: int | None = None,
     wants_body: Callable[[Job], bool] = lambda job: True,
     pool: Executor | None = None,
+    max_per_term: int | None = None,
 ) -> list[Job]:
     """Every posting any search term finds; descriptions for those ``wants_body`` accepts."""
+    cap = max_per_term or MAX_PER_TERM
     found: dict[str, tuple[dict, Job]] = {}
     for term in terms(search, source="apple"):
         seen = pages = 0
-        while seen < MAX_PER_TERM and (max_pages is None or pages < max_pages):
+        while seen < cap and (max_pages is None or pages < max_pages):
             rows, total = _page(company, client, term, pages + 1)
             pages += 1
             for raw in with_ids(company, rows):
@@ -139,10 +141,10 @@ def fetch(
             if not rows or seen >= total:
                 break
         else:  # the loop's own condition stopped it: the cap, or max_pages
-            if seen >= MAX_PER_TERM:
+            if seen >= cap:
                 log.warning(
                     "apple %s: %r has %d hits; kept the first %d",
-                    company.slug, term, total, MAX_PER_TERM,
+                    company.slug, term, total, cap,
                 )
     if not found:
         log.warning(

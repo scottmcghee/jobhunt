@@ -44,7 +44,8 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
 
 # Single-company sites too big to list in full: they run one search per term instead.
 SearchFetcher = Callable[
-    [Company, httpx.Client, Sequence[str], int | None, BodyCheck, Executor | None], list[Job]
+    [Company, httpx.Client, Sequence[str], int | None, BodyCheck, Executor | None, int | None],
+    list[Job],
 ]
 SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "amazon": amazon.fetch,
@@ -61,6 +62,7 @@ def fetch_company(
     max_pages: int | None = None,
     pool: Executor | None = None,
     search: Sequence[str] = (),
+    max_per_term: int | None = None,
 ) -> list[Job]:
     """Dispatch to the right ATS adapter for this company.
 
@@ -74,12 +76,14 @@ def fetch_company(
 
     ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple): they
     search per term instead (``fetch`` passes the title filter's target-level words). Others
-    ignore it.
+    ignore it. ``max_per_term`` caps how many postings one term may bring in (None: the source's
+    own default; fetch passes fetch.max_per_term).
     With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle and Apple fetch later pages
     and descriptions concurrently on it (BambooHR, Oracle and Apple only descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
-        return SEARCH_FETCHERS[company.ats](company, client, search, max_pages, wants_body, pool)
+        fetcher = SEARCH_FETCHERS[company.ats]
+        return fetcher(company, client, search, max_pages, wants_body, pool, max_per_term)
     if company.ats in ON_DEMAND_FETCHERS:
         return ON_DEMAND_FETCHERS[company.ats](company, client, wants_body, max_pages, pool)
     return FETCHERS[company.ats](company, client)

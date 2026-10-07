@@ -1288,6 +1288,80 @@ def test_apple_location(locations, expected):
     assert apple._location({"locations": locations}) == expected
 
 
+# ------------------------------------------------------------------ per-term caps from settings
+
+@respx.mock
+def test_amazon_takes_its_cap_from_the_caller_but_stays_in_the_api_window(amazon_company, caplog):
+    def page(request):
+        offset = int(request.url.params["offset"])
+        jobs = [{"id": f"u{offset + i}", "id_icims": str(offset + i), "title": "M", "job_path": "/x"} for i in range(100)]
+        return httpx.Response(200, json={"error": None, "hits": 50000, "jobs": jobs})
+
+    route = respx.get(AZ).mock(side_effect=page)
+    with httpx.Client() as client:
+        assert len(amazon.fetch(amazon_company, client, ["manager"], max_per_term=300)) == 300
+        assert route.call_count == 3
+        jobs = amazon.fetch(amazon_company, client, ["manager"], max_per_term=50000)
+    assert len(jobs) == 9900  # offset + page must stay within Amazon's 10,000-result window
+    assert max(int(c.request.url.params["offset"]) for c in route.calls) == 9800
+
+
+@respx.mock
+def test_eightfold_takes_its_cap_from_the_caller(eightfold_company):
+    respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
+
+    def page(request):
+        start = int(request.url.params["start"])
+        positions = [{"id": start + i + 1, "name": "M", "locations": []} for i in range(10)]
+        return httpx.Response(200, json={"data": {"positions": positions, "count": 9999}})
+
+    respx.get(EF + "/api/pcsx/search").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = eightfold.fetch(eightfold_company, client, ["manager"], wants_body=lambda j: False, max_per_term=30)
+    assert len(jobs) == 30
+
+
+@respx.mock
+def test_oracle_takes_its_cap_from_the_caller(oracle_company):
+    def page(request):
+        offset = int(_finder(request)[1]["offset"])
+        reqs = [{"Id": str(offset + i + 1), "Title": "M", "PrimaryLocation": "X"} for i in range(200)]
+        return httpx.Response(200, json={"items": [{"TotalJobsCount": 9999, "requisitionList": reqs}]})
+
+    respx.get(OR + "/recruitingCEJobRequisitions").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = oracle.fetch(oracle_company, client, ["manager"], wants_body=lambda j: False, max_per_term=400)
+    assert len(jobs) == 400
+
+
+@respx.mock
+def test_apple_takes_its_cap_from_the_caller(apple_company):
+    def page(request):
+        n = int(request.url.params["page"])
+        rows = [{"id": f"r{n}-{i}", "postingTitle": "M", "transformedPostingTitle": "m", "locations": []} for i in range(20)]
+        loader = {"search": {"searchResults": rows, "totalRecords": 9999}}
+        return httpx.Response(200, text=f"<script>window.__staticRouterHydrationData = JSON.parse({json.dumps(json.dumps({'loaderData': loader}))});</script>")
+
+    respx.get(AP + "/search").mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = apple.fetch(apple_company, client, ["manager"], wants_body=lambda j: False, max_per_term=60)
+    assert len(jobs) == 60
+
+
+@respx.mock
+def test_fetch_company_passes_the_cap_to_search_sources(amazon_company, monkeypatch):
+    seen = []
+    monkeypatch.setitem(
+        __import__("jobhunt.sources", fromlist=["SEARCH_FETCHERS"]).SEARCH_FETCHERS,
+        "amazon",
+        lambda company, client, search, max_pages, wants_body, pool, max_per_term=None: seen.append(max_per_term) or [],
+    )
+    with httpx.Client() as client:
+        fetch_company(amazon_company, client, max_per_term=123)
+        fetch_company(amazon_company, client)
+    assert seen == [123, None]
+
+
 # source, company fixture, method, listing URL, fixture file, key holding the postings, ID field
 SOURCES_WITH_IDS = [
     (greenhouse, "gh_company", "GET", "https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs",

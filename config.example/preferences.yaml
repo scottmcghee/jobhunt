@@ -19,6 +19,13 @@ title:
     - "svp"
     - "vice president"
     - "vp"
+  # Extra target words for boards with one of these tags in companies.yaml. Titles at very large
+  # employers run a level or two below the same scope elsewhere, so a board tagged big-tech also
+  # accepts "manager" (the exclusions below still apply, e.g. "product manager"). Search sources
+  # (Amazon, Apple, Eightfold, Oracle) search these words too.
+  include_for_tags:
+    big-tech:
+      - manager
   # None of these may appear in the title.
   must_exclude_any:
     - "account*"

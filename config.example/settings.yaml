@@ -57,6 +57,15 @@ fetch:
     workable: 2.0
     apply.careers.microsoft.com: 0.5
     apple: 1.0  # each Apple search or job page is a ~300 KB server-rendered page
+  # Most postings each search term may bring in, per search source. A term with more hits stops
+  # there and fetch warns ("... has N hits; kept the first M"); raise a cap to take everything.
+  # Amazon can't page past 9,900. Setting the map replaces it whole, so keep every source in it.
+  # Env: JOBHUNT_FETCH_MAX_PER_TERM as JSON, e.g. '{"amazon": 9900, "apple": 2000}'
+  max_per_term:
+    amazon: 2000  # 100 a page
+    apple: 400  # 20 a page
+    eightfold: 500  # 10 a page
+    oracle: 1000  # 200 a page
 
 paths:
   # ~ expands, and a relative path is under the repo (like the defaults), whatever directory

@@ -174,13 +174,15 @@ def fetch(
     max_pages: int | None = None,
     wants_body: Callable[[Job], bool] = lambda job: True,
     pool: Executor | None = None,
+    max_per_term: int | None = None,
 ) -> list[Job]:
     """Every posting any search term finds; descriptions for those ``wants_body`` accepts."""
+    cap = max_per_term or MAX_PER_TERM
     board = _Board(company, client, _careers_domain(company, client))
     found: dict[str, tuple[dict, Job]] = {}
     for term in terms(search, source="eightfold"):
         start = pages = 0
-        while start < MAX_PER_TERM and (max_pages is None or pages < max_pages):
+        while start < cap and (max_pages is None or pages < max_pages):
             positions, count = board.page(term, start)
             pages += 1
             for raw in with_ids(company, positions):
@@ -190,10 +192,10 @@ def fetch(
             if not positions or start >= count:
                 break
         else:  # the loop's own condition stopped it: the cap, or max_pages
-            if start >= MAX_PER_TERM:
+            if start >= cap:
                 log.warning(
                     "eightfold %s: %r has %d hits; kept the first %d",
-                    company.slug, term, count, MAX_PER_TERM,
+                    company.slug, term, count, cap,
                 )
     wanted = [(raw, job) for raw, job in found.values() if wants_body(job)]
     run = pool.map if pool is not None else map

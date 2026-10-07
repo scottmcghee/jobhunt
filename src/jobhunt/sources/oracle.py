@@ -115,12 +115,14 @@ def fetch(
     max_pages: int | None = None,
     wants_body: Callable[[Job], bool] = lambda job: True,
     pool: Executor | None = None,
+    max_per_term: int | None = None,
 ) -> list[Job]:
     """Every posting any search term finds; descriptions for those ``wants_body`` accepts."""
+    cap = max_per_term or MAX_PER_TERM
     found: dict[str, tuple[dict, Job]] = {}
     for term in terms(search, source="oracle"):
         offset = pages = 0
-        while offset < MAX_PER_TERM and (max_pages is None or pages < max_pages):
+        while offset < cap and (max_pages is None or pages < max_pages):
             reqs, total = _page(company, client, term, offset)
             pages += 1
             for raw in with_ids(company, reqs, field="Id"):
@@ -130,10 +132,10 @@ def fetch(
             if not reqs or offset >= total:
                 break
         else:  # the loop's own condition stopped it: the cap, or max_pages
-            if offset >= MAX_PER_TERM:
+            if offset >= cap:
                 log.warning(
                     "oracle %s: %r has %d hits; kept the first %d",
-                    company.slug, term, total, MAX_PER_TERM,
+                    company.slug, term, total, cap,
                 )
     wanted = [(raw, job) for raw, job in found.values() if wants_body(job)]
     run = pool.map if pool is not None else map
