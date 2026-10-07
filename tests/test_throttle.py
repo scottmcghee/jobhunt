@@ -781,3 +781,9 @@ def test_the_transport_gives_its_limiters_its_cooldown():
         assert client.get(URL).status_code == 429
     (stats,) = transport.stats().values()
     assert stats["limit"] == 1  # two 429s, no cooldown: halved twice
+
+
+def test_connect_retries_sets_the_default_inner_transports_retries(monkeypatch):
+    _no_proxy_env(monkeypatch)
+    assert throttle.ThrottledTransport()._inner._pool._retries == 1
+    assert throttle.ThrottledTransport(connect_retries=0)._inner._pool._retries == 0
