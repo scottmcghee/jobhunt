@@ -89,7 +89,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `paradox` | careers site host | one page each | no sitemap: 404, removed; no job URLs: empty, warned | the careers host |
 | `successfactors` | careers site host | in the feed, or one page each | no sitemap: 404, removed; not Career Site Builder: empty, warned | the careers host |
 | `amazon` | country code | in the results | empty results, warned | `amazon` |
-| `eightfold` | careers host (+ optional `location`) | one request each | wrong domain: 404, removed; unknown `*.eightfold.ai` host: connection error, kept | the careers host |
+| `eightfold` | careers host (+ optional `location`) | one request each | wrong domain: 404, removed; unknown `*.eightfold.ai` host: connection error, kept | `eightfold` (2 requests/s) for `*.eightfold.ai`; else the careers host |
 | `oracle` | `host/site` | one request each | unknown site: the host's postings; unknown host: connection error, kept | the tenant host |
 | `apple` | location filter | one page each | empty results, warned | `apple` (1 request/s) |
 | `phenom` | `host/country/language`, or `host` | one request each | wrong locale: empty results, warned | the site's host |
@@ -393,8 +393,10 @@ Eightfold runs the careers sites of Microsoft, Nvidia, Eaton, PayPal and others.
 - **Unknown board:** an unknown domain on a real host is a 404, which counts toward removal. An
   unknown `*.eightfold.ai` host doesn't resolve at all. That is a connection error, not a 404, so
   it is never removed.
-- **Rate group:** the careers host. Microsoft's is capped at one request every two seconds,
-  because its site answered 429 to requests one second apart.
+- **Rate group:** every `*.eightfold.ai` board shares the `eightfold` group, capped at two
+  requests a second: they are one service, and 20 of them fetched side by side were answered
+  405. A board on a company's own host has that host as its group. Microsoft's is capped at one
+  request every two seconds, because its site answered 429 to requests one second apart.
 - **Finding boards:** the [slugs harvester](../README.md#finding-companies) recognizes
   `<tenant>.eightfold.ai/careers` URLs only. A company on its own host has to be added by hand.
 
@@ -501,9 +503,10 @@ one throttled HTTP transport. It identifies itself with the User-Agent
 
 ### Rate groups and per-host limits
 
-Requests are grouped by the server that answers them: one group per Workday datacenter, per
-Eightfold careers host, per Oracle tenant host and per Phenom site, and one per API host for
-every other source.
+Requests are grouped by the server that answers them: one group per Workday datacenter, one
+for all `*.eightfold.ai` and one for all BambooHR tenants, one per other careers host (Eightfold
+on a company's own host, Oracle tenants, Phenom, SuccessFactors, Radancy and Paradox sites), and
+one per API host for every other source.
 The table [above](#at-a-glance) lists each group. `jobhunt -v fetch` prints per-group stats at
 the end of a run: requests, throttles, peak concurrency and the current limit.
 
@@ -526,11 +529,12 @@ A group can also be held to a number of requests per second, `fetch.max_rate` in
 | Group | Cap | Why |
 |---|---|---|
 | `workable` | 2/s | Cloudflare bans an IP after about 50 requests in 10 seconds. |
+| `eightfold` | 2/s | Every `*.eightfold.ai` board; 20 fetched side by side were answered 405. |
 | `apply.careers.microsoft.com` | 0.5/s | Microsoft's site answered 429 to requests one second apart. |
 | `apple` | 1/s | Each page is about 300 KB. |
 
 Keys are the group names `jobhunt -v fetch` prints, and are case-sensitive. Setting `max_rate`, in the
-file or in `JOBHUNT_FETCH_MAX_RATE`, replaces the whole map, so copy these three into it to keep
+file or in `JOBHUNT_FETCH_MAX_RATE`, replaces the whole map, so copy these four into it to keep
 them. `{}` removes every cap.
 
 ### Retries

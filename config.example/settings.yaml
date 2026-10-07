@@ -46,15 +46,16 @@ fetch:
   transient_retries: 2
   # Most requests sent per second for a rate group; groups not listed have no cap. Keys are the
   # group names `fetch -v` prints in its stats (workable, lever, bamboohr, "workday:wd5"), and are
-  # case-sensitive; an Eightfold board's group is its careers host, and an Oracle board's its
-  # tenant host (e.g. eeho.fa.us2.oraclecloud.com). Workable's Cloudflare bans an IP for a
+  # case-sensitive; *.eightfold.ai boards share "eightfold", an Eightfold board on its own host
+  # has that host, and an Oracle board its tenant host (e.g. eeho.fa.us2.oraclecloud.com). Workable's Cloudflare bans an IP for a
   # minute or so after a burst of about 50 requests in 10 s. Setting the map (here or in
-  # the environment) replaces it whole, so keep workable, apply.careers.microsoft.com and apple in
-  # it to keep their caps; {} removes every cap. Env: JOBHUNT_FETCH_MAX_RATE as JSON, e.g.
-  # '{"workable": 3, "apply.careers.microsoft.com": 0.5, "apple": 1}'
+  # the environment) replaces it whole, so keep workable, eightfold, apply.careers.microsoft.com
+  # and apple in it to keep their caps; {} removes every cap. Env: JOBHUNT_FETCH_MAX_RATE as
+  # JSON, e.g. '{"workable": 3, "eightfold": 2, "apply.careers.microsoft.com": 0.5, "apple": 1}'
   # Microsoft's careers site (Eightfold) answered 429 to requests one second apart.
   max_rate:
     workable: 2.0
+    eightfold: 2.0  # every *.eightfold.ai board; 20 fetched side by side were answered 405
     apply.careers.microsoft.com: 0.5
     apple: 1.0  # each Apple search or job page is a ~300 KB server-rendered page
   # Most postings each search term may bring in, per search source. A term with more hits stops

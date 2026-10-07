@@ -1728,6 +1728,19 @@ def test_successfactors_a_posting_twice_in_the_feed_comes_once(sf_company):
 
 
 @respx.mock
+def test_successfactors_page_without_a_title_itemprop_uses_og_title(sf_company):
+    """jobs.amwater.com's newer template marks up the description but not the title."""
+    plain = (FIXTURES / "successfactors_job_plain.html").read_text()
+    page = plain.replace('itemprop="title" ', "").replace(
+        "</head>", '<meta property="og:title" content="Senior Manager, Marketing &amp; Strategy" />\n</head>')
+    _sf_routes(pages={SF_JOB1: httpx.Response(200, text=page), SF_JOB2: httpx.Response(200, text=page)})
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, lambda j: "Director" in j.title)
+    assert jobs[0].title == "Senior Manager, Marketing & Strategy"
+    assert jobs[0].body.startswith("About us")
+
+
+@respx.mock
 def test_successfactors_missing_sitemap_is_an_http_error(sf_company):
     respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
     respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(404))
@@ -2361,7 +2374,12 @@ def test_rate_groups():
     for ats in ("radancy", "paradox"):  # each site is its own host
         board = Company(name="x", ats=ats, slug="Jobs.Example.com")
         assert rate_group(board) == "jobs.example.com" == request_group(httpx.URL("https://jobs.example.com/sitemap.xml"))
-    ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")
+    # *.eightfold.ai tenants are one service: together they answered 405 to a fetch's burst
+    for slug in ("Eaton.eightfold.ai", "nvidia.eightfold.ai"):
+        assert rate_group(Company(name="x", ats="eightfold", slug=slug)) == "eightfold"
+    assert request_group(httpx.URL("https://nvidia.eightfold.ai/api/pcsx/search")) == "eightfold"
+    assert request_group(httpx.URL("https://x.eightfold.ai.evil.example/api")) == "x.eightfold.ai.evil.example"
+    ef = Company(name="x", ats="eightfold", slug="Apply.Careers.Microsoft.com")  # its own host: its own group
     assert rate_group(ef) == "apply.careers.microsoft.com"
     assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)
     assert request_group(httpx.URL("https://www.bamboohr.com.evil.example/x")) == "www.bamboohr.com.evil.example"

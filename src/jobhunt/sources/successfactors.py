@@ -43,6 +43,7 @@ log = logging.getLogger(__name__)
 _JOB_PATH = re.compile(r"/(?:[\w-]+/)?job/([^/]+)/(\d+)/?")
 _GOOGLE_NS = "{http://base.google.com/ns/1.0}"
 _ITEMPROP_OPEN = re.compile(r'<(\w+)\b[^>]*\bitemprop="(title|description)"[^>]*>', re.I)
+_OG_TITLE = re.compile(r'<meta\s+property="og:title"\s+content="([^"]*)"', re.I)
 _META = re.compile(r'<meta\s+itemprop="(\w+)"\s+content="([^"]*)"', re.I)
 _ADDRESS = ("addressLocality", "addressRegion", "addressCountry", "postalCode")
 
@@ -111,9 +112,11 @@ def _posted(text: str) -> str | None:
 def _from_page(listed: Job, page: str) -> Job:
     titles = _itemprop(page, "title")
     bodies = _itemprop(page, "description")
-    if not titles or not bodies:
+    og = _OG_TITLE.search(page)  # jobs.amwater.com's newer template marks up no title
+    title = to_text(titles[0]) if titles else html.unescape(og.group(1)) if og else ""
+    title = " ".join(title.split())
+    if not title or not bodies:
         raise ValueError("no posting on the page")
-    title = " ".join(to_text(titles[0]).split())
     metas: dict[str, str] = {}
     for key, value in _META.findall(page):
         metas.setdefault(key, html.unescape(value).strip())
