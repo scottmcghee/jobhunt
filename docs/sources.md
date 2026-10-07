@@ -248,7 +248,7 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 ```
 
 SAP SuccessFactors careers sites built with Career Site Builder, often `jobs.<company>.com` or
-`careers.<company>.com`. Their pages load scripts from `/platform/js/j2w/`. There is no public JSON
+`careers.<company>.com`. Their pages load scripts from `/platform/js/j2w/` or `/platform/csb`. There is no public JSON
 API, and robots.txt disallows `/services/`, the paths their feeds and search use. `jobhunt` reads
 what the sites allow: the sitemap, and job pages.
 
@@ -269,8 +269,10 @@ what the sites allow: the sitemap, and job pages.
   `SVPGM`) split apart. That fetches some pages whose title then fails the filter. It can still
   skip one if the URL joined two lowercase words, or joined all-caps words more than once in a
   title or into one longer than 8 letters. A page's
-  schema.org microdata gives the real title, location, date posted and description; postings not
-  fetched keep the URL's words as their title.
+  schema.org microdata gives the real title, location, date posted and description. A posting
+  that passed but has no page (robots.txt disallows it, or the page failed) gets as its title the
+  reading of its URL words that passed (`Seattle Sr. Manager, ...`, `Seattle VP Director, ...`),
+  so the final filter agrees; postings that didn't pass keep the URL's words.
 - **Location:** the feed's location, or the page's address. A page without one gets the URL's
   words before and after the title, matched word by word and ignoring punctuation
   (`Richmond, VA 23230`); if the title isn't in the URL, all of its words. Either way `_` reads
@@ -522,7 +524,7 @@ be fetched or answers 5xx disallows the whole host. A few companies get no reque
 Meta, whose terms forbid automated collection, and Alphabet, whose robots.txt disallows its job
 pages.
 
-A page that loads Career Site Builder's own scripts (`/platform/js/j2w/`) gives a SuccessFactors
+A page that loads Career Site Builder's own scripts (`/platform/js/j2w/` or `/platform/csb`) gives a SuccessFactors
 board for its host; a page that only mentions SuccessFactors gives none.
 
 On a Phenom site it sends one search request (within robots.txt, like everything else) to read

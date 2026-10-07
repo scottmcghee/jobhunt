@@ -1598,6 +1598,30 @@ def test_successfactors_fetches_every_page_whose_title_could_pass(sf_company, pr
 
 
 @pytest.mark.parametrize(
+    "robots", [httpx.Response(200, text="User-agent: *\nDisallow: /job/\n"), None])  # None: the pages fail
+@respx.mock
+def test_successfactors_a_wanted_posting_without_its_page_keeps_the_reading_that_passed(sf_company, prefs, robots):
+    paths = {"1": "/job/Seattle-Sr_-Manager%2C-Platform-Engineering-WA-98101/1/",
+             "2": "/job/Seattle-VPDirector%2C-Platform-Engineering-WA-98101/2/",
+             "3": "/job/Seattle-Plant-Operator-WA-98101/3/"}
+    respx.get(SF + "/robots.txt").mock(return_value=robots or httpx.Response(404))
+    locs = "".join(f"<url><loc>{SF}{p}</loc></url>" for p in paths.values())
+    sitemap = f'<urlset xmlns="http://www.google.com/schemas/sitemap/0.9">{locs}</urlset>'
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, text=sitemap))
+    for path in paths.values():
+        respx.get(SF + path).mock(return_value=httpx.Response(500))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, lambda j: check_title(j, prefs) is None)  # cli's check
+    assert [(j.external_id, j.title) for j in jobs] == [
+        ("1", "Seattle Sr. Manager, Platform Engineering WA 98101"),
+        ("2", "Seattle VP Director, Platform Engineering WA 98101"),
+        ("3", "Seattle Plant Operator WA 98101"),  # not wanted: what its URL says
+    ]
+    assert [check_title(j, prefs) is None for j in jobs] == [True, True, False]  # cli's final filter agrees
+    assert all(j.body == "" for j in jobs)
+
+
+@pytest.mark.parametrize(
     ("path", "location"),
     [
         # the URL drops the title's " - ": its words still match the title, token by token

@@ -17,8 +17,9 @@ with "_" read as "." (``Sr_`` is how the URLs write "Sr.") and words the URL joi
 "/" (``ManagerDirector``, ``VPDirector``, ``SVPGM``) split apart. That fetches some pages whose
 title then fails the filter. It can still skip one if the URL joined two lowercase words, or
 joined all-caps words more than once in a title or into one longer than 8 letters. The page's
-schema.org microdata gives the real title, location, date posted and description. The others
-keep what their URL says.
+schema.org microdata gives the real title, location, date posted and description. A posting
+wanted but left without its page (robots.txt, or a failed page) gets the reading of its URL words
+that passed as its title; the others keep what their URL says.
 
 Not every site the survey sees SuccessFactors on is Career Site Builder (careers.netapp.com is
 another platform in front of it). Its sitemap lists no job URLs in this shape, so ``fetch``
@@ -129,8 +130,9 @@ def _listed(company: Company, url: str, words: str, job_id: str) -> Job:
     )
 
 
-def _wanted(job: Job, wants_body: Callable[[Job], bool]) -> bool:
-    """Whether ``wants_body`` passes any run of a listed posting's URL words, as the title.
+def _wanted(job: Job, wants_body: Callable[[Job], bool]) -> str | None:
+    """The reading of a listed posting's URL words in which ``wants_body`` passes a run of them,
+    as the title, or None if it passes none.
 
     The real title is one of those runs, read with "_" as "." and joined words split: at a
     capital after a lowercase letter or before one, or anywhere in one all-caps word.
@@ -151,8 +153,8 @@ def _wanted(job: Job, wants_body: Callable[[Job], bool]) -> bool:
                     continue
                 tried.add(span)
                 if wants_body(job.model_copy(update={"title": span})):
-                    return True
-    return False
+                    return reading
+    return None
 
 
 def _itemprop(page: str, name: str) -> list[str]:
@@ -263,8 +265,12 @@ def fetch(
             url = (loc.text or "").strip()
             if (found := _job_id(url)) is not None:
                 listed.setdefault(found[1], _listed(company, url, *found))
-        wanted = [job for job in listed.values() if _wanted(job, wants_body)]
-        allowed = [job for job in wanted if robots.can_fetch(agent, job.url)]
+        wanted = {
+            job.external_id: reading
+            for job in listed.values()
+            if (reading := _wanted(job, wants_body)) is not None
+        }
+        allowed = [listed[i] for i in wanted if robots.can_fetch(agent, listed[i].url)]
         if len(allowed) < len(wanted):
             log.warning(
                 "successfactors %s: robots.txt disallows %d job pages; kept them without "
@@ -274,6 +280,9 @@ def fetch(
         for page in run(lambda job: _page(company, client, job), allowed):
             if page is not None:
                 listed[page.external_id] = page
+                del wanted[page.external_id]
+        for job_id, reading in wanted.items():  # no page: the reading that passed, as the title
+            listed[job_id] = listed[job_id].model_copy(update={"title": reading})
         jobs = list(listed.values())
     else:
         raise ValueError(f"the sitemap is neither an RSS feed nor a urlset ({root.tag})")
