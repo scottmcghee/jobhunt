@@ -98,8 +98,10 @@ def _detail(company: Company, client: httpx.Client, raw: dict) -> dict | None:
         body = {"pageName": "job", "ddoKey": "jobDetail", "jobId": raw["jobId"]}
         data = _post(client, _request(company, body))
         detail = data.get("jobDetail") if isinstance(data, dict) else None
-        job = ((detail or {}).get("data") or {}).get("job")
-        if not isinstance(job, dict) or not job.get("description"):
+        found = detail.get("data") if isinstance(detail, dict) else None
+        job = found.get("job") if isinstance(found, dict) else None
+        description = job.get("description") if isinstance(job, dict) else None
+        if not isinstance(description, str) or not description:
             raise ValueError("no job in the answer")
         return job
     except (httpx.HTTPError, ValueError) as e:

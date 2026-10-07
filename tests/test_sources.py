@@ -1398,7 +1398,13 @@ def test_phenom_a_missing_site_is_an_http_error(phenom_company):
         phenom.fetch(phenom_company, client, ["director"])
 
 
-@pytest.mark.parametrize("detail", [httpx.Response(500), httpx.Response(200, json={"jobDetail": {"data": {}}})])
+@pytest.mark.parametrize("detail", [
+    httpx.Response(500),
+    httpx.Response(200, json={"jobDetail": {"data": {}}}),
+    httpx.Response(200, json={"jobDetail": "error"}),
+    httpx.Response(200, json={"jobDetail": {"data": "x"}}),
+    httpx.Response(200, json={"jobDetail": {"data": {"job": {"description": {"a": 1}}}}}),
+])
 @respx.mock
 def test_phenom_failed_detail_keeps_job_without_body(phenom_company, fixture_json, caplog, detail):
     _phenom_routes(fixture_json, detail=detail)
