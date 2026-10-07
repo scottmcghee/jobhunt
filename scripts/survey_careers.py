@@ -39,7 +39,7 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
-from jobhunt import config, settings, slugs
+from jobhunt import config, settings, slugs, throttle
 from jobhunt.schema import Company
 
 DEFAULT_OUT = Path("data/sp500")
@@ -296,9 +296,13 @@ class _Polite:
                 self.skipped.append(url)
                 return None
             resp = self._fetch(url, follow_redirects=False)
-            if resp is None or not resp.is_redirect:
+            if resp is None or not resp.is_redirect or "location" not in resp.headers:
+                return resp  # a 3xx with no Location goes nowhere: it is the answer
+            try:
+                url = urljoin(url, resp.headers["location"])
+            except ValueError:  # a malformed Location, like http://[oops: it is the answer
+                self.errors.append(f"{url}: bad redirect")
                 return resp
-            url = urljoin(url, resp.headers["location"])
         self.errors.append(f"{url}: too many redirects")
         return None
 
@@ -442,7 +446,22 @@ def main(argv: list[str] | None = None) -> int:
     tried = {r.ticker: r for r in results}
     retry = {t for t, r in tried.items() if r.status == "unreachable" and r.attempts < MAX_ATTEMPTS}
     headers = {"User-Agent": fetch.user_agent}
-    with httpx.Client(headers=headers, timeout=fetch.timeout, follow_redirects=True) as client:
+    # Through fetch's throttle: one request at a time, and 429s (Wikidata answers a burst of
+    # batches with one) are retried after Retry-After or a backoff instead of ending the run.
+    # No transient or connect retries: guesses like careers.<host> often don't resolve, and
+    # retrying each would add seconds (up to fetch.timeout per attempt) per company.
+    transport = throttle.ThrottledTransport(
+        start=1,
+        ceiling=1,
+        max_in_flight=1,
+        max_retries=fetch.max_retries,
+        max_retry_after=fetch.max_retry_after,
+        transient_retries=0,
+        connect_retries=0,
+    )
+    with httpx.Client(
+        headers=headers, timeout=fetch.timeout, follow_redirects=True, transport=transport
+    ) as client:
         constituents = fetch_constituents(client)
         by_title = fetch_title_sites(client, [c.article for c in constituents])
         sites = fetch_sites(client)

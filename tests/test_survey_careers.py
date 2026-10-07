@@ -669,3 +669,115 @@ def test_a_company_with_any_response_is_not_unreachable_and_is_not_retried(tmp_p
     calls = len(respx.calls)
     assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
     assert len(respx.calls) == calls
+
+
+def test_main_sends_everything_through_the_throttled_transport(tmp_path, monkeypatch):
+    # Wikidata answered a burst of back-to-back batches with 429; the throttle retries it
+    seen = {}
+
+    def constituents(client):
+        seen["transport"] = client._transport
+        return []
+
+    monkeypatch.setattr(survey, "fetch_constituents", constituents)
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {})
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    assert survey.main([str(tmp_path / "out"), "--companies", str(known)]) == 0
+    transport = seen["transport"]
+    assert isinstance(transport, survey.throttle.ThrottledTransport)
+    assert transport.limiter("www.wikidata.org").ceiling == 1  # one request at a time per host
+    assert transport._transient_retries == 0  # a host that doesn't resolve isn't retried
+
+
+@respx.mock
+def test_a_redirect_without_a_location_is_the_final_answer():
+    # a live site answered 302 with no Location header; looking it up crashed the whole run
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(return_value=httpx.Response(302))
+    with _client() as client:
+        polite = survey._Polite(client, delay=0)
+        resp = polite.get(ACME + "/careers")
+    assert resp is not None and resp.status_code == 302
+
+
+@respx.mock
+def test_main_retries_a_wikidata_429(tmp_path, monkeypatch):
+    # Wikidata answered a burst of batches with 429; that ended the run before the throttle
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RETRIES", "2")
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RETRY_AFTER", "30")
+    built = []
+    real = survey.throttle.ThrottledTransport
+
+    def transport(**kwargs):
+        # a fake clock, so Retry-After is waited out at once
+        clock = [1000.0]
+        built.append(
+            real(**kwargs, clock=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s))
+        )
+        return built[-1]
+
+    monkeypatch.setattr(survey.throttle, "ThrottledTransport", transport)
+    monkeypatch.setattr(
+        survey, "fetch_constituents", lambda client: [survey.Constituent("ACME", "Acme", "X", "Acme")]
+    )
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})
+    monkeypatch.setattr(
+        survey, "survey_company", lambda *a, **k: survey.Result("ACME", "Acme", "X", None, [], [], [])
+    )
+    respx.get(survey.WIKI_API).mock(
+        return_value=httpx.Response(
+            200, json={"query": {"pages": [{"title": "Acme", "pageprops": {"wikibase_item": "Q1"}}]}}
+        )
+    )
+    wikidata = respx.get(survey.WIKIDATA_API).mock(
+        side_effect=[httpx.Response(429, headers={"Retry-After": "1"}), httpx.Response(200, json={"entities": {}})]
+    )
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    assert survey.main([str(tmp_path / "out"), "--companies", str(known), "--delay", "0"]) == 0
+    assert wikidata.call_count == 2
+    (built,) = built
+    assert built._max_retries == 2 and built._max_retry_after == 30  # from the fetch settings
+    assert built._slots is not None and built._slots._initial_value == 1  # one request at a time
+
+
+def test_main_tries_a_host_that_does_not_connect_once(tmp_path, monkeypatch):
+    # careers.<host> guesses often don't resolve; each connect attempt can cost fetch.timeout
+    import httpcore
+
+    attempts = []
+
+    class Backend(httpcore.NetworkBackend):
+        def connect_tcp(self, *args, **kwargs):
+            attempts.append(1)
+            raise httpcore.ConnectError("simulated")
+
+    def constituents(client):
+        client._transport._inner._pool._network_backend = Backend()
+        with pytest.raises(httpx.ConnectError):
+            client.get("https://careers.example.invalid/")
+        return []
+
+    monkeypatch.setattr(survey, "fetch_constituents", constituents)
+    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})
+    monkeypatch.setattr(survey, "fetch_title_sites", lambda client, titles: {})
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    assert survey.main([str(tmp_path / "out"), "--companies", str(known)]) == 0
+    assert len(attempts) == 1
+
+
+@respx.mock
+def test_a_malformed_redirect_is_an_error_not_a_crash():
+    # urljoin raises ValueError on a Location like http://[oops; that crashed the whole run
+    respx.get(ACME + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/careers").mock(
+        return_value=httpx.Response(302, headers={"Location": "http://[oops/careers"})
+    )
+    with _client() as client:
+        polite = survey._Polite(client, delay=0)
+        resp = polite.get(ACME + "/careers")
+    assert resp is not None and resp.status_code == 302
+    assert polite.errors == [f"{ACME}/careers: bad redirect"]

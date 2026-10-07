@@ -24,7 +24,8 @@ halves it, never below 1, at most once per ``COOLDOWN``, so a burst of 429s from
 were already in flight counts as one signal.
 
 The default inner transport also retries a failed connection once, at once (httpx's default
-client: never); the backoff above is for failures that outlast that, like a burst of DNS errors.
+client: never; ``connect_retries`` sets it); the backoff above is for failures that outlast that,
+like a burst of DNS errors.
 
 ``stop()`` (or ``close()``) ends the run: requests waiting for a slot, out a pause, or for the
 rate cap wake and raise ``Stopped``, and no new request is sent; one already sent finishes.
@@ -196,6 +197,7 @@ class ThrottledTransport(httpx.BaseTransport):
         cooldown: float | None = None,
         transient_retries: int | None = None,
         max_rate: dict[str, float] | None = None,
+        connect_retries: int = 1,
     ):
         if inner is None:
             proxies = urllib.request.getproxies()
@@ -203,7 +205,9 @@ class ThrottledTransport(httpx.BaseTransport):
             if proxy and "://" not in proxy:
                 proxy = f"http://{proxy}"  # as httpx does for a bare host:port
             # httpx.Client ignores its own limits when given a transport, so they go here
-            inner = httpx.HTTPTransport(retries=1, proxy=proxy, limits=limits or httpx.Limits())
+            inner = httpx.HTTPTransport(
+                retries=connect_retries, proxy=proxy, limits=limits or httpx.Limits()
+            )
         self._inner = inner
         self._start, self._ceiling = start, ceiling
         self._clock, self._sleep, self._jitter = clock, sleep, jitter
