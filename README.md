@@ -137,8 +137,9 @@ To make it yours, rewrite `profile.md` and the Kit in your own words, edit the f
 | `jobhunt letter` | Write letters for high scorers that don't have one | `--min-score N`, `--job KEY`, `--force` |
 | `jobhunt run` | `fetch`, then `score`, then `letter` | any of the above |
 
-- `--company NAME` fetches one board, matched by its `name` in `companies.yaml`. With
-  `--dry-run` it's a quick way to check a new slug.
+- `--company NAME` fetches every board whose `name` in `companies.yaml` matches, ignoring case.
+  Harvested Workday sites of one tenant share a name, so `--company adobe` fetches all of
+  Adobe's sites. With `--dry-run` it's a quick way to check a new slug.
 - `--dry-run` records nothing and removes no boards. In `run`, it applies to the fetch step only;
   scoring and letters still run for jobs recorded earlier.
 - `--workers` (default 32) caps requests in flight overall, and `--per-host` (default 6) caps

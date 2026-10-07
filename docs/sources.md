@@ -59,7 +59,7 @@ Each source sets a posting's `remote` field to yes, no, or unknown. Most platfor
 clearly for some postings, so many come out unknown. The location filter decides what to do with
 unknowns; see `unknown_remote_is_onsite` in the
 [preferences template](../config.example/preferences.yaml). A common fallback below is
-"remote if the location or title says *remote*, else unknown".
+"remote if the location says *remote*, else unknown"; some sources also check the title.
 
 ### Dead boards
 
@@ -84,8 +84,8 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
 | `bamboohr` | tenant | one request each | redirect to bamboohr.com, removed | `bamboohr` |
 | `amazon` | country code | in the results | empty results, warned | `amazon` |
-| `eightfold` | careers host (+ optional `location`) | one request each | 404, removed | the careers host |
-| `oracle` | `host/site` | one request each | 404, removed | the tenant host |
+| `eightfold` | careers host (+ optional `location`) | one request each | wrong domain: 404, removed; unknown `*.eightfold.ai` host: connection error, kept | the careers host |
+| `oracle` | `host/site` | one request each | unknown site: the host's postings; unknown host: connection error, kept | the tenant host |
 | `apple` | location filter | one page each | empty results, warned | `apple` (1 request/s) |
 
 The rate group is the queue a board's requests share; see [Politeness](#politeness).
@@ -120,7 +120,7 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
   ([docs](https://github.com/lever/postings-api)). One request, descriptions included. The body
   is the description, each list section, and the closing text.
 - **Remote:** from Lever's workplace type: remote is yes, on-site or hybrid is no. Without one,
-  the "remote" fallback applies.
+  yes if the location says "remote", else unknown.
 - **Unknown board:** 404, removed.
 
 ## Ashby
@@ -154,7 +154,7 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
   the one each account's careers page and embed widget call. One request, descriptions included.
 - **Location:** every location the posting lists.
 - **Remote:** yes if Workable's `telecommuting` flag is set. The flag is false for both on-site
-  and hybrid roles, so false means unknown, and the "remote" fallback applies.
+  and hybrid roles, so false means unknown, unless the location or title says "remote".
 - **Unknown board:** 404, removed.
 - **Rate cap:** 2 requests a second. Workable's Cloudflare front end bans an IP for a minute or so
   after a burst of about 50 requests in 10 seconds.
@@ -207,7 +207,8 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Descriptions:** one request each, only for postings whose title passes the filter. The body
   is the company description, job description, qualifications and additional information.
 - **Remote:** SmartRecruiters' remote flag means yes and its hybrid flag means no. Both default
-  to false, so on-site and unset look the same; the "remote" fallback covers the rest.
+  to false, so on-site and unset look the same; for the rest, yes if the location says "remote",
+  else unknown.
 - **Unknown board:** an unknown identifier returns 200 with no postings, the same as a company
   with no open roles. These boards are never removed; `fetch` warns about any SmartRecruiters
   board with no postings.
@@ -319,13 +320,16 @@ Oracle Fusion HCM's "Candidate Experience" careers sites. It is a
 - **Descriptions:** one request each, only for postings whose title passes the filter.
 - **Location:** the primary location plus any secondary ones.
 - **Remote:** from the workplace type code: remote is yes, on-site or hybrid is no. Most postings
-  leave it blank, which is unknown rather than on-site; the "remote" fallback applies.
+  leave it blank, which is unknown rather than on-site, unless the location or title says
+  "remote".
 - **Cap:** 1,000 postings per term by default. Keyword search matches descriptions too, so a
   broad term can return thousands.
 - **One board per host:** the site only shapes the job URLs. The search returns the host's
   postings whatever the site, even a made-up one. Two boards on one host would fetch, score and
   write up every posting twice, so `fetch` warns when it sees that. The harvester also keeps one
   site per host.
+- **Unknown board:** an unknown site on a real host returns that host's postings, as above. An
+  unknown host doesn't answer; that is a connection error, not a 404, so it is never removed.
 - **Rate group:** the tenant host, e.g. `eeho.fa.us2.oraclecloud.com`.
 
 ## Apple
