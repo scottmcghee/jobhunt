@@ -47,12 +47,11 @@ class SeenSet:
         self._seen: dict[str, str] = {}
         if path.exists():
             self._seen = json.loads(path.read_text() or "{}")
-        lines = jobs.read_text(encoding="utf-8").splitlines() if jobs and jobs.exists() else []
-        for line in filter(None, lines):
+        for record in read_jsonl(jobs) if jobs else []:
             try:
-                self.add(Job.model_validate(json.loads(line)).key)
-            except ValueError:  # half a line from a run killed mid-append
-                log.warning("%s: skipped a line that doesn't parse: %.60s", jobs, line)
+                self.add(Job.model_validate(record).key)
+            except ValueError:
+                log.warning("%s: skipped a record that isn't a job: %.60s", jobs, record)
 
     def __contains__(self, key: str) -> bool:
         return key in self._seen
@@ -136,7 +135,13 @@ def append_jsonl(path: Path, record: dict) -> None:
 def read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    records = []
+    for line in filter(None, path.read_bytes().splitlines()):
+        try:
+            records.append(json.loads(line))
+        except ValueError:  # half a line from a run killed mid-append, maybe mid-character
+            log.warning("%s: skipped a line that doesn't parse: %.60s", path, line)
+    return records
 
 
 def load_jobs(data_dir: Path) -> list[Job]:

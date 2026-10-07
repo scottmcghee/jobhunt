@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from jobhunt import storage
 from jobhunt.schema import Letter
 
@@ -141,6 +143,26 @@ def test_append_jsonl_after_a_truncated_line_starts_a_new_line(tmp_path, platfor
     storage.append_jsonl(jobs, platform_director_job.model_dump())
     seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
     assert platform_director_job.key in seen
+
+
+def test_a_line_torn_inside_a_multibyte_character_is_skipped(tmp_path, platform_director_job):
+    # Jobs are written with ensure_ascii=False, so a kill can cut a line mid-character.
+    jobs = tmp_path / "jobs.jsonl"
+    torn = json.dumps({"title": "Director – Platform"}, ensure_ascii=False).encode()
+    jobs.write_bytes(torn[: torn.index("–".encode()) + 1])
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
+    assert platform_director_job.key in seen
+    assert len(seen) == 1
+    assert storage.load_jobs(tmp_path) == [platform_director_job]
+
+
+def test_load_jobs_skips_a_truncated_line(tmp_path, platform_director_job, caplog):
+    jobs = tmp_path / "jobs.jsonl"
+    jobs.write_text('{"source": "greenhouse", "company_sl', encoding="utf-8")
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    assert storage.load_jobs(tmp_path) == [platform_director_job]
+    assert "jobs.jsonl" in caplog.text
 
 
 def test_seen_set_without_a_jobs_file(tmp_path):
