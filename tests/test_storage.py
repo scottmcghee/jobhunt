@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from jobhunt import storage
 from jobhunt.schema import Letter
 
@@ -111,3 +113,83 @@ def test_lettered_job_keys_finds_keys_with_spaces(tmp_path):
     letter = Letter(job_key="ashby:Some Co:3f2a", company="Some Co", title="VP Eng", modules_used=["m"], text="Hi", model="t")
     storage.write_letter(letter, tmp_path)
     assert storage.lettered_job_keys(tmp_path) == {"ashby:Some Co:3f2a"}
+
+
+def test_seen_set_counts_jobs_already_in_jobs_jsonl(tmp_path, platform_director_job):
+    # A run killed after appending a board's jobs but before saving seen.json must not
+    # record them again next time.
+    storage.append_jsonl(tmp_path / "jobs.jsonl", platform_director_job.model_dump())
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=tmp_path / "jobs.jsonl")
+    assert platform_director_job.key in seen
+    assert platform_director_job.key not in storage.SeenSet(tmp_path / "seen.json")
+
+
+def test_seen_set_skips_a_truncated_line_in_jobs_jsonl(tmp_path, platform_director_job, caplog):
+    # A hard kill mid-append can leave half a line; the next fetch must still start.
+    jobs = tmp_path / "jobs.jsonl"
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    with jobs.open("a", encoding="utf-8") as f:
+        f.write('{"source": "greenhouse", "company_sl')
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
+    assert platform_director_job.key in seen
+    assert len(seen) == 1
+    assert "jobs.jsonl" in caplog.text
+
+
+def test_append_jsonl_after_a_truncated_line_starts_a_new_line(tmp_path, platform_director_job):
+    # The next fetch's first job must not be glued onto half a line from a killed run.
+    jobs = tmp_path / "jobs.jsonl"
+    jobs.write_text('{"source": "greenhouse", "company_sl', encoding="utf-8")
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
+    assert platform_director_job.key in seen
+
+
+def test_a_line_torn_inside_a_multibyte_character_is_skipped(tmp_path, platform_director_job):
+    # Jobs are written with ensure_ascii=False, so a kill can cut a line mid-character.
+    jobs = tmp_path / "jobs.jsonl"
+    torn = json.dumps({"title": "Director – Platform"}, ensure_ascii=False).encode()
+    jobs.write_bytes(torn[: torn.index("–".encode()) + 1])
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
+    assert platform_director_job.key in seen
+    assert len(seen) == 1
+    assert storage.load_jobs(tmp_path) == [platform_director_job]
+
+
+def test_load_jobs_skips_a_truncated_line(tmp_path, platform_director_job, caplog):
+    jobs = tmp_path / "jobs.jsonl"
+    jobs.write_text('{"source": "greenhouse", "company_sl', encoding="utf-8")
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    assert storage.load_jobs(tmp_path) == [platform_director_job]
+    assert "jobs.jsonl" in caplog.text
+
+
+def test_seen_set_without_a_jobs_file(tmp_path):
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=tmp_path / "jobs.jsonl")
+    assert len(seen) == 0
+
+
+def test_fetch_progress_lifecycle(tmp_path):
+    path = tmp_path / "fetch_progress.txt"
+    progress = storage.FetchProgress(path)
+    assert progress.done == set() and not progress.exists()
+
+    progress.start()
+    progress.mark("greenhouse:a")
+    progress.mark("lever:b")
+    assert storage.FetchProgress(path).done == {"greenhouse:a", "lever:b"}  # on disk at once
+
+    progress.start()  # a fresh run forgets the last one
+    assert storage.FetchProgress(path).done == set() and path.exists()
+
+    progress.finish()
+    assert not path.exists()
+    progress.finish()  # already gone is fine
+
+
+def test_fetch_progress_keeps_keys_with_spaces(tmp_path):
+    progress = storage.FetchProgress(tmp_path / "fetch_progress.txt")
+    progress.start()
+    progress.mark("ashby:Acme Labs")  # Ashby slugs keep spaces
+    assert storage.FetchProgress(progress.path).done == {"ashby:Acme Labs"}

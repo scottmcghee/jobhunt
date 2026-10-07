@@ -1,6 +1,7 @@
 """Runtime state on disk. Deliberately boring: JSON and JSONL files under data/.
 
 - seen.json    : {job_key: first_seen_iso}. The idempotency ledger.
+- fetch_progress.txt : board keys an interrupted `fetch` finished, one a line, for `--resume`.
 - misses.json  : {board_key: fetches in a row that found the board gone (see cli._board_gone)}.
                  Boards that answered fine are absent.
 - jobs.jsonl   : every Job that passed the filter, appended once.
@@ -12,12 +13,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from jobhunt.schema import Job, Letter, ScoredJob
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
@@ -32,13 +36,22 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 class SeenSet:
-    """Persistent set of job keys we've already processed."""
+    """Persistent set of job keys we've already processed.
 
-    def __init__(self, path: Path):
+    With ``jobs`` (jobs.jsonl), every job recorded there counts as seen too, so a run killed
+    after appending a board's jobs but before saving this set doesn't record them again.
+    """
+
+    def __init__(self, path: Path, jobs: Path | None = None):
         self.path = path
         self._seen: dict[str, str] = {}
         if path.exists():
             self._seen = json.loads(path.read_text() or "{}")
+        for record in read_jsonl(jobs) if jobs else []:
+            try:
+                self.add(Job.model_validate(record).key)
+            except ValueError:
+                log.warning("%s: skipped a record that isn't a job: %.60s", jobs, record)
 
     def __contains__(self, key: str) -> bool:
         return key in self._seen
@@ -74,16 +87,61 @@ class MissLedger:
         _write_atomic(self.path, json.dumps(self.counts, indent=2, sort_keys=True))
 
 
+class FetchProgress:
+    """Board keys the current full fetch has finished, so an interrupted one can be resumed.
+
+    Each key is appended as its board is recorded, so the file is current even after a kill.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.done: set[str] = set()
+        if path.exists():
+            self.done = set(path.read_text(encoding="utf-8").splitlines()) - {""}
+
+    def exists(self) -> bool:
+        return self.path.exists()
+
+    def start(self) -> None:
+        """Begin a fresh run: forget any earlier one."""
+        _write_atomic(self.path, "")
+        self.done = set()
+
+    def mark(self, key: str) -> None:
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(key + "\n")
+        self.done.add(key)
+
+    def finish(self) -> None:
+        """The run completed: nothing is left to resume."""
+        self.path.unlink(missing_ok=True)
+
+
+def _ends_mid_line(path: Path) -> bool:
+    if not path.exists() or not path.stat().st_size:
+        return False
+    with path.open("rb") as f:
+        f.seek(-1, os.SEEK_END)
+        return f.read(1) != b"\n"
+
+
 def append_jsonl(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    torn = _ends_mid_line(path)  # half a line from a run killed mid-append: start a new one
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(("\n" if torn else "") + json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    records = []
+    for line in filter(None, path.read_bytes().splitlines()):
+        try:
+            records.append(json.loads(line))
+        except ValueError:  # half a line from a run killed mid-append, maybe mid-character
+            log.warning("%s: skipped a line that doesn't parse: %.60s", path, line)
+    return records
 
 
 def load_jobs(data_dir: Path) -> list[Job]:
