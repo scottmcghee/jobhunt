@@ -11,7 +11,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - Listing sources with descriptions on demand: [Workday](#workday),
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr)
 - Search sources: [Amazon](#amazon), [Eightfold](#eightfold), [Oracle Recruiting Cloud](#oracle-recruiting-cloud),
-  [Apple](#apple)
+  [Apple](#apple), [Phenom](#phenom)
 - [Politeness](#politeness)
 
 ## How sources work
@@ -46,11 +46,11 @@ descriptions, so each description costs one more request: Workday, SmartRecruite
 
 **Search sources** are sites too big to list in full. Instead, `fetch` runs one search per
 target title word (`title.must_include_any` in `preferences.yaml`, plus any `include_for_tags`
-words for the board's tags) and merges the results: Amazon, Eightfold, Oracle and Apple. If you
-list no target words, it runs one unfiltered search. These searches match whole words only, so a
-filter wildcard like `recruit*` is searched as just `recruit`, and `fetch` warns about it. Each
-term brings in at most `fetch.max_per_term` postings for that source (set in `settings.yaml`); a
-term that hits the cap is logged. Except for Amazon, a description is fetched only for postings
+words for the board's tags) and merges the results: Amazon, Eightfold, Oracle, Apple and Phenom.
+If you list no target words, it runs one unfiltered search. These searches match whole words
+only, so a filter wildcard like `recruit*` is searched as just `recruit`, and `fetch` warns about
+it. Each term brings in at most `fetch.max_per_term` postings for that source (set in
+`settings.yaml`); a term that hits the cap is logged. Except for Amazon, a description is fetched only for postings
 whose title passes the filter.
 
 ### Remote or not
@@ -87,6 +87,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `eightfold` | careers host (+ optional `location`) | one request each | wrong domain: 404, removed; unknown `*.eightfold.ai` host: connection error, kept | the careers host |
 | `oracle` | `host/site` | one request each | unknown site: the host's postings; unknown host: connection error, kept | the tenant host |
 | `apple` | location filter | one page each | empty results, warned | `apple` (1 request/s) |
+| `phenom` | `host/country/language`, or `host` | one request each | wrong locale: empty results, warned | the site's host |
 
 The rate group is the queue a board's requests share; see [Politeness](#politeness).
 
@@ -361,6 +362,39 @@ rendered on the server and embeds its data as JSON, which `jobhunt` reads. It is
   removed; `fetch` warns that it found nothing.
 - **Rate cap:** one page a second, since each page is about 300 KB.
 
+## Phenom
+
+```yaml
+  - name: Example Corp
+    ats: phenom
+    slug: careers.example.com/us/en
+```
+
+Phenom is a careers-site platform, not an ATS: a company's Phenom site (often
+`careers.<company>.com`) sits in front of its ATS, which is often Workday. Every Phenom site
+answers the same public JSON endpoint on its own host, the one its search page calls. It is a
+[search source](#how-sources-work).
+
+- **Slug:** the site's host plus the country and language at the start of its URLs, e.g.
+  `careers.adobe.com/us/en` or `careers.cisco.com/global/en`. A site whose URLs have no country
+  and language, like `careers.davita.com`, is just its host; its API then takes `us/en`.
+- **Endpoint**, on the site's host (robots.txt allows it):
+  - `POST /widgets` with `{"ddoKey": "refineSearch", "keywords": "<term>", "from": N, ...}`
+    searches, 100 results a page.
+  - `POST /widgets` with `{"ddoKey": "jobDetail", "jobId": "<id>"}` returns one posting.
+- **Descriptions:** one request each, only for postings whose title passes the filter.
+- **Remote:** sites name the field differently (`RemoteType` in the search results, `remote` in a
+  posting). Remote or yes is yes; on-site, hybrid or no is no; anything else is unknown, unless
+  the location says "remote".
+- **Cap:** 500 postings per term by default.
+- **Same jobs twice:** a Phenom site and the ATS behind it list the same postings, under different
+  keys, so a company with both boards gets every job fetched, scored and written up twice. Add
+  only one. A posting's apply link shows which ATS is behind the site; the survey (below) uses it
+  to give the ATS board instead when `jobhunt` supports that ATS.
+- **Unknown board:** a wrong country or language finds nothing rather than a 404, so the board is
+  never removed; `fetch` warns that it found nothing. An unknown host is a connection error.
+- **Rate group:** the site's host.
+
 ## Politeness
 
 Every request from `jobhunt fetch`, and from `python -m jobhunt.slugs --check`, goes through
@@ -370,7 +404,8 @@ one throttled HTTP transport. It identifies itself with the User-Agent
 ### Rate groups and per-host limits
 
 Requests are grouped by the server that answers them: one group per Workday datacenter, per
-Eightfold careers host and per Oracle tenant host, and one per API host for every other source.
+Eightfold careers host, per Oracle tenant host and per Phenom site, and one per API host for
+every other source.
 The table [above](#at-a-glance) lists each group. `jobhunt -v fetch` prints per-group stats at
 the end of a run: requests, throttles, peak concurrency and the current limit.
 
@@ -441,3 +476,7 @@ host's robots.txt and checks every URL against it, including each redirect hop. 
 be fetched or answers 5xx disallows the whole host. A few companies get no requests at all:
 Meta, whose terms forbid automated collection, and Alphabet, whose robots.txt disallows its job
 pages.
+
+On a Phenom site it sends one search request (within robots.txt, like everything else) to read
+where the postings apply. If they apply on a board `jobhunt` supports, such as Workday, it gives
+that board; otherwise it gives the Phenom board.

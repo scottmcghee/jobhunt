@@ -14,11 +14,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 ATSName = Literal[
     "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable", "bamboohr",
-    "amazon", "eightfold", "oracle", "apple",
+    "amazon", "eightfold", "oracle", "apple", "phenom",
 ]
 
 _WORKDAY_DATACENTER = re.compile(r"wd\d+")
 _SITE = re.compile(r"[A-Za-z0-9_-]+")
+_LOCALE_PART = re.compile(r"[A-Za-z]{2,10}")
 _HOST = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", re.I)
 
 
@@ -46,6 +47,14 @@ class Company(BaseModel):
             host, _, site = self.slug.partition("/")
             if not _HOST.fullmatch(host) or not _SITE.fullmatch(site):
                 raise ValueError("an oracle slug is host/site, e.g. eabc.fa.us2.oraclecloud.com/CX")
+        if self.ats == "phenom":
+            host, *locale = self.slug.split("/")
+            if not _HOST.fullmatch(host) or len(locale) not in (0, 2) or not all(
+                _LOCALE_PART.fullmatch(part) for part in locale
+            ):
+                raise ValueError(
+                    "a phenom slug is host/country/language (careers.adobe.com/us/en) or host"
+                )
         if self.location is not None and self.ats != "eightfold":
             raise ValueError("location: is only for eightfold boards")
         return self

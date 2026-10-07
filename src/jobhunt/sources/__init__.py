@@ -18,6 +18,7 @@ from jobhunt.sources import (
     greenhouse,
     lever,
     oracle,
+    phenom,
     smartrecruiters,
     workable,
     workday,
@@ -52,6 +53,7 @@ SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "eightfold": eightfold.fetch,
     "oracle": oracle.fetch,
     "apple": apple.fetch,
+    "phenom": phenom.fetch,
 }
 
 
@@ -67,19 +69,20 @@ def fetch_company(
     """Dispatch to the right ATS adapter for this company.
 
     ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters,
-    BambooHR, Eightfold, Oracle, Apple):
+    BambooHR, Eightfold, Oracle, Apple, Phenom):
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
     source) early; the others are one request.
 
-    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple): they
-    search per term instead (``fetch`` passes the title filter's target-level words). Others
+    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom):
+    they search per term instead (``fetch`` passes the title filter's target-level words). Others
     ignore it. ``max_per_term`` caps how many postings one term may bring in (None: the source's
     own default; fetch passes fetch.max_per_term).
-    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle and Apple fetch later pages
-    and descriptions concurrently on it (BambooHR, Oracle and Apple only descriptions).
+    With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple and Phenom fetch
+    later pages and descriptions concurrently on it (BambooHR, Oracle, Apple and Phenom only
+    descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
         fetcher = SEARCH_FETCHERS[company.ats]
@@ -111,7 +114,7 @@ def rate_group(company: Company) -> str:
         return f"workday:{company.datacenter}"
     if company.ats == "eightfold":  # a careers site's own host; limits seen so far are per host
         return company.slug.lower()
-    if company.ats == "oracle":  # each tenant has its own host, which may serve several sites
+    if company.ats in ("oracle", "phenom"):  # each tenant has its own host (and maybe sites)
         return company.slug.partition("/")[0].lower()
     return company.ats
 

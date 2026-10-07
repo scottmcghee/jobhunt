@@ -781,3 +781,78 @@ def test_a_malformed_redirect_is_an_error_not_a_crash():
         resp = polite.get(ACME + "/careers")
     assert resp is not None and resp.status_code == 302
     assert polite.errors == [f"{ACME}/careers: bad redirect"]
+
+
+# ------------------------------------------------------------------ Phenom sites
+
+PHENOM_PAGE = '<html><script src="https://cdn.phenompeople.com/CareerConnectResources/x.js"></script></html>'
+
+
+def _phenom_site(apply_urls, widgets=None, robots="User-agent: *\nDisallow: */jobcart\n"):
+    """careers.acme.com: a Phenom site at /us/en; the www and bare-host guesses find nothing."""
+    for host in (ACME, "https://acme.com"):
+        respx.get(host + "/robots.txt").mock(return_value=httpx.Response(404))
+        respx.get(host + "/careers").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/").mock(return_value=httpx.Response(404))
+    site = "https://careers.acme.com"
+    respx.get(site + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    respx.get(site + "/").mock(return_value=httpx.Response(302, headers={"location": "/us/en"}))
+    respx.get(site + "/us/en").mock(return_value=httpx.Response(200, text=PHENOM_PAGE))
+    jobs = [{"jobId": f"R{i}", "title": "Director", "applyUrl": u} for i, u in enumerate(apply_urls)]
+    answer = widgets or httpx.Response(200, json={"refineSearch": {"totalHits": 40, "data": {"jobs": jobs}}})
+    return respx.post(site + "/widgets").mock(return_value=answer)
+
+
+def _survey_acme():
+    with _client() as client:
+        return survey.survey_company(survey.Constituent("ACM", "Acme Corp", "Industrials"), ACME + "/", client, delay=0)
+
+
+@respx.mock
+def test_a_phenom_site_in_front_of_workday_gives_the_workday_board():
+    widgets = _phenom_site(["https://acme.wd5.myworkdayjobs.com/External/job/Seattle/Director_R1/apply",
+                            "https://acme.wd5.myworkdayjobs.com/External/job/Austin/Director_R2/apply"])
+    result = _survey_acme()
+    assert result.platforms == ["phenom"]
+    assert [(b.ats, b.slug, b.datacenter, b.name) for b in result.boards] == [("workday", "acme/External", "wd5", "Acme Corp")]
+    sent = json.loads(widgets.calls.last.request.content)
+    assert (sent["ddoKey"], sent["lang"], sent["country"]) == ("refineSearch", "en_us", "us")
+
+
+@respx.mock
+def test_a_phenom_site_in_front_of_an_unsupported_ats_is_a_phenom_board():
+    _phenom_site(["https://acme.taleo.net/careersection/apply?job=1"])
+    result = _survey_acme()
+    assert [(b.ats, b.slug, b.name) for b in result.boards] == [("phenom", "careers.acme.com/us/en", "Acme Corp")]
+
+
+@pytest.mark.parametrize("answer", [httpx.Response(400), httpx.Response(200, json={"status": "error"}),
+                                    httpx.Response(200, json={"refineSearch": {"totalHits": 0, "data": {"jobs": []}}})])
+@respx.mock
+def test_a_phenom_site_whose_search_finds_nothing_gives_no_board(answer):
+    _phenom_site([], widgets=answer)
+    result = _survey_acme()
+    assert result.platforms == ["phenom"] and result.boards == []
+
+
+@respx.mock
+def test_a_phenom_search_robots_txt_disallows_is_not_sent():
+    widgets = _phenom_site(["https://acme.wd5.myworkdayjobs.com/External/job/1"], robots="User-agent: *\nDisallow: /widgets\n")
+    result = _survey_acme()
+    assert widgets.call_count == 0
+    assert "https://careers.acme.com/widgets" in result.skipped_by_robots
+    assert result.platforms == ["phenom"] and result.boards == []
+
+
+@pytest.mark.parametrize(
+    ("url", "slug"),
+    [
+        ("https://careers.adobe.com/us/en", "careers.adobe.com/us/en"),
+        ("https://careers.cisco.com/global/en/home", "careers.cisco.com/global/en"),
+        ("https://jobs.cvshealth.com/us/en/home", "jobs.cvshealth.com/us/en"),
+        ("https://careers.davita.com/", "careers.davita.com"),
+        ("https://Careers.Example.com/search-results", "careers.example.com"),
+    ],
+)
+def test_a_phenom_board_from_a_page_url(url, slug):
+    assert survey.phenom_board(url, "Acme").slug == slug

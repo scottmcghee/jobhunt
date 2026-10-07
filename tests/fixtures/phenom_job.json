@@ -1,0 +1,57 @@
+{
+ "jobDetail": {
+  "status": 200,
+  "hits": 1,
+  "totalHits": 1,
+  "data": {
+   "job": {
+    "RemoteType": "Hybrid",
+    "applyUrl": "https://example.wd1.myworkdayjobs.com/External/job/R1001/apply",
+    "badge": "",
+    "category": "Engineering",
+    "city": "Seattle",
+    "cityStateCountry": "Seattle, Washington, United States of America",
+    "country": "United States of America",
+    "dateCreated": "2026-03-19T20:30:29.934+0000",
+    "descriptionTeaser": "Lead the platform engineering group.",
+    "externalApply": false,
+    "isMultiCategory": false,
+    "isMultiLocation": true,
+    "jobId": "R1001",
+    "jobSeqNo": "EXCOUSR1001EXTERNALENUS",
+    "jobVisibility": [
+     "external"
+    ],
+    "locale": "en_US",
+    "location": "Seattle, Washington, United States of America",
+    "multi_category": [
+     "Engineering"
+    ],
+    "multi_location": [
+     "Seattle, Washington, United States of America",
+     "Austin, Texas, United States of America"
+    ],
+    "multi_location_array": [
+     {
+      "location": "Seattle, Washington, United States of America"
+     },
+     {
+      "location": "Austin, Texas, United States of America"
+     }
+    ],
+    "postedDate": "2026-09-18T00:00:00.000+0000",
+    "reqId": "R1001",
+    "siteType": "external",
+    "title": "Director, Platform Engineering",
+    "type": "Full time",
+    "visibilityType": "External",
+    "description": "<p><b>The Opportunity</b></p><p>Lead the platform engineering group at Example Co.</p><ul><li>Own reliability</li><li>Grow the team</li></ul>",
+    "remote": "No",
+    "ats": "workday",
+    "companyName": "Example Co"
+   },
+   "isMultiLocationEnabled": true
+  },
+  "eid": "x"
+ }
+}

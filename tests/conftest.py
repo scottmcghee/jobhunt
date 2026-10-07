@@ -96,6 +96,11 @@ def apple_company() -> Company:
 
 
 @pytest.fixture
+def phenom_company() -> Company:
+    return Company(name="Example Co", ats="phenom", slug="careers.example.com/us/en")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 
