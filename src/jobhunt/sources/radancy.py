@@ -40,7 +40,7 @@ def job_url(url: str) -> tuple[str, str, int] | None:
     if not m:
         return None
     words = " ".join(unquote(m.group(g)).replace("-", " ") for g in ("city", "title"))
-    rank = 0 if (m.group("lang") or "en").lower() in ("en", "en-us") else 1
+    rank = 0 if (m.group("lang") or "en").split("-")[0].lower() == "en" else 1
     return " ".join(words.split()), m.group("id"), rank
 
 

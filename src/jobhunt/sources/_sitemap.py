@@ -84,20 +84,25 @@ def parse_xml(content: bytes, what: str) -> ElementTree.Element:
         raise ValueError(f"{what} isn't XML ({e})") from None
 
 
-def _get_sitemap(
+def on_host(url: str, host: str) -> bool:
+    return (urlsplit(url).hostname or "").lower() == host
+
+
+def get_on_host(
     client: httpx.Client, url: str, host: str, rules: RobotFileParser
 ) -> httpx.Response:
-    """GET a sitemap within robots.txt, following redirects on the site's own host only
-    (careers.l3harris.com/sitemap.xml redirects to /en/sitemap.xml)."""
+    """GET a URL on the site's host within robots.txt, following redirects on that host only
+    (careers.l3harris.com/sitemap.xml redirects to /en/sitemap.xml), each hop checked against
+    robots.txt. The client's own redirect following is turned off for it."""
     for _ in range(MAX_REDIRECTS + 1):
         if not rules.can_fetch(agent(client), url):
             raise ValueError("robots.txt disallows it")
-        resp = client.get(url)
+        resp = client.get(url, follow_redirects=False)
         if not (resp.is_redirect and "location" in resp.headers):
             resp.raise_for_status()
             return resp
         url = urljoin(url, resp.headers["location"])
-        if (urlsplit(url).hostname or "").lower() != host:
+        if not on_host(url, host):
             raise ValueError(f"it redirects to another host ({url})")
     raise ValueError("too many redirects")
 
@@ -106,34 +111,42 @@ def sitemap_urls(company: Company, client: httpx.Client, rules: RobotFileParser)
     """Every page URL in a site's sitemaps: the ones robots.txt names on the site's host, else
     /sitemap.xml, following sitemap index files (at most ``MAX_SITEMAPS`` files in all).
 
-    The first sitemap must answer: its 404 means the board is gone (an HTTPStatusError), and an
-    answer that isn't a sitemap is a ValueError. A later one that fails is skipped with a warning.
+    A sitemap that fails is skipped with a warning, unless no starting one (each robots.txt
+    names, or /sitemap.xml) answers: then the first one's error is raised, so a 404 means the
+    board is gone (an HTTPStatusError), and an answer that isn't a sitemap is a ValueError.
     """
     host = company.slug.lower()
-    named = [u for u in rules.site_maps() or [] if (urlsplit(u).hostname or "").lower() == host]
-    queue, seen, urls = named or [f"https://{host}/sitemap.xml"], set(), []
+    named = [u for u in rules.site_maps() or [] if on_host(u, host)]
+    starts = list(dict.fromkeys(named)) or [f"https://{host}/sitemap.xml"]
+    queue, seen, urls = list(starts), set(), []
+    failed: list[Exception] = []
+    answered = False
     while queue and len(seen) < MAX_SITEMAPS:
         url = queue.pop(0)
         if url in seen:
             continue
-        first = not seen
         seen.add(url)
         try:
-            resp = _get_sitemap(client, url, host, rules)
+            resp = get_on_host(client, url, host, rules)
             root = parse_xml(resp.content, "the sitemap")
             ns = next((n for n in SITEMAP_NS if root.tag.startswith(n)), None)
             if ns is None:
                 raise ValueError(f"the sitemap is neither a urlset nor an index ({root.tag})")
         except (httpx.HTTPError, ValueError) as e:
-            if first:
-                raise
+            if url in starts:
+                if len(starts) == 1:
+                    raise
+                failed.append(e)
             log.warning("%s %s: skipped sitemap %s (%s)", company.ats, company.slug, url, e)
             continue
+        answered = answered or url in starts
         locs = [(loc.text or "").strip() for loc in root.iter(f"{ns}loc")]
         if root.tag == f"{ns}sitemapindex":
-            queue += [u for u in locs if (urlsplit(u).hostname or "").lower() == host]
+            queue += [u for u in locs if on_host(u, host)]
         else:
             urls += locs
+    if failed and not answered:
+        raise failed[0]
     if queue:
         log.warning(
             "%s %s: read %d sitemaps; skipped %d more", company.ats, company.slug, len(seen),
@@ -214,8 +227,13 @@ def fetch_pages(
     parse: Callable[[Job, str], Job],
     pool: Executor | None,
 ) -> list[Job]:
-    """``found`` (postings known by URL) with the pages ``wanted`` asks for fetched and parsed."""
+    """``found`` (postings known by URL) with the pages ``wanted`` asks for fetched and parsed.
+
+    A page that redirects off the site's host, or to a path robots.txt disallows, is not
+    followed: that posting is kept without a description.
+    """
     found = dict(found)
+    host = company.slug.lower()
     want = {
         job.external_id: reading
         for job in found.values()
@@ -230,8 +248,7 @@ def fetch_pages(
 
     def page(job: Job) -> Job | None:
         try:
-            resp = client.get(job.url, follow_redirects=True)  # some redirect to an internal id
-            resp.raise_for_status()
+            resp = get_on_host(client, job.url, host, rules)  # some redirect to an internal id
             return parse(job, resp.text)
         except (httpx.HTTPError, ValueError) as e:
             error = " ".join(str(e).split())  # httpx's messages can span lines
@@ -351,7 +368,7 @@ def fetch_job_pages(
     rules = robots(client, company.slug.lower())
     best: dict[str, tuple[int, Job]] = {}
     for url in sitemap_urls(company, client, rules):
-        if (found := job_url(url)) is None:
+        if not on_host(url, company.slug.lower()) or (found := job_url(url)) is None:
             continue
         words, job_id, rank = found
         if job_id not in best or rank < best[job_id][0]:  # the same posting in another language

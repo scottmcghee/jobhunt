@@ -263,7 +263,9 @@ what the sites allow: the sitemap, and job pages.
     description (25 to 30 MB for the biggest), so the whole board is one request. Most serve a
     plain sitemap of job page URLs.
   - `GET /job/<title-and-place>/<id>/` (some sites put a brand first: `/<brand>/job/...`) is one
-    posting's page.
+    posting's page. Job URLs on another host are ignored. Redirects (of the sitemap or a page)
+    are followed on the site's host only, each hop checked against robots.txt; a page that
+    redirects elsewhere is kept without a description.
 - **Descriptions:** in the feed, or one page each for postings that pass the title filter. A job
   URL's words (`Richmond Senior Manager VA 23230`) stand in for the title in that check. The title
   is one run of those words, so a page is fetched if any run passes, with `_` read as `.` (the
@@ -310,11 +312,14 @@ only in their job URLs.
     sitemap is an error. Following RFC 9309, a robots.txt that answers 5xx disallows everything.
   - The sitemaps robots.txt names on the site's host, else `/sitemap.xml`. Sitemap index files
     are followed (FedEx splits its jobs into 31 files), up to 50 files a board, and so are
-    redirects on the same host (L3Harris's `/sitemap.xml` moved to `/en/sitemap.xml`).
+    redirects on the same host (L3Harris's `/sitemap.xml` moved to `/en/sitemap.xml`), each hop
+    checked against robots.txt; job pages' redirects too. A sitemap or page that redirects off
+    the host isn't followed, and job URLs on another host are ignored. A sitemap that fails is
+    skipped with a warning, unless none of the starting ones answers.
   - Radancy job URLs: `/[<lang>/]job/<city>/<title>/<org>/<id>`. Paradox job URLs:
     `/[<lang>/]jobs/<id>/<title>/` (ADP, GM, Verizon; other languages' words for "jobs" too) or
     `/<title>/job/<id>` (FedEx). A posting listed once per language is kept once, under its
-    English URL.
+    English URL (`en`, `en-ca`, `en-gb`, ...).
 - **Descriptions:** one page each, for postings that pass the title filter by the same URL-word
   rules as [SuccessFactors](#successfactors-career-site-builder) (Radancy's URL words are the city
   and the title). The page's JSON-LD gives the title, description, location and date posted.

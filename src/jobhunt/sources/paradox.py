@@ -49,7 +49,7 @@ def job_url(url: str) -> tuple[str, str, int] | None:
     for pattern in _JOB_PATHS:
         if m := pattern.fullmatch(path):
             words = " ".join(unquote(m.group("title")).replace("-", " ").split())
-            rank = 0 if (m.group("lang") or "en").lower() in ("en", "en-us") else 1
+            rank = 0 if (m.group("lang") or "en").split("-")[0].lower() == "en" else 1
             return words, m.group("id"), rank
     return None
 

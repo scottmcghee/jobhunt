@@ -145,8 +145,7 @@ def fetch(
     if not rules.can_fetch(_sitemap.agent(client), _url(company, "/sitemap.xml")):
         log.warning("successfactors %s: robots.txt disallows /sitemap.xml", company.slug)
         return []
-    resp = client.get(_url(company, "/sitemap.xml"))
-    resp.raise_for_status()
+    resp = _sitemap.get_on_host(client, _url(company, "/sitemap.xml"), company.slug.lower(), rules)
     root = _sitemap.parse_xml(resp.content, "the sitemap")
     if root.tag == "rss":
         jobs = _from_feed(company, root)
@@ -154,7 +153,7 @@ def fetch(
         found: dict[str, Job] = {}
         for loc in root.iter(f"{ns}loc"):
             url = (loc.text or "").strip()
-            if (words_id := _job_id(url)) is not None:
+            if _sitemap.on_host(url, company.slug.lower()) and (words_id := _job_id(url)):
                 found.setdefault(words_id[1], _sitemap.listed(company, url, *words_id))
         jobs = _sitemap.fetch_pages(company, client, found, wants_body, rules, _from_page, pool)
     else:
