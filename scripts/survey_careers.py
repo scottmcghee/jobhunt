@@ -41,7 +41,7 @@ import httpx
 
 from jobhunt import config, settings, slugs, throttle
 from jobhunt.schema import Company
-from jobhunt.sources import phenom
+from jobhunt.sources import _sitemap, paradox, phenom, radancy
 
 DEFAULT_OUT = Path("data/sp500")
 WIKI_URL = "https://en.wikipedia.org/w/index.php"
@@ -96,6 +96,8 @@ _COUNTRY = re.compile(r"[a-z]{2,10}")  # a Phenom site's /us/en/ or /global/en/
 _LANGUAGE = re.compile(r"[a-z]{2}")
 # Career Site Builder's own scripts and styles: the page is on a SuccessFactors careers site, not
 # just linking to one (careers.netapp.com mentions SuccessFactors but runs another platform)
+SITEMAP_SOURCES = {"radancy": radancy.job_url, "paradox": paradox.job_url}
+MAX_SURVEY_SITEMAPS = 3  # sitemaps read looking for one job URL (an index counts)
 _CAREER_SITE_BUILDER = re.compile(r"/platform/(?:js/j2w|csb)\b")
 
 
@@ -394,6 +396,53 @@ def phenom_boards(polite: _Polite, url: str, name: str) -> list[Company]:
     return list(fronted.values()) or ([board] if rows else [])
 
 
+def _first_job_url(polite: _Polite, host: str, job_url: _sitemap.JobUrl) -> str | None:
+    """The first job URL in a site's sitemaps (robots.txt's Sitemap: lines, else /sitemap.xml)."""
+    origin = f"https://{host}"
+    polite.allowed(origin + "/")  # reads robots.txt
+    named = polite.robots[origin].site_maps() or []
+    queue = [u for u in named if (urlsplit(u).hostname or "").lower() == host]
+    queue = queue or [origin + "/sitemap.xml"]
+    for _ in range(MAX_SURVEY_SITEMAPS):
+        if not queue:
+            break
+        resp = polite.get(queue.pop(0))
+        if resp is None or resp.status_code >= 400:
+            continue
+        try:
+            root = _sitemap.parse_xml(resp.content, "the sitemap")
+        except ValueError:
+            continue
+        locs = [(e.text or "").strip() for e in root.iter() if e.tag.endswith("}loc")]
+        if root.tag.endswith("}sitemapindex"):
+            queue += [u for u in locs if (urlsplit(u).hostname or "").lower() == host]
+        elif found := next((u for u in locs if job_url(u)), None):
+            return found
+    return None
+
+
+def sitemap_boards(polite: _Polite, url: str, name: str, ats: str) -> list[Company]:
+    """A Radancy or Paradox site's board, or the boards its postings apply on if jobhunt reads
+    those (often Workday): one posting's page (the first in the sitemap) shows where. A site
+    whose sitemaps list no job URLs (Paradox's chat widget on another platform's site) gives
+    none."""
+    host = (urlsplit(url).hostname or "").lower()
+    try:
+        board = Company(name=name, ats=ats, slug=host)
+    except ValueError:
+        return []
+    job = _first_job_url(polite, host, SITEMAP_SOURCES[ats])
+    if job is None:
+        return []
+    page = polite.get(job)
+    fronted: dict[str, Company] = {}
+    if page is not None and page.status_code < 400:
+        for link in map(slugs._trim, _URL.findall(page.text[:MAX_PAGE])):
+            if "apply" in link.lower() and (found := slugs.board_from_url(link)):
+                fronted.setdefault(found.key.lower(), found.model_copy(update={"name": name}))
+    return list(fronted.values()) or [board]
+
+
 def survey_company(
     company: Constituent, site: str | None, client: httpx.Client, delay: float = 1.0
 ) -> Result:
@@ -415,6 +464,9 @@ def survey_company(
             return False
         if "phenom" in found and not boards:
             boards = phenom_boards(polite, str(page.url), company.name)
+        for ats in SITEMAP_SOURCES:
+            if ats in found and not boards:
+                boards = sitemap_boards(polite, str(page.url), company.name, ats)
         result.pages.append(str(page.url))
         result.platforms = sorted(found)
         seen: set[str] = set()

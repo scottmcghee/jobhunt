@@ -897,3 +897,69 @@ def test_a_page_that_only_mentions_successfactors_gives_no_board():
     _csb_site('<html><a href="https://career4.successfactors.com/career?company=acme">Jobs</a></html>')
     result = _survey_acme()
     assert result.platforms == ["successfactors"] and result.boards == []
+
+
+# ------------------------------------------------------------------ Radancy and Paradox sites
+
+RADANCY_PAGE = '<html><script src="https://tbcdn.talentbrew.com/company/45831/js/x.js"></script></html>'
+JOBS_SITE = "https://careers.acme.com"
+
+
+def _sitemap_site(page_text, sitemap, job_page=None, robots="User-agent: *\nDisallow: /search-jobs/\n"):
+    _csb_site(page_text)  # careers.acme.com/ serves page_text; the other guesses find nothing
+    respx.get(JOBS_SITE + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    respx.get(JOBS_SITE + "/sitemap.xml").mock(return_value=httpx.Response(200, text=sitemap))
+    return respx.get(url__startswith=JOBS_SITE + "/job/").mock(
+        return_value=httpx.Response(200, text=job_page or "<html>no apply link</html>")
+    )
+
+
+def _urlset(*paths):
+    locs = "".join(f"<url><loc>{JOBS_SITE}{p}</loc></url>" for p in paths)
+    return f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>'
+
+
+@respx.mock
+def test_a_radancy_site_in_front_of_workday_gives_the_workday_board():
+    page = '<a href="https://acme.wd1.myworkdayjobs.com/External/job/Seattle/Director_R1/apply">Apply</a><a href="https://boards.greenhouse.io/other">x</a>'
+    job = _sitemap_site(RADANCY_PAGE, _urlset("/", "/job/seattle/director/45831/1001", "/job/austin/manager/45831/1002"), page)
+    result = _survey_acme()
+    assert result.platforms == ["radancy"]
+    assert [(b.ats, b.slug, b.name) for b in result.boards] == [("workday", "acme/External", "Acme Corp")]  # apply links only
+    assert job.call_count == 1  # one posting's page is enough
+
+
+@respx.mock
+def test_a_radancy_site_in_front_of_an_unsupported_ats_is_a_radancy_board():
+    page = '<a href="https://acme.avature.net/careers/JobApplication?id=1">Apply</a>'
+    _sitemap_site(RADANCY_PAGE, _urlset("/job/seattle/director/45831/1001"), page)
+    result = _survey_acme()
+    assert [(b.ats, b.slug) for b in result.boards] == [("radancy", "careers.acme.com")]
+
+
+@respx.mock
+def test_a_paradox_site_gives_a_paradox_board_from_an_index_sitemap():
+    paradox_page = '<html><script src="https://olivia.paradox.ai/widget.js"></script></html>'
+    index = (f'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>{JOBS_SITE}/en/jobs/sitemap.xml</loc>'
+             '</sitemap></sitemapindex>')
+    _sitemap_site(paradox_page, index)
+    respx.get(JOBS_SITE + "/en/jobs/sitemap.xml").mock(return_value=httpx.Response(200, text=_urlset("/en/jobs/277916/sales-manager/")))
+    respx.get(JOBS_SITE + "/en/jobs/277916/sales-manager/").mock(return_value=httpx.Response(200, text="<html></html>"))
+    result = _survey_acme()
+    assert result.platforms == ["paradox"]
+    assert [(b.ats, b.slug) for b in result.boards] == [("paradox", "careers.acme.com")]
+
+
+@pytest.mark.parametrize(
+    ("sitemap", "robots"),
+    [
+        (_urlset("/", "/about/"), "User-agent: *\nAllow: /\n"),  # no job URLs: just the chat widget, say
+        (_urlset("/job/seattle/director/45831/1001"), "User-agent: *\nDisallow: /sitemap.xml\n"),
+        ("<html>not xml</html>", "User-agent: *\nAllow: /\n"),
+    ],
+)
+@respx.mock
+def test_a_sitemap_site_with_no_job_urls_to_read_gives_no_board(sitemap, robots):
+    _sitemap_site(RADANCY_PAGE, sitemap, robots=robots)
+    result = _survey_acme()
+    assert result.platforms == ["radancy"] and result.boards == []

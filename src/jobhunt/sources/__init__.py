@@ -18,7 +18,9 @@ from jobhunt.sources import (
     greenhouse,
     lever,
     oracle,
+    paradox,
     phenom,
+    radancy,
     smartrecruiters,
     successfactors,
     workable,
@@ -42,6 +44,8 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
     "smartrecruiters": smartrecruiters.fetch,
     "bamboohr": bamboohr.fetch,
     "successfactors": successfactors.fetch,
+    "radancy": radancy.fetch,
+    "paradox": paradox.fetch,
 }
 
 
@@ -114,7 +118,7 @@ def rate_group(company: Company) -> str:
     """The rate-limit group a board's requests belong to, e.g. ``workday:wd5`` or ``lever``."""
     if company.ats == "workday":
         return f"workday:{company.datacenter}"
-    if company.ats in ("eightfold", "successfactors"):  # a careers site's own host
+    if company.ats in ("eightfold", "successfactors", "radancy", "paradox"):  # a site's own host
         return company.slug.lower()
     if company.ats in ("oracle", "phenom"):  # each tenant has its own host (and maybe sites)
         return company.slug.partition("/")[0].lower()

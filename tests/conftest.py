@@ -106,6 +106,16 @@ def sf_company() -> Company:
 
 
 @pytest.fixture
+def radancy_company() -> Company:
+    return Company(name="Example Co", ats="radancy", slug="careers.example.com")
+
+
+@pytest.fixture
+def paradox_company() -> Company:
+    return Company(name="Example Co", ats="paradox", slug="jobs.example.com")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 
