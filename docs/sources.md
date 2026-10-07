@@ -228,8 +228,8 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Descriptions:** one request each, only for postings whose title passes the filter. A stated
   compensation is added to the body.
 - **Location:** the office's city and state, else the remote region, else "Remote".
-- **Remote:** BambooHR's location type: remote is yes, on-site or hybrid is no. Without it, its
-  `isRemote` flag.
+- **Remote:** BambooHR's location type: remote is yes, on-site or hybrid is no. Without it, yes
+  if its `isRemote` flag is set, else unknown.
 - **Unknown board:** an unknown tenant redirects to bamboohr.com rather than answering 404.
   `jobhunt` doesn't follow redirects here and counts that redirect toward removal.
 - **Rate group:** every tenant has its own subdomain, but they are one service, so they share
