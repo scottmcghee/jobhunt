@@ -6,12 +6,13 @@
 Tags come from, cheapest first:
 
 1. ``big-tech``: a short list of FAANG-scale employers (``BIG_TECH``), matched by board.
-2. ``sp500`` and an industry for its sector: boards the S&P 500 survey
-   (scripts/survey_careers.py, data/sp500/results.json) tied to a constituent.
-3. Industry for the rest: the configured model (llm.py) classifies boards about 100 at a time,
-   from each board's name, slug and a few of its job titles (data/jobs.jsonl), choosing only from
+2. ``sp500``: boards the S&P 500 survey (scripts/survey_careers.py, data/sp500/results.json)
+   tied to a constituent.
+3. Industry: the configured model (llm.py) classifies boards about 100 at a time, from each
+   board's name, slug and a few of its job titles (data/jobs.jsonl), choosing only from
    ``INDUSTRIES``. Answers are cached by board in data/company_tags.json, so a rerun only asks
-   about boards it hasn't seen. ``--no-llm`` uses the cache and asks nothing new.
+   about boards it hasn't seen. ``--no-llm`` uses the cache and asks nothing new. Where the model
+   names no industry for an S&P 500 board, its GICS sector's industry (``SECTORS``) fills in.
 
 The script only manages the tags in ``VOCABULARY``: it recomputes those on every run and leaves
 any other tag (``seattle``, ``remote``, ...) as written. It edits companies.yaml as text, so
@@ -167,21 +168,26 @@ def classify(
 def managed_tags(
     board: Company, industry: Mapping[str, list[str]], sp500: Mapping[str, tuple[str, str]] | None
 ) -> list[str]:
-    """``sp500`` None means no survey to go by: a board keeps the ``sp500`` tag it has."""
+    """The model's industries if it named any; otherwise the S&P sector's fill in.
+
+    ``sp500`` None means no survey to go by: a board keeps the ``sp500`` tag it has, and the
+    industries it has with it (only the survey knows which of them came from its sector).
+    """
     tags = []
     if is_big_tech(board):
         tags.append("big-tech")
-    if sp500 is None:
-        if "sp500" in board.tags:  # and its sector's industries, which only the survey knows
-            tags.append("sp500")
-            tags += [t for t in board.tags if t in INDUSTRIES]
-    elif (hit := sp500.get(_key(board))) is not None:
+    hit = None
+    keep_sector = sp500 is None and "sp500" in board.tags
+    if keep_sector or (sp500 is not None and (hit := sp500.get(_key(board))) is not None):
         tags.append("sp500")
-        tags += sector_tags(hit[1])
-    if board.key in industry:
-        tags += industry[board.key]
-    else:  # no answer (not asked, or a skipped batch) isn't "no industries": keep what's there
-        tags += [t for t in board.tags if t in INDUSTRIES]
+    answer = industry.get(board.key)
+    if answer:
+        tags += answer
+    else:
+        if answer is None or keep_sector:  # no answer (not asked, a skipped batch) isn't "none"
+            tags += [t for t in board.tags if t in INDUSTRIES]
+        if hit is not None:
+            tags += sector_tags(hit[1])
     return list(dict.fromkeys(tags))
 
 

@@ -184,6 +184,20 @@ real name, and `data/sp500/survey.md` has a table of every company and its platf
 request a second and honours robots.txt, so a full run takes well over an hour. It saves as it
 goes, and a rerun picks up where it stopped.
 
+**Tagging boards.** Filter rules can target groups of boards by tag (see `include_for_tags` in
+`preferences.yaml`). The tagging script keeps a fixed set of tags up to date in `companies.yaml`:
+`big-tech`, `sp500` (from the survey), and an industry such as `healthcare` or `fintech`, chosen
+by the model from each board's name and a few of its job titles:
+
+```bash
+python scripts/tag_companies.py --dry-run     # report what would change
+python scripts/tag_companies.py               # write it; --no-llm uses cached answers only
+```
+
+Answers are cached in `data/company_tags.json`, so a rerun only asks about new boards. Tags
+outside the fixed set, such as `seattle`, are left as written, and so are the file's comments and
+layout.
+
 ## Tuning
 
 `config/settings.yaml` holds every tunable setting. All of them are optional, and

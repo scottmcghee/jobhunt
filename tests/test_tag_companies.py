@@ -263,6 +263,23 @@ def test_oracle_boards_match_the_survey_by_host(tmp_path):
     assert tags["workday:nvidia/OtherSite"] == ["big-tech"]  # Workday: the site must match too
 
 
+@pytest.mark.parametrize(("hand", "answer", "expected"), [
+    ("", ["defense"], ["sp500", "defense"]),  # the model's answer wins: no sector tags
+    ("", [], ["sp500", "manufacturing"]),  # an answer of none: the sector fills in
+    ("", None, ["sp500", "manufacturing"]),  # no answer: the sector fills in
+    ("    tags: [energy]\n", None, ["sp500", "energy", "manufacturing"]),  # ...beside what's there
+    ("    tags: [energy]\n", [], ["sp500", "manufacturing"]),
+])
+def test_sector_industries_only_when_the_model_names_none(tmp_path, hand, answer, expected):
+    host = "fa-exty-saasfaprod1.fa.ocs.oraclecloud.com"
+    p = _companies(tmp_path, f"companies:\n  - name: Howmet\n    ats: oracle\n    slug: {host}/CX\n{hand}")
+    industry = {} if answer is None else {f"oracle:{host}/CX": answer}
+    sp = tagger.sp500_boards(_survey(tmp_path))
+    tagger.apply_tags(p, industry, sp)
+    assert _load(p)[f"oracle:{host}/CX"] == expected
+    assert tagger.apply_tags(p, industry, sp) == 0  # idempotent
+
+
 def _run(tmp_path, text, industry):
     p = _companies(tmp_path, text)
     tagger.apply_tags(p, industry, {})
@@ -345,8 +362,8 @@ def test_a_tags_shape_it_cant_rewrite_skips_only_that_entry(tmp_path, caplog, ta
 
 @pytest.mark.parametrize(("tags", "cached"), [
     ("[sp500, retail]", None),
-    ("[sp500, retail]", []),  # a cached answer doesn't drop the sector's industries
-    ("[sp500, retail, saas]", ["saas"]),
+    ("[sp500, retail]", []),  # an answer of none doesn't drop the sector's industries
+    ("[sp500, saas]", ["saas"]),  # (a named answer replaces them, survey or not)
 ])
 def test_a_missing_survey_keeps_sp500_tags(tmp_path, caplog, tags, cached):
     p = _companies(tmp_path, f"{ENTRY}    tags: {tags}\n")

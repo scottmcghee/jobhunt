@@ -55,6 +55,7 @@ tests/
 scripts/
   bench_fetch.py      # times fetch on a stratified sample of boards, to tune --workers/--per-host
   survey_careers.py   # S&P 500 careers sites: which hiring platform each uses, and new boards
+  tag_companies.py    # managed tags in companies.yaml: big-tech, sp500, industry (model, cached)
 data/                 # runtime state (gitignored)
 output/               # generated letters (gitignored)
 ```
