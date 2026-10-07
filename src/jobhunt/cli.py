@@ -185,23 +185,27 @@ def _interrupt_on_signals() -> Iterator[None]:
     """Treat SIGHUP and SIGTERM like Ctrl-C, so closing the terminal still saves the run.
 
     After a SIGHUP the terminal is gone, so output goes to /dev/null rather than failing
-    halfway through the save. Once one signal has arrived, more are ignored until the end.
+    halfway through the save. Once the run is interrupted (Ctrl-C included), SIGHUP and
+    SIGTERM no longer interrupt it until the end. A signal already ignored (``nohup``) stays so.
     """
-    signums = [getattr(signal, name) for name in ("SIGHUP", "SIGTERM") if hasattr(signal, name)]
-    previous = {signum: signal.getsignal(signum) for signum in signums}
+    names = ("SIGINT", "SIGHUP", "SIGTERM")
+    signums = [getattr(signal, name) for name in names if hasattr(signal, name)]
+    handlers = {signum: signal.getsignal(signum) for signum in signums}
+    previous = {signum: h for signum, h in handlers.items() if h is not signal.SIG_IGN}
     stdout, stderr = sys.stdout, sys.stderr
     devnull = None
+    interrupted = False
 
     def interrupt(signum: int, frame: object) -> None:
-        nonlocal devnull
-        for other in signums:
-            signal.signal(other, signal.SIG_IGN)
-        if signum == getattr(signal, "SIGHUP", None):
+        nonlocal devnull, interrupted
+        if signum == getattr(signal, "SIGHUP", None) and devnull is None:
             devnull = open(os.devnull, "w")  # noqa: SIM115 - closed on the way out
             sys.stdout = sys.stderr = devnull
-        raise KeyboardInterrupt
+        if signum == signal.SIGINT or not interrupted:  # Ctrl-C always interrupts, as before
+            interrupted = True
+            raise KeyboardInterrupt
 
-    for signum in signums:
+    for signum in previous:
         signal.signal(signum, interrupt)
     try:
         yield

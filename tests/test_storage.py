@@ -122,6 +122,18 @@ def test_seen_set_counts_jobs_already_in_jobs_jsonl(tmp_path, platform_director_
     assert platform_director_job.key not in storage.SeenSet(tmp_path / "seen.json")
 
 
+def test_seen_set_skips_a_truncated_line_in_jobs_jsonl(tmp_path, platform_director_job, caplog):
+    # A hard kill mid-append can leave half a line; the next fetch must still start.
+    jobs = tmp_path / "jobs.jsonl"
+    storage.append_jsonl(jobs, platform_director_job.model_dump())
+    with jobs.open("a", encoding="utf-8") as f:
+        f.write('{"source": "greenhouse", "company_sl')
+    seen = storage.SeenSet(tmp_path / "seen.json", jobs=jobs)
+    assert platform_director_job.key in seen
+    assert len(seen) == 1
+    assert "jobs.jsonl" in caplog.text
+
+
 def test_seen_set_without_a_jobs_file(tmp_path):
     seen = storage.SeenSet(tmp_path / "seen.json", jobs=tmp_path / "jobs.jsonl")
     assert len(seen) == 0

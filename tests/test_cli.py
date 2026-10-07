@@ -1357,6 +1357,7 @@ def test_after_a_hangup_output_goes_nowhere_until_the_end(capsys):
 
 
 def test_a_second_signal_does_not_interrupt_the_save():
+    saved = False
     with pytest.raises(KeyboardInterrupt), cli._interrupt_on_signals():
         try:
             os.kill(os.getpid(), signal.SIGTERM)
@@ -1366,7 +1367,48 @@ def test_a_second_signal_does_not_interrupt_the_save():
             os.kill(os.getpid(), signal.SIGTERM)  # while saving: ignored
             for _ in range(1000):
                 pass
+            saved = True
             raise
+    assert saved
+
+
+def test_after_ctrl_c_a_hangup_does_not_interrupt_the_save(capsys):
+    stdout = sys.stdout
+    before = signal.getsignal(signal.SIGINT)
+    saved = False
+    with pytest.raises(KeyboardInterrupt), cli._interrupt_on_signals():
+        try:
+            os.kill(os.getpid(), signal.SIGINT)
+            for _ in range(1000):
+                pass
+        except KeyboardInterrupt:
+            os.kill(os.getpid(), signal.SIGHUP)  # terminal closed while saving: ignored
+            for _ in range(1000):
+                pass
+            assert sys.stdout is not stdout  # but the terminal is still gone
+            print("lost")
+            saved = True
+            raise
+    assert saved
+    assert sys.stdout is stdout
+    assert "lost" not in capsys.readouterr().out
+    assert signal.getsignal(signal.SIGINT) == before
+
+
+def test_an_ignored_hangup_stays_ignored():
+    # `nohup jobhunt fetch` must keep running when the terminal closes.
+    before = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        finished = False
+        with cli._interrupt_on_signals():
+            os.kill(os.getpid(), signal.SIGHUP)
+            for _ in range(1000):
+                pass
+            finished = True
+        assert finished
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, before)
 
 
 @respx.mock
