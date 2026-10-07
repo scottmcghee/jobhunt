@@ -101,7 +101,8 @@ def fetch_company(
 
 # Requests are rate-limited per group: one per Workday datacenter (its tenants share
 # infrastructure), and one per API host for the other sources (every board is on that host;
-# BambooHR gives each tenant its own subdomain, but they are one service, so one group).
+# BambooHR and Eightfold give each tenant its own subdomain, but each is one service, so one
+# group: 20 *.eightfold.ai boards fetched side by side were answered 405).
 _API_HOSTS: dict[str, str] = {
     "boards-api.greenhouse.io": "greenhouse",
     "api.lever.co": "lever",
@@ -113,12 +114,15 @@ _API_HOSTS: dict[str, str] = {
 }
 _WORKDAY_HOST = re.compile(r"[a-z0-9-]+\.(wd\d+)\.myworkdayjobs\.com")
 _BAMBOOHR_HOST = re.compile(r"[a-z0-9-]+\.bamboohr\.com")
+_EIGHTFOLD_HOST = re.compile(r"[a-z0-9-]+\.eightfold\.ai")
 
 
 def rate_group(company: Company) -> str:
     """The rate-limit group a board's requests belong to, e.g. ``workday:wd5`` or ``lever``."""
     if company.ats == "workday":
         return f"workday:{company.datacenter}"
+    if company.ats == "eightfold" and _EIGHTFOLD_HOST.fullmatch(company.slug.lower()):
+        return "eightfold"
     if company.ats in ("eightfold", "successfactors", "radancy", "paradox"):  # a site's own host
         return company.slug.lower()
     if company.ats in ("oracle", "phenom"):  # each tenant has its own host (and maybe sites)
@@ -133,4 +137,6 @@ def request_group(url: httpx.URL) -> str:
         return f"workday:{m.group(1)}"
     if _BAMBOOHR_HOST.fullmatch(host):
         return "bamboohr"
+    if _EIGHTFOLD_HOST.fullmatch(host):
+        return "eightfold"
     return _API_HOSTS.get(host, host)
