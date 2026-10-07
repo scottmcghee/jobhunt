@@ -165,12 +165,16 @@ def classify(
 
 
 def managed_tags(
-    board: Company, industry: Mapping[str, list[str]], sp500: Mapping[str, tuple[str, str]]
+    board: Company, industry: Mapping[str, list[str]], sp500: Mapping[str, tuple[str, str]] | None
 ) -> list[str]:
+    """``sp500`` None means no survey to go by: a board keeps the ``sp500`` tag it has."""
     tags = []
     if is_big_tech(board):
         tags.append("big-tech")
-    if (hit := sp500.get(_key(board))) is not None:
+    if sp500 is None:
+        if "sp500" in board.tags:
+            tags.append("sp500")
+    elif (hit := sp500.get(_key(board))) is not None:
         tags.append("sp500")
         tags += sector_tags(hit[1])
     if board.key in industry:
@@ -200,6 +204,20 @@ def _split_comment(value: str) -> tuple[str, str]:
         except yaml.YAMLError:
             continue
     return value, ""
+
+
+def _rewritable(entry: list[str]) -> bool:
+    """Whether ``_rewrite`` handles this entry's tags: a one-line value, or a block list."""
+    for i, line in enumerate(entry):
+        if m := _TAGS_LINE.match(line):
+            try:  # a flow list wrapped across lines doesn't parse on its own line
+                value, _ = _split_comment(m.group(2))
+            except yaml.YAMLError:
+                return False
+            rest = [x for x in entry[i + 1 :] if x.strip() and not x.lstrip().startswith("#")]
+            if not value.strip() and rest and not re.match(rf"^ {{{len(m.group(1))},}}- ", rest[0]):
+                return False  # e.g. a flow list on the next line
+    return True
 
 
 def _rewrite(entry: list[str], tags: list[str]) -> list[str]:
@@ -236,7 +254,7 @@ def _rewrite(entry: list[str], tags: list[str]) -> list[str]:
 def apply_tags(
     path: Path,
     industry: Mapping[str, list[str]],
-    sp500: Mapping[str, tuple[str, str]],
+    sp500: Mapping[str, tuple[str, str]] | None,
     dry_run: bool = False,
 ) -> int:
     """Recompute the managed tags of every entry; returns how many entries changed."""
@@ -251,6 +269,9 @@ def apply_tags(
         board = Company.model_validate(yaml.safe_load(textwrap.dedent("".join(entry)))[0])
         keep = [t for t in board.tags if t not in VOCABULARY]
         tags = keep + managed_tags(board, industry, sp500)
+        if tags != board.tags and not _rewritable(entry):
+            log.warning("%s: can't rewrite its tags as written; left it unchanged", board.key)
+            tags = board.tags
         expected.append(board.model_copy(update={"tags": tags}))
         if tags != board.tags:
             changed += 1
@@ -291,7 +312,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     boards = config.load_companies(args.companies)
-    sp500 = sp500_boards(args.survey or args.data_dir / "sp500" / "results.json")
+    survey = args.survey or args.data_dir / "sp500" / "results.json"
+    sp500 = sp500_boards(survey) if survey.exists() else None
+    if sp500 is None:
+        log.warning("no survey at %s; keeping existing sp500 tags", survey)
     cache = args.data_dir / "company_tags.json"
     if args.no_llm:
         cached = json.loads(cache.read_text()) if cache.exists() else {}

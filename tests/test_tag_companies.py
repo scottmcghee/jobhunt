@@ -326,3 +326,30 @@ def test_a_bad_rewrite_is_never_written(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         tagger.apply_tags(p, {"lever:a": ["ai"]}, {})
     assert p.read_text() == before
+
+
+@pytest.mark.parametrize(
+    "tags_text",
+    [
+        "    tags: [remote,\n      seattle]\n",  # a flow list wrapped across lines
+        "    tags:\n      [remote, seattle]\n",  # a flow list on the line after tags:
+    ],
+)
+def test_a_tags_shape_it_cant_rewrite_skips_only_that_entry(tmp_path, caplog, tags_text):
+    a = f"{ENTRY}{tags_text}"
+    p = _run(tmp_path, f"{a}\n  - name: B\n    ats: lever\n    slug: b\n", {"lever:a": ["ai"], "lever:b": ["ai"]})
+    assert p.read_text().startswith(a)  # left exactly as written
+    assert [c.tags for c in config.load_companies(p)] == [["remote", "seattle"], ["ai"]]
+    assert "lever:a" in caplog.text
+
+
+def test_a_missing_survey_keeps_sp500_tags(tmp_path, caplog):
+    p = _companies(tmp_path, f"{ENTRY}    tags: [sp500, retail]\n")
+    before = p.read_text()
+    data = tmp_path / "data"
+    data.mkdir()
+    args = ["--companies", str(p), "--data-dir", str(data), "--survey", str(tmp_path / "nope.json"), "--no-llm"]
+    assert tagger.main(args) == 0
+    assert tagger.main(args) == 0  # and again: still idempotent
+    assert p.read_text() == before
+    assert "nope.json" in caplog.text
