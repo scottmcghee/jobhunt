@@ -94,6 +94,9 @@ _HREF = re.compile(r"""href\s*=\s*["']([^"'#]+)""", re.I)
 _CAREERS = re.compile(r"career|jobs?\b|join-?us", re.I)
 _COUNTRY = re.compile(r"[a-z]{2,10}")  # a Phenom site's /us/en/ or /global/en/
 _LANGUAGE = re.compile(r"[a-z]{2}")
+# Career Site Builder's own scripts and styles: the page is on a SuccessFactors careers site, not
+# just linking to one (careers.netapp.com mentions SuccessFactors but runs another platform)
+_CAREER_SITE_BUILDER = re.compile(r"/platform/(?:js/j2w|csb)\b")
 
 
 @dataclass(frozen=True)
@@ -345,6 +348,12 @@ def _read(page: httpx.Response, company: Constituent) -> tuple[set[str], list[Co
     for url in [str(page.url), *map(slugs._trim, _URL.findall(text))]:
         if board := slugs.board_from_url(url):
             boards.append(board.model_copy(update={"name": company.name}))
+    if "successfactors" in found and _CAREER_SITE_BUILDER.search(text):
+        host = (page.url.host or "").lower()
+        try:
+            boards.append(Company(name=company.name, ats="successfactors", slug=host))
+        except ValueError:  # not a host Company accepts
+            pass
     return found, boards
 
 

@@ -9,7 +9,8 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - Listing sources: [Greenhouse](#greenhouse), [Lever](#lever), [Ashby](#ashby),
   [Workable](#workable)
 - Listing sources with descriptions on demand: [Workday](#workday),
-  [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr)
+  [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr),
+  [SuccessFactors](#successfactors-career-site-builder)
 - Search sources: [Amazon](#amazon), [Eightfold](#eightfold), [Oracle Recruiting Cloud](#oracle-recruiting-cloud),
   [Apple](#apple), [Phenom](#phenom)
 - [Politeness](#politeness)
@@ -40,7 +41,8 @@ Sources fall into three groups.
 Greenhouse, Lever, Ashby and Workable.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
-descriptions, so each description costs one more request: Workday, SmartRecruiters and BambooHR.
+descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR, and
+SuccessFactors sites without a full feed.
 `fetch` asks for a description only when the posting's title passes the title filter in
 `preferences.yaml`. Postings whose titles fail are rejected anyway, so nothing is lost.
 
@@ -83,6 +85,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
 | `bamboohr` | tenant | one request each | redirect to bamboohr.com, removed | `bamboohr` |
+| `successfactors` | careers site host | in the feed, or one page each | no sitemap: 404, removed; not Career Site Builder: empty, warned | the careers host |
 | `amazon` | country code | in the results | empty results, warned | `amazon` |
 | `eightfold` | careers host (+ optional `location`) | one request each | wrong domain: 404, removed; unknown `*.eightfold.ai` host: connection error, kept | the careers host |
 | `oracle` | `host/site` | one request each | unknown site: the host's postings; unknown host: connection error, kept | the tenant host |
@@ -235,6 +238,50 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
   `jobhunt` doesn't follow redirects here and counts that redirect toward removal.
 - **Rate group:** every tenant has its own subdomain, but they are one service, so they share
   the `bamboohr` group.
+
+## SuccessFactors (Career Site Builder)
+
+```yaml
+  - name: Ball
+    ats: successfactors
+    slug: jobs.ball.com
+```
+
+SAP SuccessFactors careers sites built with Career Site Builder, often `jobs.<company>.com` or
+`careers.<company>.com`. Their pages load scripts from `/platform/js/j2w/` or `/platform/csb`. There is no public JSON
+API, and robots.txt disallows `/services/`, the paths their feeds and search use. `jobhunt` reads
+what the sites allow: the sitemap, and job pages.
+
+- **Slug:** the careers site's host, e.g. `jobs.ball.com`.
+- **Pages:**
+  - `GET /robots.txt` first. If it disallows the sitemap, the board is skipped with a warning; if
+    it disallows job pages, postings are kept without descriptions. Following RFC 9309, a
+    robots.txt that answers 5xx disallows everything.
+  - `GET /sitemap.xml` comes in two kinds. Some sites serve an RSS feed of every posting with its
+    description (25 to 30 MB for the biggest), so the whole board is one request. Most serve a
+    plain sitemap of job page URLs.
+  - `GET /job/<title-and-place>/<id>/` (some sites put a brand first: `/<brand>/job/...`) is one
+    posting's page.
+- **Descriptions:** in the feed, or one page each for postings that pass the title filter. A job
+  URL's words (`Richmond Senior Manager VA 23230`) stand in for the title in that check. The title
+  is one run of those words, so a page is fetched if any run passes, with `_` read as `.` (the
+  URLs write `Sr.` as `Sr_`) and words joined by a dropped `/` (`ManagerDirector`, `VPDirector`,
+  `SVPGM`) split apart. That fetches some pages whose title then fails the filter. It can still
+  skip one if the URL joined two lowercase words, or joined all-caps words more than once in a
+  title or into one longer than 8 letters. A page's
+  schema.org microdata gives the real title, location, date posted and description. A posting
+  that passed but has no page (robots.txt disallows it, or the page failed) gets as its title the
+  reading of its URL words that passed (`Seattle Sr. Manager, ...`, `Seattle VP Director, ...`),
+  so the final filter agrees; postings that didn't pass keep the URL's words.
+- **Location:** the feed's location, or the page's address. A page without one gets the URL's
+  words before and after the title, matched word by word and ignoring punctuation
+  (`Richmond, VA 23230`); if the title isn't in the URL, all of its words. Either way `_` reads
+  as `.` (`St_ Louis` is `St. Louis`).
+- **Remote:** yes if the location or title says "remote", else unknown.
+- **Unknown board:** a host with no sitemap answers 404 and is removed. A site that isn't Career
+  Site Builder (careers.netapp.com mentions SuccessFactors but runs another platform) lists no job
+  URLs in this shape; it is never removed, and `fetch` warns that it found nothing.
+- **Rate group:** the careers host.
 
 ## Amazon
 
@@ -476,6 +523,9 @@ host's robots.txt and checks every URL against it, including each redirect hop. 
 be fetched or answers 5xx disallows the whole host. A few companies get no requests at all:
 Meta, whose terms forbid automated collection, and Alphabet, whose robots.txt disallows its job
 pages.
+
+A page that loads Career Site Builder's own scripts (`/platform/js/j2w/` or `/platform/csb`) gives a SuccessFactors
+board for its host; a page that only mentions SuccessFactors gives none.
 
 On a Phenom site it sends one search request (within robots.txt, like everything else) to read
 where the postings apply. If they apply on a board `jobhunt` supports, such as Workday, it gives

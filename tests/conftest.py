@@ -101,6 +101,11 @@ def phenom_company() -> Company:
 
 
 @pytest.fixture
+def sf_company() -> Company:
+    return Company(name="Example Co", ats="successfactors", slug="careers.example.com")
+
+
+@pytest.fixture
 def prefs() -> config.Preferences:
     return config.load_preferences(CONFIG_DIR / "preferences.yaml")
 

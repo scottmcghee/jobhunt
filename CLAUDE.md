@@ -88,7 +88,7 @@ output/               # generated letters (gitignored)
 Every source is a module under `sources/`, an `ATSName` in `schema.py`, and an entry in one of three tables in `sources/__init__.py`:
 
 - `FETCHERS`: one listing with descriptions (Greenhouse, Lever, Ashby, Workable).
-- `ON_DEMAND_FETCHERS`: the listing lacks descriptions, so each costs a request. `fetch` passes a `wants_body` check ("title passes the title filter"), so only those postings pay (Workday, SmartRecruiters, BambooHR).
+- `ON_DEMAND_FETCHERS`: the listing lacks descriptions, so each costs a request. `fetch` passes a `wants_body` check ("title passes the title filter"), so only those postings pay (Workday, SmartRecruiters, BambooHR, SuccessFactors).
 - `SEARCH_FETCHERS`: employers too big to list run one search per term: the title filter's target words, plus the board's `include_for_tags` extras (Amazon, Eightfold, Oracle Recruiting Cloud, Apple, Phenom). The normal filter still runs afterwards.
 
 Endpoints, slug formats, gone-board signals and rate caps for each source are in [docs/sources.md](docs/sources.md).
@@ -104,7 +104,7 @@ Endpoints, slug formats, gone-board signals and rate caps for each source are in
 
 ## Roadmap
 
-Done: dead-board pruning; Workday, SmartRecruiters, Workable and BambooHR; search sources for Amazon, Eightfold, Oracle, Apple and Phenom; the S&P 500 survey (`scripts/survey_careers.py`) to find more boards.
+Done: dead-board pruning; Workday, SmartRecruiters, Workable, BambooHR and SuccessFactors; search sources for Amazon, Eightfold, Oracle, Apple and Phenom; the S&P 500 survey (`scripts/survey_careers.py`) to find more boards.
 
 Open: more companies with no supported ATS, case by case, under the rules above. Each item follows the workflow (fixture and test first).
 
