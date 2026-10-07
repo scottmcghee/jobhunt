@@ -263,12 +263,15 @@ what the sites allow: the sitemap, and job pages.
   - `GET /job/<title-and-place>/<id>/` (some sites put a brand first: `/<brand>/job/...`) is one
     posting's page.
 - **Descriptions:** in the feed, or one page each for postings that pass the title filter. A job
-  URL's words (`Richmond Senior Manager VA 23230`) stand in for the title in that check: they
-  contain the title, so a posting is never skipped that its title would pass. A page's schema.org
-  microdata gives the real title, location, date posted and description; postings not fetched keep
-  the URL's words as their title.
-- **Location:** the feed's location, or the page's address. A page without one gets the place
-  words around the title in its URL (`Richmond, VA, 23230`).
+  URL's words (`Richmond Senior Manager VA 23230`) stand in for the title in that check. The title
+  is one run of those words, so a page is fetched if any run passes, with `_` read as `.` (the
+  URLs write `Sr.` as `Sr_`) and words joined by a dropped `/` (`ManagerDirector`) split apart.
+  That fetches some pages whose title then fails the filter, but skips none it would pass. A page's
+  schema.org microdata gives the real title, location, date posted and description; postings not
+  fetched keep the URL's words as their title.
+- **Location:** the feed's location, or the page's address. A page without one gets the URL's
+  words before and after the title, matched word by word and ignoring punctuation
+  (`Richmond, VA 23230`); if the title isn't in the URL, all of its words.
 - **Remote:** yes if the location or title says "remote", else unknown.
 - **Unknown board:** a host with no sitemap answers 404 and is removed. A site that isn't Career
   Site Builder (careers.netapp.com mentions SuccessFactors but runs another platform) lists no job

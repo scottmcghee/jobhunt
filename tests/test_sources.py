@@ -10,8 +10,8 @@ import httpx
 import pytest
 import respx
 
-from jobhunt.filter import check_location
-from jobhunt.schema import Company
+from jobhunt.filter import check_location, check_title
+from jobhunt.schema import Company, Job
 from jobhunt.sources import (
     amazon,
     apple,
@@ -1528,13 +1528,14 @@ def test_successfactors_sitemap_fetches_only_the_pages_wanted(sf_company):
 
     def wants(job):
         seen.append(job.title)
-        return "Plant" not in job.title
+        return "Director" in job.title or "Manager" in job.title
 
     with httpx.Client() as client:
         jobs = successfactors.fetch(sf_company, client, wants)
     # titles from the URLs (location words and all) decide which pages to fetch; /content/ isn't a job
-    assert seen == ["Seattle Director, Platform Engineering WA 98101",
-                    "Richmond Senior Manager, Marketing Strategy VA 23230", "Tulsa Plant Operator OK 74101"]
+    assert seen[:3] == ["Seattle Director, Platform Engineering WA 98101",
+                        "Richmond Senior Manager, Marketing Strategy VA 23230", "Tulsa Plant Operator OK 74101"]
+    assert "Plant Operator" in seen  # a URL whose words fail is tried a run of its words at a time
     assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
     assert pages[SF_JOB1].call_count == pages[SF_JOB2].call_count == 1
     first, second, third = jobs
@@ -1546,7 +1547,7 @@ def test_successfactors_sitemap_fetches_only_the_pages_wanted(sf_company):
     assert "Not part of the posting" not in first.body
     # a page with no location data: the URL's words around the title
     assert second.title == "Senior Manager, Marketing Strategy"
-    assert second.location == "Richmond, VA, 23230"
+    assert second.location == "Richmond, VA 23230"
     assert second.body.startswith("About us") and "based in Richmond, VA." in second.body
     assert second.url == SF_JOB2 and second.posted_at is None
     # not wanted: kept with what its URL says
@@ -1561,6 +1562,56 @@ def test_successfactors_failed_page_keeps_the_posting_from_its_url(sf_company, c
         jobs = successfactors.fetch(sf_company, client, lambda j: "Director" in j.title)
     assert jobs[0].title == "Seattle Director, Platform Engineering WA 98101" and jobs[0].body == ""
     assert "successfactors careers.example.com: no description for 1200000100" in caplog.text
+
+
+def _sf_one(path, page):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    sitemap = f'<urlset xmlns="http://www.google.com/schemas/sitemap/0.9"><url><loc>{SF}{path}</loc></url></urlset>'
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(200, text=sitemap))
+    return respx.get(SF + path).mock(return_value=httpx.Response(200, text=page))
+
+
+@pytest.mark.parametrize(
+    ("path", "title"),
+    [
+        # Career Site Builder writes "." as "_" (careers.hubbell.com/job/Shelton-Sr_-HR-Manager-CT-06484-4300/...)
+        ("/job/Seattle-Sr_-Manager%2C-Platform-Engineering-WA-98101/1/", "Sr. Manager, Platform Engineering"),
+        # and drops "/" (Manager/Director -> ManagerDirector)
+        ("/job/Seattle-Senior-ManagerDirector%2C-Platform-Engineering-WA-98101/4/", "Senior Manager/Director, Platform Engineering"),
+        # place words that are excluded terms: Puerto Rico's "PR", Commerce, CA
+        ("/job/San-Juan-Director%2C-Platform-Engineering-PR-00901/2/", "Director, Platform Engineering"),
+        ("/job/Commerce-Director%2C-Platform-Engineering-CA-90040/3/", "Director, Platform Engineering"),
+    ],
+)
+@respx.mock
+def test_successfactors_fetches_every_page_whose_title_could_pass(sf_company, prefs, path, title):
+    assert check_title(Job(source="successfactors", company="x", company_slug="x", external_id="1",
+                           title=title, url=SF), prefs) is None  # the real title passes
+    page = _sf_one(path, (FIXTURES / "successfactors_job.html").read_text())
+    with httpx.Client() as client:
+        [job] = successfactors.fetch(sf_company, client, lambda j: check_title(j, prefs) is None)  # cli's check
+    assert page.call_count == 1 and job.title == "Director, Platform Engineering"
+
+
+@pytest.mark.parametrize(
+    ("path", "location"),
+    [
+        # the URL drops the title's " - ": its words still match the title, token by token
+        ("/job/Seattle-Senior-Manager-Platform-Engineering-WA-98101/9/", "Seattle, WA 98101"),
+        # the title isn't in the URL at all: the URL's words, so the location filter still sees the place
+        ("/job/Seattle-Head-of-Platform-WA-98101/9/", "Seattle Head of Platform WA 98101"),
+        # the URL is just the title: no place
+        ("/job/Senior-Manager-Platform-Engineering/9/", ""),
+    ],
+)
+@respx.mock
+def test_successfactors_place_from_a_url_whose_title_differs(sf_company, path, location):
+    page = (FIXTURES / "successfactors_job_plain.html").read_text().replace(
+        "Senior Manager, Marketing Strategy\n", "Senior Manager - Platform Engineering\n")
+    _sf_one(path, page)
+    with httpx.Client() as client:
+        [job] = successfactors.fetch(sf_company, client)
+    assert job.title == "Senior Manager - Platform Engineering" and job.location == location
 
 
 @respx.mock

@@ -11,10 +11,12 @@ feeds and search use. What it allows, and every site serves, is a sitemap on the
 A board is ``ats: successfactors`` with ``slug:`` the site's host, e.g. ``careers.aflac.com``.
 
 From an RSS feed, every posting comes in one request. From a plain sitemap, each posting is only
-a URL, whose path holds the title and the place (``Richmond-Senior-Manager-VA-23230``). That text
-stands in for the title in the ``wants_body`` check: it contains the title, so it passes wherever
-the title would. Only those postings' pages are fetched; the page's schema.org microdata gives the
-real title, location, date posted and description. The others keep what their URL says.
+a URL, whose path holds the title and the place (``Richmond-Senior-Manager-VA-23230``). The
+title is one run of those words, so a page is fetched if ``wants_body`` passes any run of them,
+with "_" read as "." (``Sr_`` is how the URLs write "Sr.") and words the URL joined by dropping a
+"/" (``ManagerDirector``) split apart. That fetches some pages whose title then fails the filter,
+but skips none it would pass. The page's schema.org microdata gives the real title, location, date
+posted and description. The others keep what their URL says.
 
 Not every site the survey sees SuccessFactors on is Career Site Builder (careers.netapp.com is
 another platform in front of it). Its sitemap lists no job URLs in this shape, so ``fetch``
@@ -50,6 +52,9 @@ _GOOGLE_NS = "{http://base.google.com/ns/1.0}"
 _ITEMPROP_OPEN = re.compile(r'<(\w+)\b[^>]*\bitemprop="(title|description)"[^>]*>', re.I)
 _META = re.compile(r'<meta\s+itemprop="(\w+)"\s+content="([^"]*)"', re.I)
 _ADDRESS = ("addressLocality", "addressRegion", "addressCountry", "postalCode")
+_JOINED = re.compile(r"(?<=[a-z])(?=[A-Z])")  # "ManagerDirector": the URL dropped a "/"
+_TOKEN = re.compile(r"[^\W_]+")
+_EDGES = re.compile(r"^[\W_]+|[\W_]+$")
 
 
 def _url(company: Company, path: str) -> str:
@@ -120,6 +125,26 @@ def _listed(company: Company, url: str, words: str, job_id: str) -> Job:
     )
 
 
+def _wanted(job: Job, wants_body: Callable[[Job], bool]) -> bool:
+    """Whether ``wants_body`` passes any run of a listed posting's URL words, as the title.
+
+    The real title is one of those runs, read with "_" as "." and joined words split.
+    """
+    dotted = job.title.replace("_", ".")
+    tried: set[str] = set()
+    for reading in dict.fromkeys((job.title, dotted, _JOINED.sub(" ", dotted))):
+        words = reading.split()
+        for n in range(len(words), 0, -1):
+            for i in range(len(words) - n + 1):
+                span = " ".join(words[i : i + n])
+                if span in tried:
+                    continue
+                tried.add(span)
+                if wants_body(job.model_copy(update={"title": span})):
+                    return True
+    return False
+
+
 def _itemprop(page: str, name: str) -> list[str]:
     """The inner HTML of each element with ``itemprop="<name>"`` (nested tags and all)."""
     found = []
@@ -145,14 +170,21 @@ def _posted(text: str) -> str | None:
 
 
 def _place_from_url(words: str, title: str) -> str:
-    """The place words around the title in a job URL's words.
+    """The place words around the title in a job URL's words, matched word by word.
 
-    'Richmond Senior Manager VA 23230' with title 'Senior Manager' -> 'Richmond, VA, 23230'.
+    'Richmond Senior Manager Marketing VA 23230' with title 'Senior Manager - Marketing' ->
+    'Richmond, VA 23230'.
+    If the title isn't there, the URL's words, place and all.
     """
-    before, sep, after = words.partition(title)
-    if not sep:
-        return ""
-    return ", ".join(p for p in (before.strip(), *after.split()) if p)
+    tokens = list(_TOKEN.finditer(words))
+    have = [t.group().lower() for t in tokens]
+    want = [t.lower() for t in _TOKEN.findall(title)]
+    for i in range(len(have) - len(want) + 1):
+        if want and have[i : i + len(want)] == want:
+            before = words[: tokens[i].start()]
+            after = words[tokens[i + len(want) - 1].end() :]
+            return ", ".join(p for p in (_EDGES.sub("", before), _EDGES.sub("", after)) if p)
+    return words
 
 
 def _from_page(listed: Job, page: str) -> Job:
@@ -220,7 +252,7 @@ def fetch(
             url = (loc.text or "").strip()
             if (found := _job_id(url)) is not None:
                 listed.setdefault(found[1], _listed(company, url, *found))
-        wanted = [job for job in listed.values() if wants_body(job)]
+        wanted = [job for job in listed.values() if _wanted(job, wants_body)]
         allowed = [job for job in wanted if robots.can_fetch(agent, job.url)]
         if len(allowed) < len(wanted):
             log.warning(
