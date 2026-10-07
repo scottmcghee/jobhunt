@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
 
 from jobhunt import config, storage
 
@@ -69,7 +69,9 @@ class FetchSettings(_Section):
 
     # Most postings each search term may bring in, per search source (amazon, apple, eightfold,
     # oracle). A term with more hits stops there, with a warning. Amazon can't page past 9,900.
-    max_per_term: dict[str, Annotated[int, Field(ge=1)]] = Field(
+    max_per_term: dict[
+        Literal["amazon", "apple", "eightfold", "oracle"], Annotated[StrictInt, Field(ge=1)]
+    ] = Field(
         default_factory=lambda: {"amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000}
     )
 

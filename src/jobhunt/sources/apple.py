@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 
 SITE = "https://jobs.apple.com/en-us"
 PAGE_SIZE = 20  # fixed by the site
-MAX_PER_TERM = 400  # 20 pages; a runaway guard for broad terms
+MAX_PER_TERM = 400  # default per-term cap (fetch.max_per_term); a runaway guard for broad terms
 _DATA = re.compile(
     r'window\.__staticRouterHydrationData\s*=\s*JSON\.parse\(("(?:[^"\\]|\\.)*")\)', re.S
 )
@@ -133,6 +133,7 @@ def fetch(
         seen = pages = 0
         while seen < cap and (max_pages is None or pages < max_pages):
             rows, total = _page(company, client, term, pages + 1)
+            rows = rows[: cap - seen]  # the cap may end mid-page
             pages += 1
             for raw in with_ids(company, rows):
                 job = normalize(company, raw)
@@ -144,7 +145,7 @@ def fetch(
             if seen >= cap:
                 log.warning(
                     "apple %s: %r has %d hits; kept the first %d",
-                    company.slug, term, total, cap,
+                    company.slug, term, total, seen,
                 )
     if not found:
         log.warning(

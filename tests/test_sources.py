@@ -1301,13 +1301,16 @@ def test_amazon_takes_its_cap_from_the_caller_but_stays_in_the_api_window(amazon
     with httpx.Client() as client:
         assert len(amazon.fetch(amazon_company, client, ["manager"], max_per_term=300)) == 300
         assert route.call_count == 3
+        caplog.clear()
+        assert len(amazon.fetch(amazon_company, client, ["manager"], max_per_term=1)) == 1  # not a whole page
+        assert "kept the first 1 " in caplog.text
         jobs = amazon.fetch(amazon_company, client, ["manager"], max_per_term=50000)
     assert len(jobs) == 9900  # offset + page must stay within Amazon's 10,000-result window
     assert max(int(c.request.url.params["offset"]) for c in route.calls) == 9800
 
 
 @respx.mock
-def test_eightfold_takes_its_cap_from_the_caller(eightfold_company):
+def test_eightfold_takes_its_cap_from_the_caller(eightfold_company, caplog):
     respx.get(EF + "/careers").mock(return_value=httpx.Response(200, text='"domain": "example.com"'))
 
     def page(request):
@@ -1318,11 +1321,15 @@ def test_eightfold_takes_its_cap_from_the_caller(eightfold_company):
     respx.get(EF + "/api/pcsx/search").mock(side_effect=page)
     with httpx.Client() as client:
         jobs = eightfold.fetch(eightfold_company, client, ["manager"], wants_body=lambda j: False, max_per_term=30)
-    assert len(jobs) == 30
+        assert len(jobs) == 30
+        caplog.clear()
+        jobs = eightfold.fetch(eightfold_company, client, ["manager"], wants_body=lambda j: False, max_per_term=25)
+    assert len(jobs) == 25  # part of the last page, not all of it
+    assert "kept the first 25" in caplog.text
 
 
 @respx.mock
-def test_oracle_takes_its_cap_from_the_caller(oracle_company):
+def test_oracle_takes_its_cap_from_the_caller(oracle_company, caplog):
     def page(request):
         offset = int(_finder(request)[1]["offset"])
         reqs = [{"Id": str(offset + i + 1), "Title": "M", "PrimaryLocation": "X"} for i in range(200)]
@@ -1331,11 +1338,15 @@ def test_oracle_takes_its_cap_from_the_caller(oracle_company):
     respx.get(OR + "/recruitingCEJobRequisitions").mock(side_effect=page)
     with httpx.Client() as client:
         jobs = oracle.fetch(oracle_company, client, ["manager"], wants_body=lambda j: False, max_per_term=400)
-    assert len(jobs) == 400
+        assert len(jobs) == 400
+        caplog.clear()
+        jobs = oracle.fetch(oracle_company, client, ["manager"], wants_body=lambda j: False, max_per_term=250)
+    assert len(jobs) == 250  # part of the last page, not all of it
+    assert "kept the first 250" in caplog.text
 
 
 @respx.mock
-def test_apple_takes_its_cap_from_the_caller(apple_company):
+def test_apple_takes_its_cap_from_the_caller(apple_company, caplog):
     def page(request):
         n = int(request.url.params["page"])
         rows = [{"id": f"r{n}-{i}", "postingTitle": "M", "transformedPostingTitle": "m", "locations": []} for i in range(20)]
@@ -1345,7 +1356,11 @@ def test_apple_takes_its_cap_from_the_caller(apple_company):
     respx.get(AP + "/search").mock(side_effect=page)
     with httpx.Client() as client:
         jobs = apple.fetch(apple_company, client, ["manager"], wants_body=lambda j: False, max_per_term=60)
-    assert len(jobs) == 60
+        assert len(jobs) == 60
+        caplog.clear()
+        jobs = apple.fetch(apple_company, client, ["manager"], wants_body=lambda j: False, max_per_term=30)
+    assert len(jobs) == 30  # part of the last page, not all of it
+    assert "kept the first 30" in caplog.text
 
 
 @respx.mock

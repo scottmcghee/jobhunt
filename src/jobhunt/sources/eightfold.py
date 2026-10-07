@@ -45,7 +45,7 @@ from jobhunt.sources._search import terms
 log = logging.getLogger(__name__)
 
 PAGE_SIZE = 10  # fixed by the API; a larger num is ignored
-MAX_PER_TERM = 500  # 50 requests; a runaway guard for broad terms
+MAX_PER_TERM = 500  # default per-term cap (fetch.max_per_term); a runaway guard for broad terms
 _DOMAIN = re.compile(r'"domain"\s*:\s*"([a-z0-9][a-z0-9.-]*\.[a-z]{2,})"', re.I)
 
 
@@ -184,6 +184,7 @@ def fetch(
         start = pages = 0
         while start < cap and (max_pages is None or pages < max_pages):
             positions, count = board.page(term, start)
+            positions = positions[: cap - start]  # the cap may end mid-page
             pages += 1
             for raw in with_ids(company, positions):
                 job = normalize(company, raw)
@@ -195,7 +196,7 @@ def fetch(
             if start >= cap:
                 log.warning(
                     "eightfold %s: %r has %d hits; kept the first %d",
-                    company.slug, term, count, cap,
+                    company.slug, term, count, start,
                 )
     wanted = [(raw, job) for raw, job in found.values() if wants_body(job)]
     run = pool.map if pool is not None else map

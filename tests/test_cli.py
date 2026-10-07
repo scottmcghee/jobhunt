@@ -371,20 +371,21 @@ def test_a_tagged_board_takes_its_extra_target_words(tmp_path, monkeypatch):
 
 @respx.mock
 def test_search_caps_come_from_settings(tmp_path, monkeypatch):
-    companies = _two_company_config(tmp_path)
-    respx.get(GH.format("live")).mock(return_value=httpx.Response(200, json={"jobs": []}))
-    respx.get(GH.format("dead")).mock(return_value=httpx.Response(200, json={"jobs": []}))
-    monkeypatch.setenv("JOBHUNT_FETCH_MAX_PER_TERM", '{"greenhouse": 7}')
-    seen = []
-    real = cli.fetch_company
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n  - name: Amazon\n    ats: amazon\n    slug: USA\n\n"
+        "  - name: Live\n    ats: greenhouse\n    slug: live\n"
+    )
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_PER_TERM", '{"amazon": 7}')
+    seen = {}
 
     def fetch(company, client, **kw):
-        seen.append(kw.get("max_per_term"))
-        return real(company, client, **kw)
+        seen[company.ats] = kw.get("max_per_term")
+        return []
 
     monkeypatch.setattr(cli, "fetch_company", fetch)
     assert _fetch(tmp_path, companies, "--dry-run") == 0
-    assert seen == [7, 7]
+    assert seen == {"amazon": 7, "greenhouse": None}  # each board gets its own source's cap
 
 
 @respx.mock

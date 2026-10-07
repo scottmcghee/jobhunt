@@ -204,7 +204,18 @@ def test_max_per_term_from_the_file_and_json_in_the_environment(tmp_path):
     assert settings.load(p, environ=env).fetch.max_per_term == {"apple": 2000}
 
 
-@pytest.mark.parametrize("value", ['{"apple": 0}', '{"apple": -5}', '{"apple": 1.5}', "lots", "[1]"])
+@pytest.mark.parametrize(
+    "value",
+    ['{"apple": 0}', '{"apple": -5}', '{"apple": 1.5}', "lots", "[1]",
+     '{"amazn": 9900}', '{"Amazon": 9900}', '{"amazon": true}'],  # a typo, a case slip, a bool
+)
 def test_a_bad_max_per_term_names_the_variable(tmp_path, value):
     with pytest.raises(settings.SettingsError, match="JOBHUNT_FETCH_MAX_PER_TERM"):
         settings.load(tmp_path / "nope.yaml", environ={"JOBHUNT_FETCH_MAX_PER_TERM": value})
+
+
+def test_a_bad_max_per_term_key_in_the_file_is_rejected(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_text("fetch:\n  max_per_term:\n    Amazon: 9900\n")
+    with pytest.raises(settings.SettingsError, match="fetch.max_per_term.*'amazon'"):
+        settings.load(p, environ={})
