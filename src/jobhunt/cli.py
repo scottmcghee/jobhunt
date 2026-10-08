@@ -47,7 +47,7 @@ from jobhunt.llm import Completer, backend_name, make_completer, model_name
 from jobhunt.runner import BoardRunner
 from jobhunt.schema import Company, Job, ScoredJob
 from jobhunt.score import SYSTEM as SCORE_SYSTEM
-from jobhunt.score import score_job
+from jobhunt.score import build_user_prompt, score_job
 from jobhunt.sources import fetch_company, rate_group
 
 log = logging.getLogger("jobhunt")
@@ -619,7 +619,7 @@ def _ask_score() -> int | str | None:
         reply = input("Your score, 1 to 10 (Enter skips, q quits): ").strip().lower()
         if reply in ("", "q"):
             return reply or None
-        if reply.isdigit() and 1 <= int(reply) <= 10:
+        if reply.isdecimal() and 1 <= int(reply) <= 10:
             return int(reply)
         print("  a score is a whole number from 1 to 10")
 
@@ -652,14 +652,39 @@ def cmd_label(args: argparse.Namespace, data_dir: Path) -> int:
                 break
             if score is None:
                 continue
-            note = input("Note (optional): ").strip()
+            try:
+                note, stop = input("Note (optional): ").strip(), False
+            except (EOFError, KeyboardInterrupt):  # the score just typed still counts
+                note, stop = "", True
             label = evaluate.Label(job_key=job.key, score=score, note=note)
             storage.append_jsonl(data_dir / "labels.jsonl", label.model_dump())
             done += 1
+            if stop:
+                print()
+                break
     except (EOFError, KeyboardInterrupt):
         print()
     print(f"\n{done} labeled now, {len(labels) + done} in all.")
     return 0
+
+
+def _score_prompt_fingerprint(body_chars: int) -> str:
+    """A fingerprint of everything that shapes the scoring prompt: the system prompt, the
+    user-prompt template (rendered with placeholders) and how much of a description it sends."""
+    job = Job(
+        source="greenhouse",
+        company="{company}",
+        company_slug="{slug}",
+        external_id="{id}",
+        title="{title}",
+        location="{location}",
+        url="{url}",
+        body="{body}",
+    )
+    module = config.KitModule("{module}", "{module_title}", ["{use_when}"], text="")
+    kit = config.Kit(opening="", closing="", modules={module.id: module})
+    user = build_user_prompt(job, "{profile}", kit, body_chars)
+    return evaluate.fingerprint(f"{SCORE_SYSTEM}\n{user}\nbody_chars={body_chars}")
 
 
 def _rescore_labeled(
@@ -694,7 +719,7 @@ def cmd_eval(args: argparse.Namespace, data_dir: Path, complete: Completer | Non
     keys = [k for k in labels if k in latest]
     if args.rescore:
         scored = _rescore_labeled(args, keys, latest, complete)
-        source, prompt = "rescored", evaluate.fingerprint(SCORE_SYSTEM)
+        source, prompt = "rescored", _score_prompt_fingerprint(args.settings.llm.body_chars)
     else:
         scored = {k: latest[k] for k in keys}
         source, prompt = "stored", None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 
 from jobhunt import evaluate as ev
@@ -24,15 +26,38 @@ def test_a_label_is_one_to_ten():
         ev.Label(job_key="k", score=11)
 
 
-def test_the_sample_spreads_over_score_bands_highest_first(platform_director_job):
+def test_the_sample_spreads_over_score_bands(platform_director_job):
     # mostly 1s and 2s, as in real data: a plain random sample would be nearly all of those
     scored = [_scored(platform_director_job, i, 1) for i in range(40)]
     scored += [_scored(platform_director_job, 100 + i, s) for i, s in enumerate([3, 4, 5, 6, 7, 8])]
     picked = ev.sample(scored, labeled=set(), n=8, seed=1)
-    bands = [ev.band(s.score.score) for s in picked]
-    assert bands[:4] == ["7-10", "5-6", "3-4", "1-2"]  # one from each band in turn, highest first
-    assert bands.count("7-10") == 2 and bands.count("1-2") == 2
+    bands = Counter(ev.band(s.score.score) for s in picked)
+    assert bands == {"7-10": 2, "5-6": 2, "3-4": 2, "1-2": 2}
     assert len({s.job.key for s in picked}) == 8
+
+
+def test_the_sample_is_shown_in_mixed_order_not_band_by_band(platform_director_job):
+    # the position of a job must not give away the scorer's band
+    scored = [_scored(platform_director_job, i, 1 + i % 10) for i in range(40)]
+    orders = [[ev.band(s.score.score) for s in ev.sample(scored, set(), n=8, seed=k)] for k in range(10)]
+    assert len({tuple(o[:4]) for o in orders}) > 1
+    assert any(o[:4] != ["7-10", "5-6", "3-4", "1-2"] for o in orders)
+    assert ev.sample(scored, set(), n=8, seed=4) == ev.sample(scored, set(), n=8, seed=4)
+
+
+def test_labeling_over_several_sessions_continues_the_same_sample(platform_director_job):
+    scored = [_scored(platform_director_job, i, 1) for i in range(40)]
+    scored += [_scored(platform_director_job, 100 + i, 2 + i % 9) for i in range(30)]
+    whole = ev.sample(scored, labeled=set(), n=20, seed=0)
+    labeled: set[str] = set()
+    while len(labeled) < 20:  # three a session, the rest skipped
+        todo = ev.sample(scored, labeled=labeled, n=20 - len(labeled), seed=0)
+        labeled |= {s.job.key for s in todo[:3]}
+    assert labeled == {s.job.key for s in whole}
+    by_key = {s.job.key: s for s in scored}
+    assert Counter(ev.band(by_key[k].score.score) for k in labeled) == Counter(
+        ev.band(s.score.score) for s in whole
+    )
 
 
 def test_the_sample_skips_labeled_jobs_and_is_repeatable(platform_director_job):

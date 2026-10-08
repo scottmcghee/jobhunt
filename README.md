@@ -159,9 +159,9 @@ jobhunt eval --rescore   # the same, with the labeled jobs scored afresh by the 
 
 `jobhunt label` builds up 50 labels (`--sample N` for another number), and you can stop and come
 back. It shows each job's title, location, link and the start of its description, but not the
-scorer's score, so it can't sway you. The sample takes jobs from each score band in turn,
-highest first: most jobs score 1 or 2, and a random sample would say little about the ones near
-the letter line.
+scorer's score, so it can't sway you. The sample is drawn from each score band, and shown in
+mixed order so a job's place in line gives nothing away: most jobs score 1 or 2, and a random
+sample would say little about the ones near the letter line.
 
 `jobhunt eval` reports rank agreement, the average gap and which way the scorer leans, and the
 decision that matters most, a letter or not: of the jobs you'd write to, how many the scorer

@@ -1691,11 +1691,12 @@ def test_label_shows_each_job_with_its_url_but_not_the_model_score(tmp_path, sco
     _answers(monkeypatch, "7", "solid fit", "q")
     assert _applications(tmp_path, "label", "--sample", "4") == 0
     out = capsys.readouterr().out
-    first = jobs[0].job  # the highest band comes first
-    assert first.title in out and first.url in out and first.body[:40] in out
-    assert f"{jobs[0].score.score}/10" not in out and jobs[0].score.rationale not in out  # no anchoring
     (label,) = _labels(tmp_path)
-    assert (label["job_key"], label["score"], label["note"]) == (first.key, 7, "solid fit")
+    first = next(sj.job for sj in jobs if sj.job.key == label["job_key"])  # the job shown first
+    assert first.title in out and first.url in out and first.body[:40] in out
+    for sj in jobs:  # no anchoring
+        assert f"{sj.score.score}/10" not in out and sj.score.rationale not in out
+    assert (label["score"], label["note"]) == (7, "solid fit")
 
 
 def test_label_skips_on_enter_and_reprompts_on_a_bad_score(tmp_path, scored_job, monkeypatch, capsys):
@@ -1705,6 +1706,22 @@ def test_label_skips_on_enter_and_reprompts_on_a_bad_score(tmp_path, scored_job,
     assert [lab["score"] for lab in _labels(tmp_path)] == [4]  # the first job skipped
     assert "1 to 10" in capsys.readouterr().out
     assert len([p for p in prompts if "score" in p.lower()]) == 4  # skip, bad, 4, then EOF
+
+
+def test_label_keeps_the_score_when_the_note_prompt_is_cut_short(tmp_path, scored_job, monkeypatch, capsys):
+    _labelable(tmp_path, scored_job)
+    _answers(monkeypatch, "7")  # then Ctrl-D at the note prompt
+    assert _applications(tmp_path, "label", "--sample", "4") == 0
+    assert [(lab["score"], lab["note"]) for lab in _labels(tmp_path)] == [(7, "")]
+    assert "1 labeled now" in capsys.readouterr().out
+
+
+def test_label_reprompts_on_a_digit_that_is_not_a_number(tmp_path, scored_job, monkeypatch, capsys):
+    _labelable(tmp_path, scored_job)
+    _answers(monkeypatch, "\u00b2", "3", "", "q")
+    assert _applications(tmp_path, "label", "--sample", "4") == 0
+    assert [lab["score"] for lab in _labels(tmp_path)] == [3]
+    assert "1 to 10" in capsys.readouterr().out
 
 
 def test_label_picks_up_where_it_left_off(tmp_path, scored_job, monkeypatch, capsys):
@@ -1719,6 +1736,15 @@ def test_label_picks_up_where_it_left_off(tmp_path, scored_job, monkeypatch, cap
     _answers(monkeypatch)
     assert _applications(tmp_path, "label", "--sample", "2") == 0
     assert "already 2 labeled" in capsys.readouterr().out
+
+
+def test_the_scoring_prompt_fingerprint_covers_template_and_body_chars(monkeypatch):
+    base = cli._score_prompt_fingerprint(12000)
+    assert base == cli._score_prompt_fingerprint(12000)
+    assert base != cli._score_prompt_fingerprint(8000)  # the description cut-off
+    assert base != cli.evaluate.fingerprint(cli.SCORE_SYSTEM)
+    monkeypatch.setattr(cli, "build_user_prompt", lambda job, profile, kit, body_chars: "new template")
+    assert cli._score_prompt_fingerprint(12000) != base  # the user-prompt template
 
 
 def _label(tmp_path, sj, score):
@@ -1752,6 +1778,6 @@ def test_eval_rescore_scores_labeled_jobs_with_the_current_prompt(tmp_path, scor
     assert _applications(tmp_path, "eval", "--rescore") == 0
     assert len(fake.calls) == 2
     (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
-    assert run["source"] == "rescored" and run["prompt"] == cli.evaluate.fingerprint(cli.SCORE_SYSTEM)
+    assert run["source"] == "rescored" and run["prompt"] == cli._score_prompt_fingerprint(12000)
     assert run["metrics"]["mae"] == 3.0
     assert len(storage.load_scores(tmp_path / "data")) == 2  # scores.jsonl untouched
