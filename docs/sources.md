@@ -7,7 +7,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - [How sources work](#how-sources-work)
 - [At a glance](#at-a-glance)
 - Listing sources: [Greenhouse](#greenhouse), [Lever](#lever), [Ashby](#ashby),
-  [Workable](#workable)
+  [Workable](#workable), [iCIMS Career Sites](#icims-career-sites)
 - Listing sources with descriptions on demand: [Workday](#workday),
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr),
   [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
@@ -83,6 +83,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `lever` | company name | in the listing | 404, removed | `lever` |
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
 | `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
+| `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
 | `bamboohr` | tenant | one request each | redirect to bamboohr.com, removed | `bamboohr` |
@@ -167,6 +168,30 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
   so after a burst of about 50 requests in 10 seconds. It also has a longer-window limit: at a
   steady 1.9 a second, 429s began after 900 to 1,250 requests, and in a full fetch enough of
   them tripped the circuit breaker, skipping about 1,900 boards.
+
+## iCIMS Career Sites
+
+```yaml
+  - name: AMD
+    ats: icims_careers
+    slug: careers.amd.com
+```
+
+The branded careers sites iCIMS hosts on a company's own domain (formerly Jibe): AMD, Aon,
+Keysight, S&P Global, Paychex and others. Not the classic `careers-<company>.icims.com` portals,
+whose robots.txt disallows everything. A site's pages load scripts from `jibecdn.com`.
+
+- **Slug:** the site's host.
+- **Endpoint:** `GET https://<host>/api/jobs?page=N&limit=100`, the one the site's own search
+  page calls; `N` counts from 1, and the reply reports `totalCount`. Every page is read until that
+  total (at most 100 pages), descriptions included: the description, responsibilities and
+  qualifications.
+- **Job link:** `https://<host>/jobs/<id>`, which the site redirects to its own path.
+- **Remote:** yes if the location or title says "remote"; otherwise unknown.
+- **Unknown board:** 404, removed; a host that doesn't resolve is a connection error, and kept.
+- **Rate cap:** 0.2 requests a second per site: their robots.txt allows everything but asks for
+  a 5-second crawl delay. The source sends the cap with its requests, since a company's own domain
+  doesn't say which platform it runs; a `fetch.max_rate` entry for the host overrides it.
 
 ## Workday
 
@@ -541,6 +566,9 @@ A group can also be held to a number of requests per second, `fetch.max_rate` in
 | `apply.careers.microsoft.com` | 0.5/s | Microsoft's site answered 429 to requests one second apart. |
 | `apple` | 1/s | Each page is about 300 KB. |
 
+iCIMS Career Sites aren't in the map: each site's 0.2/s cap comes from its robots.txt's crawl
+delay and is built into the source, though an entry for its host overrides it.
+
 Keys are the group names `jobhunt -v fetch` prints, and are case-sensitive. Setting `max_rate`, in the
 file or in `JOBHUNT_FETCH_MAX_RATE`, replaces the whole map, so copy these four into it to keep
 them. `{}` removes every cap.
@@ -618,7 +646,7 @@ platform's own email alerts.
 | PageUp | Some universities | A bot wall in front of the board | The university's careers page |
 | SCALIS | Small companies | robots.txt disallows `/api/`, where the listings come from; the pages themselves have none | The company's careers page |
 | Pinpoint, Dover | Startups | robots.txt disallows the boards (Pinpoint) or their API (Dover) | The company's careers page |
-| Classic iCIMS portals (`careers-<company>.icims.com`) | Many mid-size and large employers | robots.txt: `Disallow: /` | Their newer branded careers sites often allow it |
+| Classic iCIMS portals (`careers-<company>.icims.com`) | Many mid-size and large employers | robots.txt: `Disallow: /` | Their newer branded careers sites, which `jobhunt` reads ([iCIMS Career Sites](#icims-career-sites)) |
 | Any board whose robots.txt disallows its own path | Some employers on platforms `jobhunt` otherwise reads; some Workday sites disallow their site path | robots.txt disallows that board (only the sitemap sources notice; check before adding a board) | The employer's careers page |
 | Google, Meta | Themselves | Google's robots.txt disallows its job pages; Meta's terms forbid automated collection | Their careers sites' own alerts |
 

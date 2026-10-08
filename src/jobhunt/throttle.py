@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from jobhunt.sources import request_group
+from jobhunt.sources._rate import RATE
 
 if TYPE_CHECKING:
     from jobhunt.settings import FetchSettings
@@ -240,7 +241,9 @@ class ThrottledTransport(httpx.BaseTransport):
         # Caps requests in flight across all groups; taken after the group's slot, never before.
         self._slots = threading.BoundedSemaphore(max_in_flight) if max_in_flight else None
 
-    def limiter(self, group: str) -> GroupLimiter:
+    def limiter(self, group: str, rate: float | None = None) -> GroupLimiter:
+        """The group's limiter, made on first use. ``rate`` is the source's own cap (a request's
+        ``_rate.RATE`` extension), used when ``max_rate`` names no cap for the group."""
         with self._lock:
             if group not in self._limiters:
                 self._limiters[group] = GroupLimiter(
@@ -250,7 +253,7 @@ class ThrottledTransport(httpx.BaseTransport):
                     sleep=self._sleep,
                     stop=self._stop,
                     cooldown=self._cooldown,
-                    rate=self._max_rate.get(group),
+                    rate=self._max_rate.get(group, rate),
                 )
             return self._limiters[group]
 
@@ -273,7 +276,7 @@ class ThrottledTransport(httpx.BaseTransport):
             return self._cookies.setdefault(host, httpx.Cookies())
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        limiter = self.limiter(request_group(request.url))
+        limiter = self.limiter(request_group(request.url), request.extensions.get(RATE))
         own_cookies = "cookie" in request.headers  # set by the caller: sent as they are
         retries = transient = 0
         while True:

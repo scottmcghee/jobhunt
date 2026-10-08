@@ -975,3 +975,48 @@ def test_a_sitemap_site_with_no_job_urls_to_read_gives_no_board(sitemap, robots)
     _sitemap_site(RADANCY_PAGE, sitemap, robots=robots)
     result = _survey_acme()
     assert result.platforms == ["radancy"] and result.boards == []
+
+
+# ------------------------------------------------------------------ iCIMS Career Sites
+
+JIBE_PAGE = '<html><script src="https://app.jibecdn.com/prod/search/x.js"></script></html>'
+
+
+def _jibe_site(api=None, robots="User-agent: *\nAllow: /\ncrawl-delay: 5\n"):
+    """careers.acme.com: an iCIMS Career Site; the www and bare-host guesses find nothing."""
+    for host in (ACME, "https://acme.com"):
+        respx.get(host + "/robots.txt").mock(return_value=httpx.Response(404))
+        respx.get(host + "/careers").mock(return_value=httpx.Response(404))
+    respx.get(ACME + "/").mock(return_value=httpx.Response(404))
+    site = "https://careers.acme.com"
+    respx.get(site + "/robots.txt").mock(return_value=httpx.Response(200, text=robots))
+    respx.get(site + "/").mock(return_value=httpx.Response(302, headers={"location": "/careers-home"}))
+    respx.get(site + "/careers-home").mock(return_value=httpx.Response(200, text=JIBE_PAGE))
+    answer = api or httpx.Response(200, json={"jobs": [{"data": {"req_id": "1", "title": "Director"}}], "totalCount": 40})
+    return respx.get(site + "/api/jobs").mock(return_value=answer)
+
+
+@respx.mock
+def test_an_icims_careers_site_is_an_icims_careers_board():
+    api = _jibe_site()
+    result = _survey_acme()
+    assert "icims_careers" in result.platforms
+    assert [(b.ats, b.slug, b.name) for b in result.boards] == [("icims_careers", "careers.acme.com", "Acme Corp")]
+    assert api.calls.last.request.url.params["limit"] == "1"  # one posting is enough to know
+
+
+@pytest.mark.parametrize("answer", [httpx.Response(404), httpx.Response(200, text="<html>not json</html>"),
+                                    httpx.Response(200, json={"jobs": [], "totalCount": 0})])
+@respx.mock
+def test_an_icims_careers_site_whose_api_has_no_jobs_gives_no_board(answer):
+    _jibe_site(api=answer)
+    result = _survey_acme()
+    assert "icims_careers" in result.platforms and result.boards == []
+
+
+@respx.mock
+def test_an_icims_careers_api_robots_txt_disallows_is_not_sent():
+    api = _jibe_site(robots="User-agent: *\nDisallow: /api/\n")
+    result = _survey_acme()
+    assert api.call_count == 0
+    assert result.boards == []

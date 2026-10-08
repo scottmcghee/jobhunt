@@ -78,6 +78,7 @@ PLATFORMS = {
     "eightfold": r"eightfold\.ai|/api/pcsx|/api/apply/v2",
     "oracle": r"oraclecloud\.com|/hcmUI/CandidateExperience",
     "icims": r"icims\.com",
+    "icims_careers": r"jibecdn\.com",  # iCIMS Career Sites (formerly Jibe)
     "jobvite": r"jobvite\.com",
     "taleo": r"taleo\.net",
     "successfactors": r"successfactors\.(com|eu)|jobs2web|rmkcdn",
@@ -359,6 +360,24 @@ def _read(page: httpx.Response, company: Constituent) -> tuple[set[str], list[Co
     return found, boards
 
 
+def icims_careers_boards(polite: _Polite, url: str, name: str) -> list[Company]:
+    """An iCIMS Career Site's board: its host, if one posting comes back from its job API."""
+    host = (urlsplit(url).hostname or "").lower()
+    resp = polite.get(f"https://{host}/api/jobs?page=1&limit=1")
+    if resp is None or resp.status_code >= 400:
+        return []
+    try:
+        jobs = resp.json().get("jobs")
+    except (ValueError, AttributeError):
+        return []
+    if not jobs:
+        return []
+    try:
+        return [Company(name=name, ats="icims_careers", slug=host)]
+    except ValueError:  # not a host Company accepts
+        return []
+
+
 def phenom_board(url: str, name: str) -> Company | None:
     """The Phenom board a page of the site is on: its host, and the /us/en/ in its path if any."""
     parts = urlsplit(url)
@@ -464,6 +483,8 @@ def survey_company(
             return False
         if "phenom" in found and not boards:
             boards = phenom_boards(polite, str(page.url), company.name)
+        if "icims_careers" in found and not boards:
+            boards = icims_careers_boards(polite, str(page.url), company.name)
         for ats in SITEMAP_SOURCES:
             if ats in found and not boards:
                 boards = sitemap_boards(polite, str(page.url), company.name, ats)

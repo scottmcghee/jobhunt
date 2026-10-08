@@ -41,7 +41,7 @@ src/jobhunt/
   config.py           # load and validate companies.yaml, preferences.yaml, profile and Kit
   settings.py         # tunables: defaults < config/settings.yaml < JOBHUNT_<SECTION>_<KEY> env < CLI flags
   sources/            # one module per source; __init__.py dispatches (fetch_company) and assigns rate groups
-                      # _html.py, _postings.py, _search.py, _sitemap.py are shared helpers
+                      # _html.py, _postings.py, _rate.py, _search.py, _sitemap.py are shared helpers
   filter.py           # pure: list[Job] x Preferences -> list[Job]
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
@@ -93,7 +93,7 @@ output/               # generated letters (gitignored)
 
 Every source is a module under `sources/`, an `ATSName` in `schema.py`, and an entry in one of three tables in `sources/__init__.py`:
 
-- `FETCHERS`: one listing with descriptions (Greenhouse, Lever, Ashby, Workable).
+- `FETCHERS`: one listing with descriptions (Greenhouse, Lever, Ashby, Workable; iCIMS Career Sites, paged).
 - `ON_DEMAND_FETCHERS`: the listing lacks descriptions, so each costs a request. `fetch` passes a `wants_body` check ("title passes the title filter"), so only those postings pay (Workday, SmartRecruiters, BambooHR, SuccessFactors, Radancy, Paradox).
 - `SEARCH_FETCHERS`: employers too big to list run one search per term: the title filter's target words, plus the board's `include_for_tags` extras (Amazon, Eightfold, Oracle Recruiting Cloud, Apple, Phenom). The normal filter still runs afterwards.
 
@@ -110,7 +110,7 @@ Endpoints, slug formats, gone-board signals and rate caps for each source are in
 
 ## Roadmap
 
-Done: dead-board pruning; Workday, SmartRecruiters, Workable, BambooHR, SuccessFactors, Radancy and Paradox; search sources for Amazon, Eightfold, Oracle, Apple and Phenom; the S&P 500 survey (`scripts/survey_careers.py`) to find more boards.
+Done: dead-board pruning; Workday, SmartRecruiters, Workable, BambooHR, SuccessFactors, Radancy, Paradox and iCIMS Career Sites; search sources for Amazon, Eightfold, Oracle, Apple and Phenom; the S&P 500 survey (`scripts/survey_careers.py`) to find more boards.
 
 Open: more companies with no supported ATS, case by case, under the rules above. Each item follows the workflow (fixture and test first).
 

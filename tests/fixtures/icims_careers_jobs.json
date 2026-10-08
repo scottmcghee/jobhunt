@@ -1,0 +1,90 @@
+{
+ "jobs": [
+  {
+   "data": {
+    "slug": "70001",
+    "req_id": "70001",
+    "title": "Director, Platform Engineering",
+    "description": "<p>Lead the &amp; platform team.</p><ul><li>Own Kubernetes</li></ul>",
+    "qualifications": "<p>10 years leading infrastructure teams.</p>",
+    "responsibilities": "<p>Run the SRE org.</p>",
+    "location_name": "US,Remote",
+    "full_location": "Remote, United States",
+    "short_location": "Remote, United States",
+    "country_code": "US",
+    "location_type": "LAT_LNG",
+    "multipleLocations": false,
+    "additional_locations": null,
+    "posted_date": "2026-07-20T20:14:00+0000",
+    "create_date": "2026-07-20T20:15:42+0000",
+    "apply_url": "https://careers-example.icims.com/jobs/70001/login",
+    "employment_type": "FULL_TIME",
+    "categories": [
+     {
+      "name": "Sales / Marketing"
+     }
+    ],
+    "language": "en-us",
+    "hiring_organization": "Example Corp"
+   }
+  },
+  {
+   "data": {
+    "slug": "70002",
+    "req_id": "70002",
+    "title": "Senior Manager, Developer Experience",
+    "description": "<p>Build internal tools.</p>",
+    "qualifications": null,
+    "responsibilities": null,
+    "location_name": "US,WA,Seattle",
+    "full_location": "Seattle, Washington",
+    "short_location": "Seattle, Washington",
+    "country_code": "US",
+    "location_type": "LAT_LNG",
+    "multipleLocations": false,
+    "additional_locations": null,
+    "posted_date": "2026-08-21T16:02:00+0000",
+    "create_date": "2026-08-21T18:55:53+0000",
+    "apply_url": "https://careers-example.icims.com/jobs/70002/login",
+    "employment_type": "FULL_TIME",
+    "categories": [
+     {
+      "name": "Engineering"
+     }
+    ],
+    "language": "en-us",
+    "hiring_organization": "Example Corp"
+   }
+  },
+  {
+   "data": {
+    "slug": "70003",
+    "req_id": "70003",
+    "title": "Accountant",
+    "description": "<p>Close the books.</p>",
+    "qualifications": "",
+    "responsibilities": "",
+    "location_name": "US,TX,Austin",
+    "full_location": "Austin, Texas",
+    "short_location": "Austin, Texas",
+    "country_code": "US",
+    "location_type": "LAT_LNG",
+    "multipleLocations": false,
+    "additional_locations": null,
+    "posted_date": "2026-09-11T16:32:00+0000",
+    "create_date": "2026-09-11T16:33:08+0000",
+    "apply_url": "https://careers-example.icims.com/jobs/70003/login",
+    "employment_type": "FULL_TIME",
+    "categories": [
+     {
+      "name": "Engineering"
+     }
+    ],
+    "language": "en-us",
+    "hiring_organization": "Example Corp"
+   }
+  }
+ ],
+ "totalCount": 3,
+ "count": 3
+}
