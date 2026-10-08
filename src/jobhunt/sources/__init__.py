@@ -15,6 +15,7 @@ from jobhunt.sources import (
     ashby,
     bamboohr,
     eightfold,
+    gem,
     greenhouse,
     icims_careers,
     lever,
@@ -37,6 +38,7 @@ FETCHERS: dict[ATSName, Fetcher] = {
     "ashby": ashby.fetch,
     "workable": workable.fetch,
     "icims_careers": icims_careers.fetch,
+    "gem": gem.fetch,
 }
 
 # Sources whose listings lack descriptions, so each description costs a request.
@@ -110,6 +112,7 @@ _API_HOSTS: dict[str, str] = {
     "boards-api.greenhouse.io": "greenhouse",
     "api.lever.co": "lever",
     "api.ashbyhq.com": "ashby",
+    "api.gem.com": "gem",
     "api.smartrecruiters.com": "smartrecruiters",
     "apply.workable.com": "workable",
     "www.amazon.jobs": "amazon",

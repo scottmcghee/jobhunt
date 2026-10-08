@@ -19,6 +19,8 @@
 #               automatically; fetch warns about any SmartRecruiters board with no postings.
 #   Workable:   apply.workable.com/<account>  (older: <account>.workable.com/jobs/...)
 #               API: https://apply.workable.com/api/v1/widget/accounts/<account>?details=true
+#   Gem:        jobs.gem.com/<slug>   (case-sensitive)
+#               API: https://api.gem.com/job_board/v0/<slug>/job_posts/
 #   BambooHR:   <tenant>.bamboohr.com/careers
 #               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.
