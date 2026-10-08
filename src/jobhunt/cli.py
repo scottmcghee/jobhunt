@@ -537,6 +537,10 @@ def cmd_applied(args: argparse.Namespace, data_dir: Path) -> int:
     if earlier and not args.force:
         print(f"already applied on {earlier.applied}; --force records it again", file=sys.stderr)
         return 2
+    outcomes = [e.date for e in events if e.job_key == job.key and e.kind == "outcome"]
+    if args.date and outcomes and args.date > min(outcomes):
+        print(f"{args.date} is after an outcome ({min(outcomes)})", file=sys.stderr)
+        return 2
     scores = [s.score.score for s in storage.load_scores(data_dir) if s.job.key == job.key]
     event = apps.Event(
         job_key=job.key,
@@ -544,7 +548,8 @@ def cmd_applied(args: argparse.Namespace, data_dir: Path) -> int:
         date=args.date or (earlier.applied if earlier else _today()),
         company=job.company,
         title=job.title,
-        score=scores[-1] if scores else None,
+        # A correction keeps the score applied with; a fresh application takes the latest.
+        score=earlier.score if earlier else scores[-1] if scores else None,
         resume=args.resume,
         warm=args.warm,
     )

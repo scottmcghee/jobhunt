@@ -1577,6 +1577,27 @@ def test_an_outcome_cannot_come_before_the_application(tmp_path, scored_job, cap
     assert _applications(tmp_path, "outcome", key, "rejected", "--date", "2026-10-05") == 0
 
 
+def test_a_correction_cannot_move_the_application_after_an_outcome(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "applied", key, "--resume", "v1", "--date", "2026-09-01") == 0
+    assert _applications(tmp_path, "outcome", key, "no_response", "--date", "2026-09-05") == 0
+    assert _applications(tmp_path, "outcome", key, "screen", "--date", "2026-09-10") == 0
+    assert _applications(tmp_path, "applied", key, "--resume", "v1", "--force", "--date", "2026-09-20") == 2
+    assert "after an outcome" in capsys.readouterr().err
+    assert [e["kind"] for e in _events(tmp_path)] == ["applied", "outcome", "outcome"]
+    assert _applications(tmp_path, "applied", key, "--resume", "v1", "--force", "--date", "2026-09-05") == 0
+
+
+def test_a_forced_correction_keeps_the_score_applied_with(tmp_path, scored_job):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "applied", key, "--resume", "v1", "--date", "2026-09-20") == 0
+    rescored = scored_job.model_copy(update={"score": scored_job.score.model_copy(update={"score": 5})})
+    storage.append_jsonl(tmp_path / "data" / "scores.jsonl", rescored.model_dump())
+    assert _applications(tmp_path, "applied", key, "--resume", "v2", "--force") == 0
+    assert [e["score"] for e in _events(tmp_path)] == [scored_job.score.score] * 2
+    assert scored_job.score.score != 5
+
+
 def test_a_forced_correction_keeps_the_application_date_unless_given(tmp_path, scored_job):
     key = _with_scored_job(tmp_path, scored_job)
     assert _applications(tmp_path, "applied", key, "--resume", "v1", "--date", "2026-09-20") == 0
