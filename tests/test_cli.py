@@ -1660,7 +1660,8 @@ def _labelable(tmp_path, scored_job, scores=(8, 6, 3, 1)):
     out = []
     for n, s in enumerate(scores):
         job = scored_job.job.model_copy(update={"external_id": f"j{n}", "title": f"Role {n}"})
-        sj = scored_job.model_copy(update={"job": job, "score": scored_job.score.model_copy(update={"score": s})})
+        score = scored_job.score.model_copy(update={"score": s, "rationale": f"why Role {n} scored {s}"})
+        sj = scored_job.model_copy(update={"job": job, "score": score})
         storage.append_jsonl(tmp_path / "data" / "jobs.jsonl", job.model_dump())
         storage.append_jsonl(tmp_path / "data" / "scores.jsonl", sj.model_dump())
         out.append(sj)
@@ -1770,6 +1771,7 @@ def test_eval_compares_labels_with_stored_scores(tmp_path, scored_job, capsys):
     assert "4 labeled job(s)" in out
     assert "mean error 0.75" in out  # |0| + |-2| + |0| + |-1|
     assert "Role 1" in out  # the biggest disagreement, listed with its rationale
+    assert "why Role 1 scored 6" in out
     (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
     assert run["source"] == "stored" and run["metrics"]["n"] == 4 and run["models"] == ["test-model"]
 
@@ -1793,3 +1795,21 @@ def test_eval_rescore_scores_labeled_jobs_with_the_current_prompt(tmp_path, scor
     )
     assert run["metrics"]["mae"] == 3.0
     assert len(storage.load_scores(tmp_path / "data")) == 2  # scores.jsonl untouched
+
+
+def test_eval_rescore_skips_an_unusable_model_reply(tmp_path, scored_job, monkeypatch, caplog):
+    a, b = _labelable(tmp_path, scored_job, scores=(8, 2))
+    _label(tmp_path, a, 8)
+    _label(tmp_path, b, 2)
+
+    def complete(system: str, user: str, max_tokens: int = 0) -> str:
+        if "Role 1" in user:
+            return "sorry, no JSON here"
+        return '{"score": 7, "rationale": "fresh", "suggested_modules": []}'
+
+    monkeypatch.setattr(cli, "_completer", lambda _=None: complete)
+    with caplog.at_level("WARNING"):
+        assert _applications(tmp_path, "eval", "--rescore") == 0
+    (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
+    assert run["metrics"]["n"] == 1
+    assert any(b.job.key in r.getMessage() and "skipped" in r.getMessage() for r in caplog.records)

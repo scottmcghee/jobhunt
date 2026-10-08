@@ -60,6 +60,19 @@ def test_labeling_over_several_sessions_continues_the_same_sample(platform_direc
     )
 
 
+def test_a_newly_scored_job_leaves_other_bands_order_alone(platform_director_job):
+    scored = [_scored(platform_director_job, i, 5 + i % 2) for i in range(20)]
+    scored += [_scored(platform_director_job, 100 + i, 8) for i in range(10)]
+    more = scored + [_scored(platform_director_job, 999, 9)]  # a new job in the 7-10 band
+
+    def mid_band(jobs, n, seed):  # the sample alternates bands, so n picks take n // 2 from 5-6
+        return {s.job.key for s in ev.sample(jobs, set(), n=n, seed=seed) if ev.band(s.score.score) == "5-6"}
+
+    for seed in range(6):
+        for n in range(2, 12, 2):  # the same first picks from 5-6, at every length
+            assert mid_band(scored, n, seed) == mid_band(more, n, seed)
+
+
 def test_the_sample_skips_labeled_jobs_and_is_repeatable(platform_director_job):
     scored = [_scored(platform_director_job, i, 1 + i % 10) for i in range(30)]
     first = ev.sample(scored, labeled=set(), n=5, seed=3)
