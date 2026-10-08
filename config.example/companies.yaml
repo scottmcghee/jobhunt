@@ -23,6 +23,8 @@
 #               API: https://api.gem.com/job_board/v0/<slug>/job_posts/
 #   Rippling:   ats.rippling.com/<slug>   (case kept)
 #               API: https://api.rippling.com/platform/api/ats/v1/board/<slug>/jobs
+#   USAJOBS:    slug is a place, "City, State" or "City, State/<miles>", or "remote"; needs
+#               usajobs.api_key and usajobs.email in settings.yaml (free key: developer.usajobs.gov)
 #   BambooHR:   <tenant>.bamboohr.com/careers
 #               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.

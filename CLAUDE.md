@@ -21,7 +21,7 @@ It is also a portfolio piece. Code quality, tests, and the README matter as much
 - **Tests first.** Every module under `src/jobhunt/` has a matching `tests/test_<module>.py`. Write or extend the test before the implementation. Run `pytest` before declaring anything done.
 - **No live network in tests.** Sources are tested against fixtures in `tests/fixtures/` using `respx`. Model calls use a fake `Completer`, never a real backend. `pytest` must pass offline.
 - **Idempotent ingestion.** Re-running `jobhunt fetch` never duplicates a job. The dedupe key is `(source, company_slug, external_id)` (`Job.key`); `data/seen.json` is the ledger.
-- **Secrets and personal details stay out.** `ANTHROPIC_API_KEY` (if used) comes from the environment. Nothing in `config/`, `data/`, or `output/` is committed (see `.gitignore`): `config/` holds a real person's profile and contact details. Committed templates live in `config.example/` and describe a fictional candidate; never copy real details into them.
+- **Secrets and personal details stay out.** `ANTHROPIC_API_KEY` (if used) comes from the environment; USAJOBS's key and email come from the environment or the gitignored `config/settings.yaml`, and go to data.usajobs.gov only. Nothing in `config/`, `data/`, or `output/` is committed (see `.gitignore`): `config/` holds a real person's profile and contact details. Committed templates live in `config.example/` and describe a fictional candidate; never copy real details into them.
 - **Tests use the templates.** Tests read `config.example/`, never `config/`, so they pass on a fresh clone. The one exception, `test_local_config_is_valid`, only validates a personal `config/` if one exists.
 - **Small functions, typed.** Pydantic models for all data crossing a boundary. Type hints everywhere. Prefer pure functions; isolate I/O at the edges (`sources/`, `storage.py`, `llm.py`).
 
@@ -95,7 +95,7 @@ Every source is a module under `sources/`, an `ATSName` in `schema.py`, and an e
 
 - `FETCHERS`: one listing with descriptions (Greenhouse, Lever, Ashby, Workable, Gem; iCIMS Career Sites, paged).
 - `ON_DEMAND_FETCHERS`: the listing lacks descriptions, so each costs a request. `fetch` passes a `wants_body` check ("title passes the title filter"), so only those postings pay (Workday, SmartRecruiters, BambooHR, SuccessFactors, Radancy, Paradox, Rippling).
-- `SEARCH_FETCHERS`: employers too big to list run one search per term: the title filter's target words, plus the board's `include_for_tags` extras (Amazon, Eightfold, Oracle Recruiting Cloud, Apple, Phenom). The normal filter still runs afterwards.
+- `SEARCH_FETCHERS`: employers too big to list run one search per term: the title filter's target words, plus the board's `include_for_tags` extras (Amazon, Eightfold, Oracle Recruiting Cloud, Apple, Phenom, USAJOBS). The normal filter still runs afterwards.
 
 Endpoints, slug formats, gone-board signals and rate caps for each source are in [docs/sources.md](docs/sources.md).
 
@@ -110,7 +110,7 @@ Endpoints, slug formats, gone-board signals and rate caps for each source are in
 
 ## Roadmap
 
-Done: dead-board pruning; Workday, SmartRecruiters, Workable, BambooHR, SuccessFactors, Radancy, Paradox, iCIMS Career Sites, Gem and Rippling; search sources for Amazon, Eightfold, Oracle, Apple and Phenom; the S&P 500 survey (`scripts/survey_careers.py`) to find more boards.
+Done: dead-board pruning; Workday, SmartRecruiters, Workable, BambooHR, SuccessFactors, Radancy, Paradox, iCIMS Career Sites, Gem and Rippling; search sources for Amazon, Eightfold, Oracle, Apple, Phenom and USAJOBS; the S&P 500 survey (`scripts/survey_careers.py`) to find more boards.
 
 Open: more companies with no supported ATS, case by case, under the rules above. Each item follows the workflow (fixture and test first).
 

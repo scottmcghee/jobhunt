@@ -12,7 +12,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr), [Rippling](#rippling),
   [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
 - Search sources: [Amazon](#amazon), [Eightfold](#eightfold), [Oracle Recruiting Cloud](#oracle-recruiting-cloud),
-  [Apple](#apple), [Phenom](#phenom)
+  [Apple](#apple), [Phenom](#phenom), [USAJOBS](#usajobs)
 - [Politeness](#politeness)
 - [Not covered: watch these by hand](#not-covered-watch-these-by-hand)
 
@@ -50,7 +50,8 @@ Rippling, and SuccessFactors sites without a full feed, Radancy and Paradox.
 
 **Search sources** are sites too big to list in full. Instead, `fetch` runs one search per
 target title word (`title.must_include_any` in `preferences.yaml`, plus any `include_for_tags`
-words for the board's tags) and merges the results: Amazon, Eightfold, Oracle, Apple and Phenom.
+words for the board's tags) and merges the results: Amazon, Eightfold, Oracle, Apple, Phenom and
+USAJOBS.
 If you list no target words, it runs one unfiltered search. These searches match whole words
 only, so a filter wildcard like `recruit*` is searched as just `recruit`, and `fetch` warns about
 it. Each term brings in at most `fetch.max_per_term` postings for that source (set in
@@ -98,6 +99,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `oracle` | `host/site` | one request each | unknown site: the host's postings; unknown host: connection error, kept | the tenant host |
 | `apple` | location filter | one page each | empty results, warned | `apple` (1 request/s) |
 | `phenom` | `host/country/language`, or `host` | one request each | wrong locale: empty results, warned | the site's host |
+| `usajobs` | a place (`City, State`, optionally `/radius`), or `remote` | in the results | no key or email: skipped, warned | `usajobs` (1 request/s) |
 
 The rate group is the queue a board's requests share; see [Politeness](#politeness).
 
@@ -558,6 +560,34 @@ answers the same public JSON endpoint on its own host, the one its search page c
 - **Unknown board:** a wrong country or language finds nothing rather than a 404, so the board is
   never removed; `fetch` warns that it found nothing. An unknown host is a connection error.
 - **Rate group:** the site's host.
+
+## USAJOBS
+
+```yaml
+  - name: USAJOBS
+    ats: usajobs
+    slug: Seattle, Washington/50   # or: remote
+```
+
+The US federal government's jobs, through USAJOBS's documented search API. Unlike every other
+source it needs credentials: a free API key from developer.usajobs.gov and the email address it
+was requested with, set as `usajobs.api_key` and `usajobs.email` in `config/settings.yaml` (or
+`JOBHUNT_USAJOBS_API_KEY` and `JOBHUNT_USAJOBS_EMAIL`). They are sent to data.usajobs.gov only;
+without both, a USAJOBS board is skipped with a warning.
+
+- **Slug:** where to search: a place USAJOBS knows (`Seattle, Washington`), optionally with a
+  radius in miles after a slash (`Seattle, Washington/50`), or `remote` for remote jobs anywhere.
+  A place's search already includes remote jobs, so one board is usually enough.
+- **Endpoint:** `GET https://data.usajobs.gov/api/Search?Keyword=...&ResultsPerPage=500&Page=N&Fields=Full`,
+  with the place as `LocationName` and `Radius`, or `RemoteIndicator=True`; headers `Host`,
+  `User-Agent` (the email) and `Authorization-Key`. One search per term, descriptions included.
+- **Company:** each posting's agency (`OrganizationName`), not "USAJOBS".
+- **Id:** the control number (`MatchedObjectId`, the number in its link); one announcement can list
+  several.
+- **Remote:** yes if USAJOBS marks it remote or its location says so.
+- **Titles:** federal technology leadership is often "Supervisory IT Specialist" or "Chief ...",
+  which the usual target words don't search for; an `include_for_tags` entry for a tag on the
+  USAJOBS board adds such words to its searches and its title filter.
 
 ## Politeness
 

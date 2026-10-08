@@ -241,6 +241,7 @@ def _fetch_board(
     pool: Executor | None = None,
     search: Sequence[str] = (),
     max_per_term: int | None = None,
+    usajobs_auth: tuple[str, str] | None = None,
 ) -> BoardOutcome:
     """Fetch one board. Touches no shared state, and a failing board never stops the run.
 
@@ -255,6 +256,7 @@ def _fetch_board(
             pool=pool,
             search=search,
             max_per_term=max_per_term,
+            usajobs_auth=usajobs_auth,
         )
         return BoardOutcome(company, jobs=jobs)
     except httpx.HTTPStatusError as e:
@@ -353,6 +355,8 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     interrupted = False
     fetch = args.settings.fetch
     prune = fetch.prune_after_404s
+    federal = args.settings.usajobs  # the key and email go to USAJOBS boards only
+    usajobs_auth = (federal.api_key, federal.email) if federal.api_key and federal.email else None
 
     def book(outcome: BoardOutcome) -> None:
         """Record one board, then save it: its new jobs, the seen set and misses, then progress."""
@@ -388,6 +392,7 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
                 # search terms for sites too big to list, with the board's tag extras
                 prefs.title.targets(company.tags),
                 fetch.max_per_term.get(company.ats),
+                usajobs_auth,
             ),
             group_of=rate_group,
             per_group=args.per_host,

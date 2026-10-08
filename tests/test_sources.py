@@ -34,6 +34,7 @@ from jobhunt.sources import (
     rippling,
     smartrecruiters,
     successfactors,
+    usajobs,
     workable,
     workday,
 )
@@ -1303,6 +1304,8 @@ PH = "https://careers.example.com/widgets"
 IC = "https://careers.example.com/api/jobs"  # iCIMS Career Sites
 GEM = "https://api.gem.com/job_board/v0/examplegem/job_posts/"
 RIP = "https://api.rippling.com/platform/api/ats/v1/board/examplerip/jobs"
+UJ = "https://data.usajobs.gov/api/Search"
+UJ_AUTH = ("test-key", "me@example.com")
 
 
 def _phenom_routes(fixture_json, detail=None):
@@ -2843,3 +2846,96 @@ def test_rippling_keeps_a_posting_with_no_location(rippling_company, fixture_jso
         jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: False)
     assert [j.external_id for j in jobs] == RIP_IDS
     assert [j.location for j in jobs] == ["Remote (United States)", "", ""]
+
+
+# ------------------------------------------------------------------ USAJOBS
+
+
+def _usajobs(fixture_json, pages=None):
+    return respx.get(UJ).mock(
+        side_effect=pages or [httpx.Response(200, json=fixture_json("usajobs_search.json"))] * 10
+    )
+
+
+@respx.mock
+def test_usajobs_searches_each_term_with_the_key_and_email(usajobs_company, fixture_json):
+    route = _usajobs(fixture_json)
+    with httpx.Client() as client:
+        jobs = fetch_company(usajobs_company, client, search=["director", "head of"], usajobs_auth=UJ_AUTH)
+    sent = [c.request for c in route.calls]
+    assert [r.url.params["Keyword"] for r in sent] == ["director", "head of"]
+    r = sent[0]
+    assert r.headers["Authorization-Key"] == "test-key" and r.headers["User-Agent"] == "me@example.com"
+    assert r.headers["Host"] == "data.usajobs.gov"
+    params = dict(r.url.params)
+    assert params["LocationName"] == "Springfield, Illinois" and params["Radius"] == "50"
+    assert (params["ResultsPerPage"], params["Page"], params["Fields"]) == ("500", "1", "Full")
+    assert "RemoteIndicator" not in params  # a place's search includes its remote jobs
+    assert len(jobs) == 3  # the same postings from both terms, once each
+
+
+@respx.mock
+def test_usajobs_normalizes(usajobs_company, fixture_json):
+    _usajobs(fixture_json)
+    with httpx.Client() as client:
+        jobs = usajobs.fetch(usajobs_company, client, ["director"], auth=UJ_AUTH)
+    # two postings of one announcement (one PositionID) stay apart: the control number is the id
+    assert [j.external_id for j in jobs] == ["900000001", "900000002", "900000003"]
+    j = jobs[0]
+    assert (j.source, j.company, j.company_slug) == ("usajobs", "Example Agency", "Springfield, Illinois/50")
+    assert j.key == "usajobs:Springfield, Illinois/50:900000001"
+    assert j.title == "Director, Cloud Infrastructure"
+    assert j.url == "https://www.usajobs.gov/job/900000001"  # without the :443
+    assert j.location == "Anywhere in the U.S. (remote job)" and j.remote is True
+    assert jobs[1].remote is None and jobs[1].location == "Seattle, Washington"
+    assert "Lead the & agency's cloud platform." in j.body and "Own the AWS landing zone" in j.body
+    assert "Ten years leading infrastructure." in j.body and "<" not in j.body
+    assert j.posted_at == "2026-09-30T00:00:00+00:00"
+
+
+@respx.mock
+def test_usajobs_a_remote_board_searches_remote_jobs_anywhere(fixture_json):
+    route = _usajobs(fixture_json)
+    board = Company(name="USAJOBS", ats="usajobs", slug="remote")
+    with httpx.Client() as client:
+        usajobs.fetch(board, client, ["director"], auth=UJ_AUTH)
+    params = dict(route.calls[0].request.url.params)
+    assert params["RemoteIndicator"] == "True" and "LocationName" not in params and "Radius" not in params
+
+
+@respx.mock
+def test_usajobs_a_place_without_a_radius_sends_none(fixture_json):
+    route = _usajobs(fixture_json)
+    board = Company(name="USAJOBS", ats="usajobs", slug="Springfield, Illinois")
+    with httpx.Client() as client:
+        usajobs.fetch(board, client, ["director"], auth=UJ_AUTH)
+    params = dict(route.calls[0].request.url.params)
+    assert params["LocationName"] == "Springfield, Illinois" and "Radius" not in params
+
+
+@respx.mock
+def test_usajobs_pages_through_the_results(usajobs_company, fixture_json):
+    first = fixture_json("usajobs_search.json")
+    first["SearchResult"]["UserArea"]["NumberOfPages"] = "2"
+    second = fixture_json("usajobs_search.json")
+    for item in second["SearchResult"]["SearchResultItems"]:
+        item["MatchedObjectId"] = "8" + item["MatchedObjectId"][1:]
+    route = _usajobs(fixture_json, pages=[httpx.Response(200, json=first), httpx.Response(200, json=second)])
+    with httpx.Client() as client:
+        jobs = usajobs.fetch(usajobs_company, client, ["director"], auth=UJ_AUTH)
+    assert [c.request.url.params["Page"] for c in route.calls] == ["1", "2"]
+    assert len(jobs) == 6
+
+
+@respx.mock
+def test_usajobs_without_a_key_or_email_is_skipped_with_a_warning(usajobs_company, caplog):
+    route = respx.get(UJ)
+    with httpx.Client() as client:
+        assert usajobs.fetch(usajobs_company, client, ["director"], auth=None) == []
+        assert usajobs.fetch(usajobs_company, client, ["director"], auth=("key", "")) == []
+    assert route.call_count == 0
+    assert "usajobs.api_key and usajobs.email" in caplog.text
+
+
+def test_usajobs_rate_group(usajobs_company):
+    assert rate_group(usajobs_company) == "usajobs" == request_group(httpx.URL(UJ))
