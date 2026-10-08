@@ -66,8 +66,9 @@ def sample(
     jobs near the letter line. Each pick comes from the band with the fewest labels so far (ties go
     to the higher band), counting labels from earlier runs. Each band's order is a seeded shuffle
     of all its jobs, labeled ones included, so a later run with the same seed continues the same
-    sample. The picks are shuffled again for display, so a job's position doesn't give away its
-    band.
+    sample as long as the set of scored jobs is unchanged; newly scored jobs reshuffle their
+    bands, though the picks still favor the bands with the fewest labels. The picks are shuffled
+    again for display, so a job's position doesn't give away its band.
     """
     rng = random.Random(seed)
     pools: dict[str, list[ScoredJob]] = {b: [] for b in BANDS}

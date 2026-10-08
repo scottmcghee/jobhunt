@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -1738,13 +1739,22 @@ def test_label_picks_up_where_it_left_off(tmp_path, scored_job, monkeypatch, cap
     assert "already 2 labeled" in capsys.readouterr().out
 
 
-def test_the_scoring_prompt_fingerprint_covers_template_and_body_chars(monkeypatch):
-    base = cli._score_prompt_fingerprint(12000)
-    assert base == cli._score_prompt_fingerprint(12000)
-    assert base != cli._score_prompt_fingerprint(8000)  # the description cut-off
+def test_the_scoring_prompt_fingerprint_covers_template_and_body_chars(monkeypatch, profile, kit):
+    base = cli._score_prompt_fingerprint(profile, kit, 12000)
+    assert base == cli._score_prompt_fingerprint(profile, kit, 12000)
+    assert base != cli._score_prompt_fingerprint(profile, kit, 8000)  # the description cut-off
     assert base != cli.evaluate.fingerprint(cli.SCORE_SYSTEM)
     monkeypatch.setattr(cli, "build_user_prompt", lambda job, profile, kit, body_chars: "new template")
-    assert cli._score_prompt_fingerprint(12000) != base  # the user-prompt template
+    assert cli._score_prompt_fingerprint(profile, kit, 12000) != base  # the user-prompt template
+
+
+def test_the_scoring_prompt_fingerprint_covers_profile_and_kit(profile, kit):
+    base = cli._score_prompt_fingerprint(profile, kit, 12000)
+    assert cli._score_prompt_fingerprint(profile + "\nKnown gaps: Rust", kit, 12000) != base
+    module = next(iter(kit.modules.values()))
+    edited = dataclasses.replace(module, use_when=[*module.use_when, "a new trigger"])
+    other_kit = dataclasses.replace(kit, modules={**kit.modules, module.id: edited})
+    assert cli._score_prompt_fingerprint(profile, other_kit, 12000) != base
 
 
 def _label(tmp_path, sj, score):
@@ -1778,6 +1788,8 @@ def test_eval_rescore_scores_labeled_jobs_with_the_current_prompt(tmp_path, scor
     assert _applications(tmp_path, "eval", "--rescore") == 0
     assert len(fake.calls) == 2
     (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
-    assert run["source"] == "rescored" and run["prompt"] == cli._score_prompt_fingerprint(12000)
+    assert run["source"] == "rescored" and run["prompt"] == cli._score_prompt_fingerprint(
+        cli.config.load_profile(), cli.config.load_kit(), 12000
+    )
     assert run["metrics"]["mae"] == 3.0
     assert len(storage.load_scores(tmp_path / "data")) == 2  # scores.jsonl untouched

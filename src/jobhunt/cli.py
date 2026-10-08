@@ -668,9 +668,10 @@ def cmd_label(args: argparse.Namespace, data_dir: Path) -> int:
     return 0
 
 
-def _score_prompt_fingerprint(body_chars: int) -> str:
+def _score_prompt_fingerprint(profile: str, kit: config.Kit, body_chars: int) -> str:
     """A fingerprint of everything that shapes the scoring prompt: the system prompt, the
-    user-prompt template (rendered with placeholders) and how much of a description it sends."""
+    user-prompt template with the candidate profile and Kit modules (rendered with a placeholder
+    job) and how much of a description it sends. Only the hash is stored, never the profile."""
     job = Job(
         source="greenhouse",
         company="{company}",
@@ -681,9 +682,7 @@ def _score_prompt_fingerprint(body_chars: int) -> str:
         url="{url}",
         body="{body}",
     )
-    module = config.KitModule("{module}", "{module_title}", ["{use_when}"], text="")
-    kit = config.Kit(opening="", closing="", modules={module.id: module})
-    user = build_user_prompt(job, "{profile}", kit, body_chars)
+    user = build_user_prompt(job, profile, kit, body_chars)
     return evaluate.fingerprint(f"{SCORE_SYSTEM}\n{user}\nbody_chars={body_chars}")
 
 
@@ -719,7 +718,10 @@ def cmd_eval(args: argparse.Namespace, data_dir: Path, complete: Completer | Non
     keys = [k for k in labels if k in latest]
     if args.rescore:
         scored = _rescore_labeled(args, keys, latest, complete)
-        source, prompt = "rescored", _score_prompt_fingerprint(args.settings.llm.body_chars)
+        source = "rescored"
+        prompt = _score_prompt_fingerprint(
+            config.load_profile(), config.load_kit(), args.settings.llm.body_chars
+        )
     else:
         scored = {k: latest[k] for k in keys}
         source, prompt = "stored", None
