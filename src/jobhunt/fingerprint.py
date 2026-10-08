@@ -1,6 +1,6 @@
 """Which hiring platform a careers site runs, and the job board jobhunt should read for it.
 
-Shared by ``scripts/survey_careers.py`` (the S&P 500 survey) and the planned discovery command.
+Shared by ``scripts/survey_careers.py`` (the S&P 500 survey) and ``python -m jobhunt.discover``.
 A page is checked for platform fingerprints (``PLATFORMS``); every URL in it goes through
 ``jobhunt.slugs.board_from_url``; and a few platforms get one or two more polite requests to find
 the board (Phenom's search, an iCIMS Career Site's job API, a Radancy or Paradox sitemap). Sites

@@ -1,0 +1,270 @@
+"""Find new job boards: from Common Crawl's URLs on known platforms, and from careers hosts.
+
+    python -m jobhunt.discover [--platforms P ...] [--crawls N] [--no-crawl]
+                               [--hosts FILE ...] [--refresh] [--check] [-o OUT]
+
+Two routes, one output (``data/discovered.yaml``, entries to review and paste into
+``config/companies.yaml``; boards already there are left out):
+
+- **Known platforms.** Board URLs on Workday, Greenhouse, Lever, Ashby, SmartRecruiters,
+  Workable, BambooHR, Eightfold, Gem and Rippling follow patterns, and Common Crawl's index keeps
+  each platform's URLs together, so ``commoncrawl.urls`` finds every one a crawl saw for a few
+  MB of downloads. ``slugs.board_from_url`` turns them into boards (new Workday datacenters
+  included). Oracle is opt-in (``--platforms oracle``): its prefix is all of oraclecloud.com.
+- **Careers hosts.** A company's own careers site (``careers.acme.com``) says nothing in its URL,
+  so each host in ``--hosts`` files (plain hosts, URLs, or lines grepped from a Common Crawl
+  ``cluster.idx``) gets the S&P 500 survey's fingerprinting (``fingerprint.survey_site``): its
+  page is read for the platform it runs and the board it points at, politely and within
+  robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are skipped: their robots.txt
+  disallows everything. Results are cached per host in ``data/discovery/hosts.json``, so a rerun
+  only visits new hosts (``--refresh`` visits them all again).
+
+``--check`` fetches the first page of each new board and drops those with no open postings, as
+``python -m jobhunt.slugs --check`` does. A board found on a careers host is named after the host
+(``careers.acme.com`` -> ``acme``); fix the name when you paste it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import itertools
+import json
+import logging
+import re
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import httpx
+
+from jobhunt import commoncrawl, config, fingerprint, settings, slugs, storage, throttle
+from jobhunt.schema import Company
+
+log = logging.getLogger("jobhunt.discover")
+
+# Each platform's board hosts, for its Common Crawl prefix: (host, its subdomains too).
+PLATFORM_HOSTS: dict[str, list[tuple[str, bool]]] = {
+    "workday": [("myworkdayjobs.com", True)],
+    "greenhouse": [("greenhouse.io", True)],
+    "lever": [("jobs.lever.co", False)],
+    "ashby": [("jobs.ashbyhq.com", False)],
+    "smartrecruiters": [
+        ("jobs.smartrecruiters.com", False), ("careers.smartrecruiters.com", False)
+    ],
+    "workable": [("workable.com", True)],
+    "bamboohr": [("bamboohr.com", True)],
+    "eightfold": [("eightfold.ai", True)],
+    "gem": [("jobs.gem.com", False)],
+    "rippling": [("ats.rippling.com", False)],
+    "oracle": [("oraclecloud.com", True)],
+}
+DEFAULT_PLATFORMS = [p for p in PLATFORM_HOSTS if p != "oracle"]
+_CLASSIC_ICIMS = re.compile(r"[a-z0-9-]+\.icims\.com")
+_SURT_HOST = re.compile(r"([a-z0-9-]+(?:,[a-z0-9-]+)+)(?::\d+)?\)")
+_HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
+_PREFIXES = ("www.", "careers.", "jobs.", "career.", "job.")
+_SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu"}  # gamma.co.uk
+
+
+def prefixes(platforms: Iterable[str]) -> list[str]:
+    """The SURT prefixes of the platforms' board hosts, each once, in order."""
+    found = [commoncrawl.surt_prefix(h, sub) for p in platforms for h, sub in PLATFORM_HOSTS[p]]
+    return list(dict.fromkeys(found))
+
+
+def crawl_boards(
+    client: httpx.Client,
+    platforms: Sequence[str],
+    crawls: int,
+    cache_dir: Path,
+    known: Iterable[Company] = (),
+) -> list[Company]:
+    """New boards from the URLs the latest ``crawls`` crawls saw on the platforms' hosts."""
+    wanted = prefixes(platforms)
+    ids = commoncrawl.latest_crawls(client, crawls)
+    urls = itertools.chain.from_iterable(
+        commoncrawl.urls(client, crawl, wanted, cache_dir) for crawl in ids
+    )
+    boards = slugs.discover(urls, known)
+    log.info("common crawl %s: %d new boards", ", ".join(ids), len(boards))
+    return boards
+
+
+def _host(line: str) -> str | None:
+    """The host a line names: a plain host, a URL, or a Common Crawl index line (SURT)."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    if "://" in line:
+        return (urlsplit(line.split()[0]).hostname or "").lower() or None
+    if m := _SURT_HOST.match(line.lower()):
+        return ".".join(reversed(m.group(1).split(",")))
+    token = line.split()[0].lower().strip("/")
+    return token if _HOST.fullmatch(token) else None
+
+
+def read_hosts(lines: Iterable[str]) -> tuple[list[str], list[str]]:
+    """The careers hosts in ``lines``, each once, and the classic iCIMS hosts left out."""
+    hosts: dict[str, None] = {}
+    skipped: dict[str, None] = {}
+    for line in lines:
+        if host := _host(line):
+            (skipped if _CLASSIC_ICIMS.fullmatch(host) else hosts)[host] = None
+    return list(hosts), list(skipped)
+
+
+def name_from_host(host: str) -> str:
+    """A placeholder company name: ``careers.acme.com`` -> ``acme``."""
+    labels = host.lower().split(".")
+    while len(labels) > 2 and f"{labels[0]}." in _PREFIXES:
+        labels = labels[1:]
+    if len(labels) >= 3 and labels[-2] in _SECOND_LEVEL:
+        return labels[-3]
+    return labels[-2] if len(labels) >= 2 else labels[0]
+
+
+def _load_cache(path: Path) -> dict[str, dict]:
+    try:
+        cache = json.loads(path.read_text()) if path.exists() else {}
+    except ValueError:
+        log.warning("%s: not valid JSON; starting a new one", path)
+        cache = {}
+    return cache if isinstance(cache, dict) else {}
+
+
+def survey_hosts(
+    hosts: Iterable[str],
+    client: httpx.Client,
+    cache_path: Path,
+    delay: float = 1.0,
+    refresh: bool = False,
+) -> list[Company]:
+    """The boards each careers host's site points at; hosts surveyed before come from the cache.
+
+    The cache is saved after every host, so an interrupted run keeps what it found. A host that
+    gave no response at all isn't cached, so the next run tries it again.
+    """
+    cache = _load_cache(cache_path)
+    boards: list[Company] = []
+    for host in hosts:
+        entry = cache.get(host)
+        if entry is None or refresh:
+            polite = fingerprint.Polite(client, delay)
+            home = f"https://{host}/"
+            site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
+            if polite.errors and not polite.responses:
+                log.warning("%s: unreachable (%s)", host, polite.errors[0])
+                continue
+            entry = {
+                "surveyed_at": datetime.now(UTC).isoformat(),
+                "platforms": site.platforms,
+                "pages": site.pages,
+                "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],
+            }
+            cache[host] = entry
+            storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
+            log.info("%s: %s", host, ", ".join(entry["platforms"]) or "no platform found")
+        for raw in entry.get("boards") or []:
+            try:
+                boards.append(Company.model_validate(raw))
+            except ValueError:  # a cached board this version no longer accepts
+                continue
+    storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
+    return boards
+
+
+def _new(boards: Iterable[Company], known: Iterable[Company]) -> list[Company]:
+    """``boards`` minus ``known`` and repeats (compared as ``slugs.discover`` does), sorted."""
+    seen = {slugs._dedupe_key(c) for c in known}
+    found = []
+    for board in boards:
+        if (key := slugs._dedupe_key(board)) not in seen:
+            seen.add(key)
+            found.append(board)
+    return sorted(found, key=lambda c: (c.ats, c.slug.lower()))
+
+
+def _host_client(fetch: settings.FetchSettings) -> httpx.Client:
+    """One request at a time, like the survey; no retries (a guessed host often doesn't exist)."""
+    transport = throttle.ThrottledTransport(
+        start=1,
+        ceiling=1,
+        max_in_flight=1,
+        max_retries=fetch.max_retries,
+        max_retry_after=fetch.max_retry_after,
+        transient_retries=0,
+        connect_retries=0,
+    )
+    return httpx.Client(
+        transport=transport,
+        timeout=fetch.timeout,
+        headers={"User-Agent": fetch.user_agent},
+        cookies=throttle.no_cookies(),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m jobhunt.discover", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--platforms", nargs="+", choices=list(PLATFORM_HOSTS),
+                        default=DEFAULT_PLATFORMS, metavar="P",
+                        help=f"platforms to find in Common Crawl (default: all but oracle; "
+                             f"choices: {', '.join(PLATFORM_HOSTS)})")
+    parser.add_argument("--crawls", type=int, default=1, metavar="N",
+                        help="how many of the latest crawls to read (default 1)")
+    parser.add_argument("--no-crawl", action="store_true", help="skip Common Crawl")
+    parser.add_argument("--hosts", nargs="+", type=Path, default=[], metavar="FILE",
+                        help="files of careers hosts, URLs or cluster.idx lines to fingerprint")
+    parser.add_argument("--refresh", action="store_true", help="survey cached hosts again")
+    parser.add_argument("--delay", type=float, default=1.0,
+                        help="seconds between requests to careers sites (default 1)")
+    parser.add_argument("--check", action="store_true",
+                        help="fetch the first page of each new board; drop those with no postings")
+    parser.add_argument("--companies", type=Path, help="existing companies.yaml to skip")
+    parser.add_argument("--data-dir", type=Path, default=storage.DEFAULT_DATA_DIR)
+    parser.add_argument("-o", "--out", type=Path, help="default: <data-dir>/discovered.yaml")
+    args = parser.parse_args(argv)
+
+    if args.no_crawl and not args.hosts:
+        log.error("nothing to do: --no-crawl and no --hosts")
+        return 2
+    if missing := [p for p in args.hosts if not p.is_file()]:
+        log.error("no such hosts file: %s", ", ".join(map(str, missing)))
+        return 2
+    try:
+        tunables = settings.load()
+    except settings.SettingsError as e:
+        log.error("%s", e)
+        return 2
+    fetch = tunables.fetch
+    known = config.load_companies(args.companies)
+    found: list[Company] = []
+    with slugs._client(fetch) as client:
+        if not args.no_crawl:
+            cache_dir = args.data_dir / "commoncrawl"
+            found += crawl_boards(client, args.platforms, args.crawls, cache_dir, known)
+        if args.hosts:
+            lines = itertools.chain.from_iterable(p.read_text().splitlines() for p in args.hosts)
+            hosts, skipped = read_hosts(lines)
+            if skipped:
+                log.info("skipped %d classic iCIMS hosts (robots.txt disallows them)", len(skipped))
+            with _host_client(fetch) as host_client:
+                cache = args.data_dir / "discovery" / "hosts.json"
+                found += survey_hosts(hosts, host_client, cache, args.delay, args.refresh)
+        found = _new(found, known)
+        if args.check:
+            checked = slugs.check(found, client, tunables.slugs.check_workers)
+            log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
+            found = checked
+    out = args.out or args.data_dir / "discovered.yaml"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(slugs.render(found))
+    log.info("%d new boards -> %s", len(found), out)
+    return 0
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.ERROR, format="%(message)s")
+    log.setLevel(logging.INFO)
+    raise SystemExit(main())

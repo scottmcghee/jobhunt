@@ -55,6 +55,7 @@ src/jobhunt/
   cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications
                       #  | label | eval`
   commoncrawl.py      # Common Crawl's URL index read by byte range: every URL a crawl saw under some hosts
+  discover.py         # `python -m jobhunt.discover`: new boards from Common Crawl and careers hosts
   fingerprint.py      # which hiring platform a careers site runs, and its board (survey and discovery)
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
                       # offline, except --check, which fetches the first page of each new board via sources/
