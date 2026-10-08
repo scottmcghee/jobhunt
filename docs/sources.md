@@ -513,14 +513,9 @@ the end of a run: requests, throttles, peak concurrency and the current limit.
 Each group has its own queue of boards and its own limit on requests in flight. The limit starts
 at 2 (`fetch.start_per_host`). It grows by a little after each success, up to `--per-host`
 (default 6). When the host answers 429 it halves, never below 1 and at most once every 5 seconds
-(`fetch.cooldown`), so a burst of 429s from requests already in flight counts once. Groups never
-wait on each other: a datacenter with a thousand boards doesn't hold up the API hosts.
-
-`--workers` (default 32) caps requests in flight across all groups. A request waits until it can
-take its group's slot and a global one together, so a queued request holds neither. When the
-global slots run short, groups take turns for them, so each gets a fair share however many
-requests it has queued. Oracle tenants are each their own host and group, but take turns as one,
-`oracle`: otherwise seven hundred one-board tenants would crowd out a Workday datacenter.
+(`fetch.cooldown`), so a burst of 429s from requests already in flight counts once. `--workers`
+(default 32) caps requests in flight across all groups. Groups never wait on each other: a
+datacenter with a thousand boards doesn't hold up the API hosts.
 
 Within a board, Workday's and SmartRecruiters' later listing pages, and the description requests
 of every source that fetches them separately, go out concurrently in that board's group, under

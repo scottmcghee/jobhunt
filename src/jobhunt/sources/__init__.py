@@ -140,12 +140,3 @@ def request_group(url: httpx.URL) -> str:
     if _EIGHTFOLD_HOST.fullmatch(host):
         return "eightfold"
     return _API_HOSTS.get(host, host)
-
-
-def share_class(group: str) -> str:
-    """Which rate groups take turns for the global request slots as one (see throttle.Dispatcher).
-
-    Every Oracle tenant is its own host, so its own group, and hundreds of one-board tenants
-    taking turns one by one would crowd out the big groups, like a Workday datacenter.
-    """
-    return "oracle" if group.endswith(".oraclecloud.com") else group
