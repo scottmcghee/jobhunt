@@ -93,10 +93,12 @@ def fetch_company(
     source) early. iCIMS Career Sites is paged too but ignores it: it reads every page, up to its
     own 100-page guard. The others are one request.
 
-    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom):
-    they search per term instead (``fetch`` passes the title filter's target-level words). Others
-    ignore it. ``max_per_term`` caps how many postings one term may bring in (None: the source's
-    own default; fetch passes fetch.max_per_term).
+    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom,
+    USAJOBS): they search per term instead (``fetch`` passes the title filter's target-level
+    words). Others ignore it. ``max_per_term`` caps how many postings one term may bring in (None:
+    the source's own default; fetch passes fetch.max_per_term).
+    ``usajobs_auth`` is the (key, email) pair, handed to USAJOBS boards only; without it they are
+    skipped with a warning.
     With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple, Phenom, Radancy,
     Paradox, Rippling and SuccessFactors fetch later pages and descriptions concurrently on it
     (BambooHR, Oracle, Apple, Phenom, Radancy, Paradox, Rippling and SuccessFactors only

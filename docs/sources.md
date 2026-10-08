@@ -55,7 +55,7 @@ USAJOBS.
 If you list no target words, it runs one unfiltered search. These searches match whole words
 only, so a filter wildcard like `recruit*` is searched as just `recruit`, and `fetch` warns about
 it. Each term brings in at most `fetch.max_per_term` postings for that source (set in
-`settings.yaml`); a term that hits the cap is logged. Except for Amazon, a description is fetched only for postings
+`settings.yaml`); a term that hits the cap is logged. Except for Amazon and USAJOBS, a description is fetched only for postings
 whose title passes the filter.
 
 ### Remote or not
