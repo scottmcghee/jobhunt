@@ -111,6 +111,11 @@ def radancy_company() -> Company:
 
 
 @pytest.fixture
+def icims_careers_company() -> Company:
+    return Company(name="Example Corp", ats="icims_careers", slug="careers.example.com")
+
+
+@pytest.fixture
 def paradox_company() -> Company:
     return Company(name="Example Co", ats="paradox", slug="jobs.example.com")
 

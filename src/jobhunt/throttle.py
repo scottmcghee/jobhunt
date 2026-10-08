@@ -6,7 +6,8 @@ Every request goes through ``ThrottledTransport``. It finds the request's rate-l
 - waits for a free slot in that group's ``GroupLimiter`` and out any pause a 429 set; then, for a
   group with a rate cap (``max_rate``), after taking a global slot (``max_in_flight``), until
   the cap allows the next send, so requests that queued for a global slot don't go out together
-  (one that a 429 paused the group meanwhile gives its slots back and waits out the pause);
+  (one that a 429 paused the group meanwhile gives its slots back and waits out the pause); a
+  gap over ``LONG_GAP`` is waited out before the global slot instead, so it doesn't hold one;
 - retries a 429, or a 503 that carries Retry-After, after Retry-After seconds or a 1/2/4 s
   backoff, up to ``MAX_RETRIES`` times (a Retry-After under a second, like Cloudflare's "0" on a
   rate-limit ban, counts as none, so it gets the backoff rather than instant retries); the last
@@ -46,6 +47,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from jobhunt.sources import request_group
+from jobhunt.sources._rate import RATE
 
 if TYPE_CHECKING:
     from jobhunt.settings import FetchSettings
@@ -54,6 +56,9 @@ MAX_RETRIES = 3
 MAX_RETRY_AFTER = 120.0  # seconds; a server asking for more gets a skipped board instead
 COOLDOWN = 5.0  # seconds between two halvings of one group's limit
 TRANSIENT_RETRIES = 2
+# seconds; a rate cap's gap over this (iCIMS's 5 s) is waited out before taking a global slot,
+# not while holding one. Shorter gaps (Microsoft's 2 s and under) keep the order that unbunches.
+LONG_GAP = 3.0
 TRANSIENT_STATUSES = frozenset({500, 502, 504})
 # Failures that a retry a moment later usually gets past. Not, say, UnsupportedProtocol.
 TRANSIENT_ERRORS = (
@@ -240,7 +245,9 @@ class ThrottledTransport(httpx.BaseTransport):
         # Caps requests in flight across all groups; taken after the group's slot, never before.
         self._slots = threading.BoundedSemaphore(max_in_flight) if max_in_flight else None
 
-    def limiter(self, group: str) -> GroupLimiter:
+    def limiter(self, group: str, rate: float | None = None) -> GroupLimiter:
+        """The group's limiter, made on first use. ``rate`` is the source's own cap (a request's
+        ``_rate.RATE`` extension), used when ``max_rate`` names no cap for the group."""
         with self._lock:
             if group not in self._limiters:
                 self._limiters[group] = GroupLimiter(
@@ -250,7 +257,7 @@ class ThrottledTransport(httpx.BaseTransport):
                     sleep=self._sleep,
                     stop=self._stop,
                     cooldown=self._cooldown,
-                    rate=self._max_rate.get(group),
+                    rate=self._max_rate.get(group, rate),
                 )
             return self._limiters[group]
 
@@ -273,7 +280,7 @@ class ThrottledTransport(httpx.BaseTransport):
             return self._cookies.setdefault(host, httpx.Cookies())
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        limiter = self.limiter(request_group(request.url))
+        limiter = self.limiter(request_group(request.url), request.extensions.get(RATE))
         own_cookies = "cookie" in request.headers  # set by the caller: sent as they are
         retries = transient = 0
         while True:
@@ -287,9 +294,14 @@ class ThrottledTransport(httpx.BaseTransport):
                     response = self._send(request, own_cookies)
                     response.read()  # a body that stalls or drops fails here, so it is retried
                 else:
+                    # a long gap is waited out before the global slot, so it holds none asleep
+                    long_gap = bool(limiter.rate) and 1 / limiter.rate > LONG_GAP
+                    if long_gap and not limiter.space():  # paused meanwhile: as below
+                        limiter.release(neutral=True)
+                        continue
                     with self._slots:
                         # after the global slot, so queued requests don't bunch
-                        if not limiter.space():  # paused meanwhile: wait it out in acquire()
+                        if not long_gap and not limiter.space():  # paused: wait it out in acquire()
                             limiter.release(neutral=True)
                             continue
                         response = self._send(request, own_cookies)

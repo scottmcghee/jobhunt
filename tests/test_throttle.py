@@ -574,6 +574,46 @@ def test_max_rate_spaces_sends_while_the_global_cap_is_full():
     assert min(gaps) >= 0.09, gaps
 
 
+def test_a_long_rate_gap_is_waited_out_without_holding_a_global_slot():
+    # a 4 s gap (like iCIMS's 5 s crawl-delay) used to be slept out holding a global slot,
+    # so an uncapped request waited behind it
+    import threading
+    import time
+
+    sleeping = threading.Event()
+
+    def sleep(seconds):
+        sleeping.set()
+        transport._stop.wait(seconds)
+
+    transport = throttle.ThrottledTransport(
+        inner=httpx.MockTransport(lambda request: httpx.Response(200)),
+        sleep=sleep,
+        max_in_flight=1,
+        max_rate={"workable": 0.25},
+    )
+    workable = "https://apply.workable.com/api/v1/widget/accounts/acme"
+
+    def get_until_stopped(client):
+        try:
+            client.get(workable)
+        except throttle.Stopped:
+            pass
+
+    with httpx.Client(transport=transport) as client:
+        client.get(workable)  # the first goes at once; the next must wait 4 s
+        second = threading.Thread(target=get_until_stopped, args=(client,))
+        second.start()
+        assert sleeping.wait(5)
+        started = time.monotonic()
+        client.get("https://api.lever.co/v0/postings/acme")
+        elapsed = time.monotonic() - started
+        transport.stop()  # wakes the second rather than waiting out its gap
+        second.join(5)
+    assert elapsed < 1.0, elapsed
+    assert transport.limiter("workable").in_flight == 0
+
+
 @pytest.mark.parametrize("max_in_flight", [32, None])  # with and without the global slots
 def test_a_pause_set_while_spacing_holds_back_the_spaced_sends(max_in_flight):
     # requests sleeping in space() when a 429 paused the group used to go out inside the pause

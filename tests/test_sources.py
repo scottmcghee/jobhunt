@@ -10,6 +10,7 @@ import httpx
 import pytest
 import respx
 
+from jobhunt import throttle
 from jobhunt.filter import check_location, check_title
 from jobhunt.schema import Company, Job
 from jobhunt.sources import (
@@ -21,6 +22,7 @@ from jobhunt.sources import (
     eightfold,
     fetch_company,
     greenhouse,
+    icims_careers,
     lever,
     oracle,
     paradox,
@@ -1296,6 +1298,7 @@ def test_apple_location(locations, expected):
 # ------------------------------------------------------------------ Phenom (search; JSON widgets API)
 
 PH = "https://careers.example.com/widgets"
+IC = "https://careers.example.com/api/jobs"  # iCIMS Career Sites
 
 
 def _phenom_routes(fixture_json, detail=None):
@@ -2344,6 +2347,7 @@ def _requests_made(company, mocks):
         ("workable_company", [("GET", WK, "workable_account.json")]),
         ("bamboohr_company", [("GET", BH + "/list", "bamboohr_list.json"), ("GET", BH + "/", "bamboohr_job.json")]),
         ("amazon_company", [("GET", AZ, "amazon_search.json")]),
+        ("icims_careers_company", [("GET", IC, "icims_careers_jobs.json")]),
     ],
 )
 def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
@@ -2523,3 +2527,136 @@ def test_an_empty_page_ends_the_listing_in_both_paths(
     assert len(jobs) == expected
     if 0 in empty:
         assert listing.call_count == 1
+
+
+# ------------------------------------------------------------------ iCIMS Career Sites
+
+
+def _icims_pages(fixture_json, sizes, total=None):
+    """Listing pages of these sizes, numbered from 1, all reporting ``total`` postings."""
+    base = fixture_json("icims_careers_jobs.json")["jobs"][0]
+    pages, n = [], 0
+    for size in sizes:
+        jobs = []
+        for _ in range(size):
+            n += 1
+            data = {**base["data"], "slug": str(80000 + n), "req_id": str(80000 + n), "title": f"Role {n}"}
+            jobs.append({"data": data})
+        pages.append({"jobs": jobs, "totalCount": sum(sizes) if total is None else total})
+    return pages
+
+
+@respx.mock
+def test_icims_careers_normalizes(icims_careers_company, fixture_json):
+    route = respx.get(IC).mock(return_value=httpx.Response(200, json=fixture_json("icims_careers_jobs.json")))
+    with httpx.Client() as client:
+        jobs = fetch_company(icims_careers_company, client)
+    assert route.calls[0].request.url.params["page"] == "1"
+    assert route.calls[0].request.url.params["limit"] == "100"
+    assert [j.title for j in jobs] == [
+        "Director, Platform Engineering", "Senior Manager, Developer Experience", "Accountant"
+    ]
+    j = jobs[0]
+    assert (j.source, j.company, j.company_slug, j.external_id) == (
+        "icims_careers", "Example Corp", "careers.example.com", "70001"
+    )
+    assert j.key == "icims_careers:careers.example.com:70001"
+    assert j.url == "https://careers.example.com/jobs/70001"  # the site redirects to its own path
+    assert j.location == "Remote, United States" and j.remote is True
+    assert jobs[1].location == "Seattle, Washington" and jobs[1].remote is None
+    # the description, then the responsibilities and qualifications the API keeps apart, as text
+    assert "Lead the & platform team." in j.body and "Own Kubernetes" in j.body
+    assert "Run the SRE org." in j.body and "10 years leading infrastructure teams." in j.body
+    assert "<" not in j.body
+    assert j.posted_at.startswith("2026-") and j.posted_at.endswith("+00:00")  # ISO 8601, UTC
+
+
+@respx.mock
+def test_icims_careers_pages_until_the_total(icims_careers_company, fixture_json):
+    pages = _icims_pages(fixture_json, [100, 100, 7])
+    route = respx.get(IC).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
+    with httpx.Client() as client:
+        jobs = icims_careers.fetch(icims_careers_company, client)
+    assert len(jobs) == 207
+    assert [c.request.url.params["page"] for c in route.calls] == ["1", "2", "3"]
+
+
+@respx.mock
+def test_icims_careers_stops_at_an_empty_page(icims_careers_company, fixture_json):
+    pages = _icims_pages(fixture_json, [100, 0], total=500)  # the total overstates what's there
+    route = respx.get(IC).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
+    with httpx.Client() as client:
+        assert len(icims_careers.fetch(icims_careers_company, client)) == 100
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_icims_careers_stops_at_the_page_guard(icims_careers_company, fixture_json, monkeypatch, caplog):
+    monkeypatch.setattr(icims_careers, "MAX_PAGES", 2)
+    pages = _icims_pages(fixture_json, [100, 100, 100], total=300)
+    route = respx.get(IC).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
+    with httpx.Client() as client:
+        assert len(icims_careers.fetch(icims_careers_company, client)) == 200
+    assert route.call_count == 2
+    assert "kept the first 200 of 300" in caplog.text
+
+
+@respx.mock
+def test_icims_careers_dedupes_a_posting_that_shifts_between_pages(icims_careers_company, fixture_json):
+    first, second = _icims_pages(fixture_json, [100, 100])
+    second["jobs"][0] = first["jobs"][-1]  # a new posting pushed the last one onto page 2
+    respx.get(IC).mock(side_effect=[httpx.Response(200, json=first), httpx.Response(200, json=second)])
+    with httpx.Client() as client:
+        jobs = icims_careers.fetch(icims_careers_company, client)
+    assert len(jobs) == 199 and len({j.key for j in jobs}) == 199
+
+
+@respx.mock
+def test_icims_careers_ids_are_the_requisition_id(icims_careers_company, fixture_json, caplog):
+    page = fixture_json("icims_careers_jobs.json")
+    page["jobs"][0]["data"]["slug"] = "director-platform-engineering"  # the id comes from req_id
+    page["jobs"][1]["data"]["req_id"] = None  # no requisition id: skipped, whatever its slug
+    respx.get(IC).mock(return_value=httpx.Response(200, json=page))
+    with httpx.Client() as client:
+        jobs = icims_careers.fetch(icims_careers_company, client)
+    assert [j.external_id for j in jobs] == ["70001", "70003"]
+    assert jobs[0].url == "https://careers.example.com/jobs/70001"
+    assert "skipped a posting with no req_id" in caplog.text
+
+
+@respx.mock
+def test_icims_careers_404_raises(icims_careers_company):
+    respx.get(IC).mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        icims_careers.fetch(icims_careers_company, client)
+
+
+def test_icims_careers_slug_is_a_host():
+    Company(name="x", ats="icims_careers", slug="careers.example.com")
+    with pytest.raises(ValueError, match="careers site host"):
+        Company(name="x", ats="icims_careers", slug="careers.example.com/careers-home")
+
+
+def test_icims_careers_rate_group_is_the_sites_host():
+    board = Company(name="x", ats="icims_careers", slug="Careers.Example.com")
+    assert rate_group(board) == "careers.example.com" == request_group(httpx.URL(IC))
+
+
+@respx.mock
+def test_icims_careers_honors_the_sites_crawl_delay(icims_careers_company, fixture_json):
+    # their robots.txt asks for 5 seconds between requests: a cap of 0.2 a second per site
+    respx.get(IC).mock(return_value=httpx.Response(200, json=fixture_json("icims_careers_jobs.json")))
+    transport = throttle.ThrottledTransport()
+    with httpx.Client(transport=transport) as client:
+        icims_careers.fetch(icims_careers_company, client)
+    assert transport.limiter("careers.example.com").rate == pytest.approx(0.2)
+    assert transport.limiter("lever").rate is None  # only these sites' requests carry it
+
+
+@respx.mock
+def test_a_configured_rate_overrides_the_crawl_delay(icims_careers_company, fixture_json):
+    respx.get(IC).mock(return_value=httpx.Response(200, json=fixture_json("icims_careers_jobs.json")))
+    transport = throttle.ThrottledTransport(max_rate={"careers.example.com": 0.1})
+    with httpx.Client(transport=transport) as client:
+        icims_careers.fetch(icims_careers_company, client)
+    assert transport.limiter("careers.example.com").rate == pytest.approx(0.1)

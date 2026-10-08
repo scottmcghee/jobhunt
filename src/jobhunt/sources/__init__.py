@@ -16,6 +16,7 @@ from jobhunt.sources import (
     bamboohr,
     eightfold,
     greenhouse,
+    icims_careers,
     lever,
     oracle,
     paradox,
@@ -35,6 +36,7 @@ FETCHERS: dict[ATSName, Fetcher] = {
     "lever": lever.fetch,
     "ashby": ashby.fetch,
     "workable": workable.fetch,
+    "icims_careers": icims_careers.fetch,
 }
 
 # Sources whose listings lack descriptions, so each description costs a request.
@@ -81,7 +83,8 @@ def fetch_company(
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
-    source) early; the others are one request.
+    source) early. iCIMS Career Sites is paged too but ignores it: it reads every page, up to its
+    own 100-page guard. The others are one request.
 
     ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom):
     they search per term instead (``fetch`` passes the title filter's target-level words). Others
@@ -123,7 +126,8 @@ def rate_group(company: Company) -> str:
         return f"workday:{company.datacenter}"
     if company.ats == "eightfold" and _EIGHTFOLD_HOST.fullmatch(company.slug.lower()):
         return "eightfold"
-    if company.ats in ("eightfold", "successfactors", "radancy", "paradox"):  # a site's own host
+    if company.ats in ("eightfold", "successfactors", "radancy", "paradox", "icims_careers"):
+        # a site's own host
         return company.slug.lower()
     if company.ats in ("oracle", "phenom"):  # each tenant has its own host (and maybe sites)
         return company.slug.partition("/")[0].lower()
