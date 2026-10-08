@@ -193,3 +193,12 @@ def test_fetch_progress_keeps_keys_with_spaces(tmp_path):
     progress.start()
     progress.mark("ashby:Acme Labs")  # Ashby slugs keep spaces
     assert storage.FetchProgress(progress.path).done == {"ashby:Acme Labs"}
+
+
+def test_a_later_label_for_a_job_replaces_an_earlier_one(tmp_path):
+    storage.append_jsonl(tmp_path / "labels.jsonl", {"job_key": "a", "score": 3, "note": "first"})
+    storage.append_jsonl(tmp_path / "labels.jsonl", {"job_key": "b", "score": 5})
+    storage.append_jsonl(tmp_path / "labels.jsonl", {"job_key": "a", "score": 8, "note": "second"})
+    labels = storage.load_labels(tmp_path)
+    assert set(labels) == {"a", "b"}
+    assert (labels["a"].score, labels["a"].note) == (8, "second")

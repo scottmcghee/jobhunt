@@ -147,6 +147,30 @@ to the first one. Everything is appended to `data/applications.jsonl` (a correct
 entry), which stays on your machine. `jobhunt list --hide-applied` leaves out jobs you've
 applied to.
 
+### 6. Check the scorer
+
+How far can you trust the scores? Score a sample of jobs yourself, then compare:
+
+```bash
+jobhunt label            # one job at a time: your own score, 1 to 10, and an optional note
+jobhunt eval             # how well the scorer agrees with you
+jobhunt eval --rescore   # the same, with the labeled jobs scored afresh by the current prompt
+```
+
+`jobhunt label` builds up 50 labels (`--sample N` for another number), and you can stop and come
+back. It shows each job's title, location, link and the start of its description, but not the
+scorer's score, so it can't sway you. The sample is drawn from each score band, and shown in
+mixed order so a job's place in line gives nothing away: most jobs score 1 or 2, and a random
+sample would say little about the ones near the letter line.
+
+`jobhunt eval` reports rank agreement, the average gap and which way the scorer leans, and the
+decision that matters most, a letter or not: of the jobs you'd write to, how many the scorer
+found, and how many of its picks you agree with. It ends with the biggest disagreements and the
+scorer's reasoning for each, which is where to look when changing the prompt. Every run is
+appended to `data/evals.jsonl`; with `--rescore` it records a fingerprint of the prompt, so runs
+before and after a prompt change can be compared. Rescoring costs one model call per labeled
+job and leaves your stored scores alone.
+
 ## Configuration
 
 Everything personal lives in `config/`, which is gitignored. Copy `config.example/` to start; its
@@ -175,6 +199,8 @@ To make it yours, rewrite `profile.md` and the Kit in your own words, edit the f
 | `jobhunt applied KEY` | Record an application to a job jobhunt found | `--resume VERSION` (required), `--warm`, `--date`, `--force` |
 | `jobhunt outcome KEY STATUS` | Record what came of it | `--date` |
 | `jobhunt applications` | Each application, and reply rates by resume, warm or cold, and score | |
+| `jobhunt label` | Score a sample of jobs yourself | `--sample N` |
+| `jobhunt eval` | How well the scorer agrees with your labels | `--rescore` |
 
 - `--company NAME` fetches every board whose `name` in `companies.yaml` matches, ignoring case.
   Harvested Workday sites of one tenant share a name, so `--company adobe` fetches all of

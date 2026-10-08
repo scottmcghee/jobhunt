@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -1649,3 +1650,166 @@ def test_list_can_hide_jobs_already_applied_to(tmp_path, scored_job, capsys):
     assert "VP of Infrastructure" in out and "Director of Platform Engineering" not in out
     assert _applications(tmp_path, "list") == 0
     assert "Director of Platform Engineering" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- labeling and eval
+
+
+def _labelable(tmp_path, scored_job, scores=(8, 6, 3, 1)):
+    """Scored jobs with these model scores; returns them in that order."""
+    out = []
+    for n, s in enumerate(scores):
+        job = scored_job.job.model_copy(update={"external_id": f"j{n}", "title": f"Role {n}"})
+        score = scored_job.score.model_copy(update={"score": s, "rationale": f"why Role {n} scored {s}"})
+        sj = scored_job.model_copy(update={"job": job, "score": score})
+        storage.append_jsonl(tmp_path / "data" / "jobs.jsonl", job.model_dump())
+        storage.append_jsonl(tmp_path / "data" / "scores.jsonl", sj.model_dump())
+        out.append(sj)
+    return out
+
+
+def _answers(monkeypatch, *replies):
+    """Feed input() these replies in turn; EOFError once they run out, like Ctrl-D."""
+    it = iter(replies)
+    prompts = []
+
+    def fake(prompt=""):
+        prompts.append(prompt)
+        try:
+            return next(it)
+        except StopIteration:
+            raise EOFError from None
+
+    monkeypatch.setattr("builtins.input", fake)
+    return prompts
+
+
+def _labels(tmp_path):
+    return storage.read_jsonl(tmp_path / "data" / "labels.jsonl")
+
+
+def test_label_shows_each_job_with_its_url_but_not_the_model_score(tmp_path, scored_job, monkeypatch, capsys):
+    jobs = _labelable(tmp_path, scored_job)
+    _answers(monkeypatch, "7", "solid fit", "q")
+    assert _applications(tmp_path, "label", "--sample", "4") == 0
+    out = capsys.readouterr().out
+    (label,) = _labels(tmp_path)
+    first = next(sj.job for sj in jobs if sj.job.key == label["job_key"])  # the job shown first
+    assert first.title in out and first.url in out and first.body[:40] in out
+    for sj in jobs:  # no anchoring
+        assert f"{sj.score.score}/10" not in out and sj.score.rationale not in out
+    assert (label["score"], label["note"]) == (7, "solid fit")
+
+
+def test_label_skips_on_enter_and_reprompts_on_a_bad_score(tmp_path, scored_job, monkeypatch, capsys):
+    _labelable(tmp_path, scored_job)
+    prompts = _answers(monkeypatch, "", "eleven", "4", "")
+    assert _applications(tmp_path, "label", "--sample", "4") == 0
+    assert [lab["score"] for lab in _labels(tmp_path)] == [4]  # the first job skipped
+    assert "1 to 10" in capsys.readouterr().out
+    assert len([p for p in prompts if "score" in p.lower()]) == 4  # skip, bad, 4, then EOF
+
+
+def test_label_keeps_the_score_when_the_note_prompt_is_cut_short(tmp_path, scored_job, monkeypatch, capsys):
+    _labelable(tmp_path, scored_job)
+    _answers(monkeypatch, "7")  # then Ctrl-D at the note prompt
+    assert _applications(tmp_path, "label", "--sample", "4") == 0
+    assert [(lab["score"], lab["note"]) for lab in _labels(tmp_path)] == [(7, "")]
+    assert "1 labeled now" in capsys.readouterr().out
+
+
+def test_label_reprompts_on_a_digit_that_is_not_a_number(tmp_path, scored_job, monkeypatch, capsys):
+    _labelable(tmp_path, scored_job)
+    _answers(monkeypatch, "\u00b2", "3", "", "q")
+    assert _applications(tmp_path, "label", "--sample", "4") == 0
+    assert [lab["score"] for lab in _labels(tmp_path)] == [3]
+    assert "1 to 10" in capsys.readouterr().out
+
+
+def test_label_picks_up_where_it_left_off(tmp_path, scored_job, monkeypatch, capsys):
+    _labelable(tmp_path, scored_job)
+    _answers(monkeypatch, "5", "", "q")
+    _applications(tmp_path, "label", "--sample", "2")
+    _answers(monkeypatch, "6", "")
+    assert _applications(tmp_path, "label", "--sample", "2") == 0
+    labels = _labels(tmp_path)
+    assert len(labels) == 2 and labels[0]["job_key"] != labels[1]["job_key"]
+    capsys.readouterr()
+    _answers(monkeypatch)
+    assert _applications(tmp_path, "label", "--sample", "2") == 0
+    assert "already 2 labeled" in capsys.readouterr().out
+
+
+def test_the_scoring_prompt_fingerprint_covers_template_and_body_chars(monkeypatch, profile, kit):
+    base = cli._score_prompt_fingerprint(profile, kit, 12000)
+    assert base == cli._score_prompt_fingerprint(profile, kit, 12000)
+    assert base != cli._score_prompt_fingerprint(profile, kit, 8000)  # the description cut-off
+    assert base != cli.evaluate.fingerprint(cli.SCORE_SYSTEM)
+    monkeypatch.setattr(cli, "build_user_prompt", lambda job, profile, kit, body_chars: "new template")
+    assert cli._score_prompt_fingerprint(profile, kit, 12000) != base  # the user-prompt template
+
+
+def test_the_scoring_prompt_fingerprint_covers_profile_and_kit(profile, kit):
+    base = cli._score_prompt_fingerprint(profile, kit, 12000)
+    assert cli._score_prompt_fingerprint(profile + "\nKnown gaps: Rust", kit, 12000) != base
+    module = next(iter(kit.modules.values()))
+    edited = dataclasses.replace(module, use_when=[*module.use_when, "a new trigger"])
+    other_kit = dataclasses.replace(kit, modules={**kit.modules, module.id: edited})
+    assert cli._score_prompt_fingerprint(profile, other_kit, 12000) != base
+
+
+def _label(tmp_path, sj, score):
+    storage.append_jsonl(tmp_path / "data" / "labels.jsonl", {"job_key": sj.job.key, "score": score})
+
+
+def test_eval_compares_labels_with_stored_scores(tmp_path, scored_job, capsys):
+    a, b, c, d = _labelable(tmp_path, scored_job)  # model: 8, 6, 3, 1
+    for sj, human in ((a, 8), (b, 8), (c, 3), (d, 2)):
+        _label(tmp_path, sj, human)
+    assert _applications(tmp_path, "eval") == 0
+    out = capsys.readouterr().out
+    assert "4 labeled job(s)" in out
+    assert "mean error 0.75" in out  # |0| + |-2| + |0| + |-1|
+    assert "Role 1" in out  # the biggest disagreement, listed with its rationale
+    assert "why Role 1 scored 6" in out
+    (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
+    assert run["source"] == "stored" and run["metrics"]["n"] == 4 and run["models"] == ["test-model"]
+
+
+def test_eval_without_labels_says_how_to_make_them(tmp_path, capsys):
+    assert _applications(tmp_path, "eval") == 2
+    assert "jobhunt label" in capsys.readouterr().err
+
+
+def test_eval_rescore_scores_labeled_jobs_with_the_current_prompt(tmp_path, scored_job, monkeypatch, capsys):
+    a, b = _labelable(tmp_path, scored_job, scores=(8, 2))
+    _label(tmp_path, a, 8)
+    _label(tmp_path, b, 2)
+    fake = make_completer({"score": 5, "rationale": "fresh", "suggested_modules": []})
+    monkeypatch.setattr(cli, "_completer", lambda _=None: fake)
+    assert _applications(tmp_path, "eval", "--rescore") == 0
+    assert len(fake.calls) == 2
+    (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
+    assert run["source"] == "rescored" and run["prompt"] == cli._score_prompt_fingerprint(
+        cli.config.load_profile(), cli.config.load_kit(), 12000
+    )
+    assert run["metrics"]["mae"] == 3.0
+    assert len(storage.load_scores(tmp_path / "data")) == 2  # scores.jsonl untouched
+
+
+def test_eval_rescore_skips_an_unusable_model_reply(tmp_path, scored_job, monkeypatch, caplog):
+    a, b = _labelable(tmp_path, scored_job, scores=(8, 2))
+    _label(tmp_path, a, 8)
+    _label(tmp_path, b, 2)
+
+    def complete(system: str, user: str, max_tokens: int = 0) -> str:
+        if "Role 1" in user:
+            return "sorry, no JSON here"
+        return '{"score": 7, "rationale": "fresh", "suggested_modules": []}'
+
+    monkeypatch.setattr(cli, "_completer", lambda _=None: complete)
+    with caplog.at_level("WARNING"):
+        assert _applications(tmp_path, "eval", "--rescore") == 0
+    (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
+    assert run["metrics"]["n"] == 1
+    assert any(b.job.key in r.getMessage() and "skipped" in r.getMessage() for r in caplog.records)
