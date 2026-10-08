@@ -8,10 +8,14 @@ cover letters for the top scorers from the pre-written modules in config/kit/.
     jobhunt fetch   [--company NAME] [--dry-run] [--resume] [--workers N] [--per-host N]
                                                      pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
-    jobhunt list    [--min-score N]                  show scored jobs and their keys
+    jobhunt list    [--min-score N] [--hide-applied] show scored jobs and their keys
     jobhunt letter  [--min-score N] [--job KEY] [--force]
                                                      letters for high scorers that have none yet
     jobhunt run     [--workers N] [--per-host N]     fetch -> score -> letter
+    jobhunt applied KEY --resume V [--warm] [--date D] [--force]
+                                                     record an application to a found job
+    jobhunt outcome KEY STATUS [--date D]            record what came of it
+    jobhunt applications                             each application, and response rates
 
 A job key is source:company_slug:external_id, e.g. greenhouse:huntress:7777533003.
 """
@@ -28,10 +32,12 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
 
+from jobhunt import applications as apps
 from jobhunt import config, settings, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
@@ -510,10 +516,86 @@ def cmd_list(args: argparse.Namespace, data_dir: Path) -> int:
     rows = sorted(latest.values(), key=lambda s: -s.score.score)
     if args.min_score:
         rows = [s for s in rows if s.score.score >= args.min_score]
+    if args.hide_applied:
+        applied = {a.job_key for a in apps.fold(storage.load_application_events(data_dir))}
+        rows = [s for s in rows if s.job.key not in applied]
     for s in rows:
         print(f"{s.score.score:>2}/10  {s.job.company:<14} {s.job.title[:55]:<55} {s.job.key}")
         print(f"        {s.job.url}")
     print(f"\n{len(rows)} scored job(s).")
+    return 0
+
+
+def cmd_applied(args: argparse.Namespace, data_dir: Path) -> int:
+    job = next((j for j in storage.load_jobs(data_dir) if j.key == args.key), None)
+    if job is None:
+        hint = "`jobhunt list` shows keys"
+        print(f"{args.key} is not a job jobhunt has found ({hint})", file=sys.stderr)
+        return 2
+    events = storage.load_application_events(data_dir)
+    earlier = next((a for a in apps.fold(events) if a.job_key == job.key), None)
+    if earlier and not args.force:
+        print(f"already applied on {earlier.applied}; --force records it again", file=sys.stderr)
+        return 2
+    scores = [s.score.score for s in storage.load_scores(data_dir) if s.job.key == job.key]
+    event = apps.Event(
+        job_key=job.key,
+        kind="applied",
+        date=args.date,
+        company=job.company,
+        title=job.title,
+        score=scores[-1] if scores else None,
+        resume=args.resume,
+        warm=args.warm,
+    )
+    storage.append_jsonl(data_dir / "applications.jsonl", event.model_dump())
+    how = f"resume {args.resume}, {apps.warm_label(args.warm)}"
+    print(f"applied {event.date}: {job.company}: {job.title} ({how})")
+    return 0
+
+
+def cmd_outcome(args: argparse.Namespace, data_dir: Path) -> int:
+    applied = {a.job_key: a for a in apps.fold(storage.load_application_events(data_dir))}
+    if args.key not in applied:
+        hint = "record it first with `jobhunt applied`"
+        print(f"no application to {args.key}; {hint}", file=sys.stderr)
+        return 2
+    event = apps.Event(job_key=args.key, kind="outcome", date=args.date, status=args.status)
+    storage.append_jsonl(data_dir / "applications.jsonl", event.model_dump())
+    app = applied[args.key]
+    print(f"{event.date}: {app.company}: {app.title} -> {args.status}")
+    return 0
+
+
+def _print_groups(title: str, groups: list[apps.GroupStats]) -> None:
+    print(f"\nby {title}:")
+    print(
+        f"  {'':<10} {'applied':>7} {'replied':>8} {'screen+':>8} {'interview+':>10}"
+        f" {'offer':>5} {'days to reply':>13}"
+    )
+    for g in groups:
+        days = "-" if g.median_days is None else f"{g.median_days:g}"
+        print(
+            f"  {g.label[:10]:<10} {g.applied:>7} {g.replied:>8} {g.screened:>8}"
+            f" {g.interviewed:>10} {g.offers:>5} {days:>13}"
+        )
+
+
+def cmd_applications(args: argparse.Namespace, data_dir: Path) -> int:
+    rows = apps.fold(storage.load_application_events(data_dir))
+    if not rows:
+        print("no applications yet (`jobhunt applied KEY --resume V` records one).")
+        return 0
+    for a in rows:
+        score = "-" if a.score is None else f"{a.score}/10"
+        print(
+            f"{a.applied}  {a.status or 'pending':<11} {score:>5}  {a.resume or '-':<8} "
+            f"{apps.warm_label(a.warm):<4}  {a.company[:16]:<16} {a.title[:50]}"
+        )
+    _print_groups("resume", apps.stats(rows, lambda a: a.resume or "-"))
+    _print_groups("contact", apps.stats(rows, lambda a: apps.warm_label(a.warm)))
+    _print_groups("score", apps.stats(rows, lambda a: apps.score_band(a.score)))
+    print(f"\n{len(rows)} application(s).")
     return 0
 
 
@@ -528,6 +610,13 @@ def cmd_run(args: argparse.Namespace, data_dir: Path, output_dir: Path) -> int:
 
 
 # --------------------------------------------------------------------------- parser
+
+
+def _iso_date(value: str) -> str:
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a date like YYYY-MM-DD: {value!r}") from None
 
 
 def _at_least_one(value: str) -> int:
@@ -589,6 +678,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     li = sub.add_parser("list", help="show scored jobs and their keys")
     li.add_argument("--min-score", type=int, metavar="N", help="hide jobs scoring below N")
+    li.add_argument("--hide-applied", action="store_true", help="hide jobs already applied to")
+
+    today = datetime.now(UTC).date().isoformat()
+    date_help = "the day it happened, YYYY-MM-DD (default: today, UTC)"
+    ad = sub.add_parser("applied", help="record an application to a job jobhunt found")
+    ad.add_argument("key", help="the job's key, as `jobhunt list` shows it")
+    ad.add_argument("--resume", required=True, metavar="VERSION", help="the resume version sent")
+    ad.add_argument("--warm", action="store_true", help="a warm contact (referral, intro)")
+    ad.add_argument("--date", type=_iso_date, default=today, help=date_help)
+    ad.add_argument("--force", action="store_true", help="record it again (a correction)")
+
+    oc = sub.add_parser("outcome", help="record what came of an application")
+    oc.add_argument("key", help="the job's key")
+    oc.add_argument("status", choices=apps.STATUSES)
+    oc.add_argument("--date", type=_iso_date, default=today, help=date_help)
+
+    sub.add_parser("applications", help="each application, and response rates by group")
 
     le = sub.add_parser("letter", help="generate letters for high scorers")
     le.add_argument("--min-score", type=int, metavar="N", help=min_score_help)
@@ -637,6 +743,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_score(args, args.data_dir)
         if args.cmd == "letter":
             return cmd_letter(args, args.data_dir, args.output_dir)
+        if args.cmd == "applied":
+            return cmd_applied(args, args.data_dir)
+        if args.cmd == "outcome":
+            return cmd_outcome(args, args.data_dir)
+        if args.cmd == "applications":
+            return cmd_applications(args, args.data_dir)
         if args.cmd == "list":
             return cmd_list(args, args.data_dir)
         if args.cmd == "run":

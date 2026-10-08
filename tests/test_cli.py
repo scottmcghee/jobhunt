@@ -1495,3 +1495,115 @@ def test_the_fetch_client_keeps_cookies_per_host_in_its_transport():
         client.get(GH.format("acme"))
         assert sent == [None, "PLAY_SESSION=abc"]  # sent back, like a browser
         assert len(client.cookies.jar) == 0  # by the transport's jar for that host, not the client's
+
+
+# --------------------------------------------------------------------------- applications
+
+
+def _applications(tmp_path, *argv):
+    return cli.main(["--data-dir", str(tmp_path / "data"), *argv])
+
+
+def _with_scored_job(tmp_path, scored_job, *more):
+    data = tmp_path / "data"
+    for s in (scored_job, *more):
+        storage.append_jsonl(data / "jobs.jsonl", s.job.model_dump())
+        storage.append_jsonl(data / "scores.jsonl", s.model_dump())
+    return scored_job.job.key
+
+
+def _events(tmp_path):
+    return storage.read_jsonl(tmp_path / "data" / "applications.jsonl")
+
+
+def test_applied_records_the_job_its_latest_score_resume_and_warmth(tmp_path, scored_job):
+    key = _with_scored_job(tmp_path, scored_job)
+    rescored = scored_job.model_copy(update={"score": scored_job.score.model_copy(update={"score": 6})})
+    storage.append_jsonl(tmp_path / "data" / "scores.jsonl", rescored.model_dump())
+    assert _applications(tmp_path, "applied", key, "--resume", "v2", "--warm", "--date", "2026-10-08") == 0
+    (event,) = _events(tmp_path)
+    assert event["kind"] == "applied" and event["job_key"] == key and event["date"] == "2026-10-08"
+    assert (event["resume"], event["warm"], event["score"]) == ("v2", True, 6)  # the latest score
+    assert (event["company"], event["title"]) == ("ExampleCorp", "Director of Platform Engineering")
+
+
+def test_applied_defaults_to_today_and_cold(tmp_path, scored_job):
+    from datetime import UTC, datetime
+
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "applied", key, "--resume", "v1") == 0
+    (event,) = _events(tmp_path)
+    assert event["date"] == datetime.now(UTC).date().isoformat() and event["warm"] is False
+
+
+def test_applied_needs_a_job_jobhunt_found(tmp_path, scored_job, capsys):
+    _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "applied", "greenhouse:nope:1", "--resume", "v1") == 2
+    assert "not a job jobhunt has found" in capsys.readouterr().err
+    assert _events(tmp_path) == []
+
+
+def test_applying_twice_needs_force(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "applied", key, "--resume", "v1") == 0
+    assert _applications(tmp_path, "applied", key, "--resume", "v2") == 2
+    assert "--force" in capsys.readouterr().err
+    assert _applications(tmp_path, "applied", key, "--resume", "v2", "--force") == 0
+    assert [e["resume"] for e in _events(tmp_path)] == ["v1", "v2"]
+
+
+def test_a_bad_date_is_an_error(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    with pytest.raises(SystemExit):
+        _applications(tmp_path, "applied", key, "--resume", "v1", "--date", "10/08/2026")
+    assert "YYYY-MM-DD" in capsys.readouterr().err
+
+
+def test_outcome_needs_an_application(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "outcome", key, "screen") == 2
+    assert "jobhunt applied" in capsys.readouterr().err
+    assert _applications(tmp_path, "applied", key, "--resume", "v1") == 0
+    assert _applications(tmp_path, "outcome", key, "screen", "--date", "2026-10-09") == 0
+    assert _events(tmp_path)[-1] == {**_events(tmp_path)[-1], "kind": "outcome", "status": "screen", "date": "2026-10-09"}
+
+
+def test_outcome_takes_only_known_statuses(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["outcome", "greenhouse:acme:1", "ghosted"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_applications_lists_each_and_breaks_them_down(tmp_path, scored_job, capsys):
+    other_job = scored_job.job.model_copy(update={"external_id": "2002", "title": "VP of Infrastructure"})
+    other = scored_job.model_copy(update={"job": other_job, "score": scored_job.score.model_copy(update={"score": 5})})
+    first = _with_scored_job(tmp_path, scored_job, other)
+    _applications(tmp_path, "applied", first, "--resume", "v1", "--date", "2026-10-01")
+    _applications(tmp_path, "applied", other.job.key, "--resume", "v2", "--warm", "--date", "2026-10-02")
+    _applications(tmp_path, "outcome", other.job.key, "interview", "--date", "2026-10-06")
+    capsys.readouterr()
+    assert _applications(tmp_path, "applications") == 0
+    out = capsys.readouterr().out
+    assert "Director of Platform Engineering" in out and "VP of Infrastructure" in out
+    assert "pending" in out and "interview" in out
+    for heading in ("by resume", "by contact", "by score"):
+        assert heading in out
+    assert "2 application(s)" in out
+
+
+def test_applications_with_none_says_so(tmp_path, capsys):
+    assert _applications(tmp_path, "applications") == 0
+    assert "no applications yet" in capsys.readouterr().out
+
+
+def test_list_can_hide_jobs_already_applied_to(tmp_path, scored_job, capsys):
+    other_job = scored_job.job.model_copy(update={"external_id": "2002", "title": "VP of Infrastructure"})
+    other = scored_job.model_copy(update={"job": other_job})
+    key = _with_scored_job(tmp_path, scored_job, other)
+    _applications(tmp_path, "applied", key, "--resume", "v1")
+    capsys.readouterr()
+    assert _applications(tmp_path, "list", "--hide-applied") == 0
+    out = capsys.readouterr().out
+    assert "VP of Infrastructure" in out and "Director of Platform Engineering" not in out
+    assert _applications(tmp_path, "list") == 0
+    assert "Director of Platform Engineering" in capsys.readouterr().out
