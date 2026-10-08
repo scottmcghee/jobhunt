@@ -614,9 +614,9 @@ read them, and won't. Their jobs are worth a manual search or the platform's own
 | UKG / UltiPro | Some transit agencies and REITs | robots.txt disallows `*/JobBoardView`, the listing the board loads | The employer's job board; UKG boards can email new postings |
 | PageUp | Some universities | A bot wall in front of the board | The university's careers page |
 | SCALIS | Small companies | robots.txt disallows `/api/`, where the listings come from; the pages themselves have none | The company's careers page |
-| Pinpoint, Comeet, Dover | Startups | robots.txt disallows the boards (Pinpoint, Comeet) or their API (Dover) | The company's careers page |
+| Pinpoint, Dover | Startups | robots.txt disallows the boards (Pinpoint) or their API (Dover) | The company's careers page |
 | Classic iCIMS portals (`careers-<company>.icims.com`) | Many mid-size and large employers | robots.txt: `Disallow: /` | Their newer branded careers sites often allow it |
+| Any board whose robots.txt disallows its own path | Some employers on platforms `jobhunt` otherwise reads; some Workday sites disallow their site path | robots.txt disallows that board | The employer's careers page |
 | Google, Meta | Themselves | Google's robots.txt disallows its job pages; Meta's terms forbid automated collection | Their careers sites' own alerts |
 
 Federal jobs are different: USAJOBS publishes an official API for exactly this.
-
