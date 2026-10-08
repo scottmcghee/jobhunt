@@ -83,21 +83,23 @@ def cluster_index(client: httpx.Client, crawl: str, cache_dir: Path) -> Path:
     return path
 
 
-def read_blocks(lines: Iterable[str]) -> list[Block]:
-    """Blocks from cluster.idx lines.
-
-    Each is ``<surt> <timestamp>\\t<file>\\t<offset>\\t<length>\\t<n>``; others are skipped.
-    """
-    blocks = []
+def _parse_blocks(lines: Iterable[str]) -> Iterator[Block]:
     for line in lines:
         parts = line.rstrip("\n").split("\t")
         if len(parts) < 4:
             continue
         try:
-            blocks.append(Block(parts[0].split(" ")[0], parts[1], int(parts[2]), int(parts[3])))
+            yield Block(parts[0].split(" ")[0], parts[1], int(parts[2]), int(parts[3]))
         except ValueError:
             continue
-    return blocks
+
+
+def read_blocks(lines: Iterable[str]) -> list[Block]:
+    """Blocks from cluster.idx lines.
+
+    Each is ``<surt> <timestamp>\\t<file>\\t<offset>\\t<length>\\t<n>``; others are skipped.
+    """
+    return list(_parse_blocks(lines))
 
 
 def blocks_for(blocks: Sequence[Block], prefixes: Iterable[str]) -> list[Block]:
@@ -111,6 +113,29 @@ def blocks_for(blocks: Sequence[Block], prefixes: Iterable[str]) -> list[Block]:
             wanted.add(i)
             i += 1
     return [blocks[i] for i in sorted(wanted)]
+
+
+def select_blocks(lines: Iterable[str], prefixes: Iterable[str]) -> list[Block]:
+    """``blocks_for`` in one pass over cluster.idx lines, keeping only the blocks it picks."""
+    prefixes = tuple(prefixes)
+    pending = sorted(set(prefixes))  # prefixes no block key has reached yet
+    picked: list[Block] = []
+    prev: Block | None = None
+
+    def pick(block: Block) -> None:
+        if not picked or picked[-1] != block:
+            picked.append(block)
+
+    for block in _parse_blocks(lines):
+        while pending and block.key >= pending[0]:
+            pending.pop(0)
+            pick(prev or block)  # the prefix's URLs may begin at the end of the block before
+        if block.key.startswith(prefixes):
+            pick(block)
+        prev = block
+    if pending and prev is not None:
+        pick(prev)  # prefixes sorting after every key fall in the last block
+    return picked
 
 
 def _block_lines(client: httpx.Client, crawl: str, block: Block) -> list[str]:
@@ -129,7 +154,7 @@ def urls(
     """Every URL the crawl saw whose SURT key starts with one of ``prefixes``."""
     path = cluster_index(client, crawl, cache_dir)
     with path.open(encoding="utf-8", errors="replace") as f:
-        blocks = blocks_for(read_blocks(f), prefixes)
+        blocks = select_blocks(f, prefixes)
     for block in blocks:
         for line in _block_lines(client, crawl, block):
             key, _, rest = line.partition(" ")

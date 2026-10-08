@@ -48,6 +48,15 @@ def test_survey_site_follows_a_careers_link_when_the_page_names_no_platform():
 
 
 @respx.mock
+def test_survey_site_fetches_home_once_when_it_is_among_the_urls():
+    respx.get(SITE + "/robots.txt").mock(return_value=httpx.Response(404))
+    home = respx.get(SITE + "/").mock(return_value=httpx.Response(200, text='<a href="/jobs">Open roles</a>'))
+    respx.get(SITE + "/jobs").mock(return_value=httpx.Response(200, text=WORKDAY_PAGE))
+    site = fingerprint.survey_site(_polite(), SITE + "/", "Acme Corp", urls=[SITE + "/"])
+    assert home.call_count == 1 and site.pages == [SITE + "/jobs"]
+
+
+@respx.mock
 def test_survey_site_within_robots_txt():
     respx.get(SITE + "/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /\n"))
     page = respx.get(SITE + "/").mock(return_value=httpx.Response(200, text=WORKDAY_PAGE))

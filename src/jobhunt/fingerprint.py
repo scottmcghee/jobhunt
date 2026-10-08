@@ -1,6 +1,6 @@
 """Which hiring platform a careers site runs, and the job board jobhunt should read for it.
 
-Shared by ``scripts/survey_careers.py`` (the S&P 500 survey) and ``python -m jobhunt.discover``.
+Shared by ``scripts/survey_careers.py`` (the S&P 500 survey) and the planned discovery command.
 A page is checked for platform fingerprints (``PLATFORMS``); every URL in it goes through
 ``jobhunt.slugs.board_from_url``; and a few platforms get one or two more polite requests to find
 the board (Phenom's search, an iCIMS Career Site's job API, a Radancy or Paradox sitemap). Sites
@@ -298,9 +298,18 @@ class Site:
     boards: list[Company] = field(default_factory=list)
 
 
-def visit(polite: Polite, url: str, name: str, site: Site) -> bool:
-    """Read one page into ``site``; True if it named a platform or a board."""
+def visit(
+    polite: Polite,
+    url: str,
+    name: str,
+    site: Site,
+    fetched: dict[str, httpx.Response | None] | None = None,
+) -> bool:
+    """Read one page into ``site``; True if it named a platform or a board. ``fetched``, if
+    given, remembers the response for ``url``."""
     page = polite.get(url)
+    if fetched is not None:
+        fetched[url] = page
     if page is None or page.status_code >= 400:
         return False
     found, boards = read_page(page, name)
@@ -327,8 +336,10 @@ def survey_site(polite: Polite, home: str, name: str, urls: list[str] | None = N
     """Try ``urls`` (default: the likely careers pages of ``home``'s domain) until one names a
     platform or a board; failing that, follow up to two careers links from ``home`` itself."""
     site = Site()
-    if not any(visit(polite, url, name, site) for url in (urls or candidate_urls(home))):
-        if (page := polite.get(home)) is not None and page.status_code < 400:
+    fetched: dict[str, httpx.Response | None] = {}
+    if not any(visit(polite, url, name, site, fetched) for url in (urls or candidate_urls(home))):
+        page = fetched[home] if home in fetched else polite.get(home)  # home may be among urls
+        if page is not None and page.status_code < 400:
             for url in career_links(page.text[:MAX_PAGE], str(page.url)):
                 if visit(polite, url, name, site):
                     break

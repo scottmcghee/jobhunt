@@ -121,6 +121,36 @@ def test_a_failed_download_leaves_no_partial_index(tmp_path):
     assert not list(tmp_path.rglob("cluster.idx*"))
 
 
+class _BrokenStream(httpx.SyncByteStream):
+    def __iter__(self):
+        yield CLUSTER[:40].encode()
+        raise httpx.ReadError("connection reset")
+
+
+@respx.mock
+def test_a_download_cut_off_midway_leaves_no_partial_index(tmp_path):
+    respx.get(f"{INDEXES}/cluster.idx").mock(return_value=httpx.Response(200, stream=_BrokenStream()))
+    with httpx.Client() as client, pytest.raises(httpx.ReadError):
+        cc.cluster_index(client, CRAWL, tmp_path)
+    assert not list(tmp_path.rglob("cluster.idx*"))
+
+
+@pytest.mark.parametrize(
+    "prefixes",
+    [
+        ["com,gem,jobs)"],  # its blocks and the one before
+        ["com,gem,jobs)/acme"],  # inside a block
+        ["com,geluk)"],  # the first block
+        ["a"],  # sorts before every block
+        ["zzz"],  # sorts after every block
+        ["com,gem,jobs)", "com,gem,jobs)/beta", "com,myworkdayjobs,"],
+    ],
+)
+def test_streaming_block_selection_matches_blocks_for(prefixes):
+    lines = CLUSTER.splitlines()
+    assert cc.select_blocks(iter(lines), prefixes) == cc.blocks_for(cc.read_blocks(lines), prefixes)
+
+
 @respx.mock
 def test_latest_crawls_come_from_collinfo():
     respx.get(cc.COLLINFO).mock(
