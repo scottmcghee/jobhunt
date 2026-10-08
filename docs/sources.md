@@ -182,8 +182,8 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Slug:** the board name in `jobs.gem.com/<slug>`; case is kept.
 - **Endpoint:** `GET https://api.gem.com/job_board/v0/<slug>/job_posts/`, Gem's documented Job
   Board API. One request, descriptions included, in much the shape of Greenhouse's.
-- **Remote:** from Gem's `location_type`: `remote` is yes, `hybrid` is no; otherwise yes only if
-  the location or title says "remote".
+- **Remote:** from Gem's `location_type`: `remote` is yes, `hybrid` and `in_office` are no; otherwise yes
+  only if the location or title says "remote".
 - **Unknown board:** 404, removed.
 
 ## iCIMS Career Sites

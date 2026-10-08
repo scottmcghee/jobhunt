@@ -95,7 +95,7 @@
   "location": {
    "name": "New York, United States"
   },
-  "location_type": null,
+  "location_type": "in_office",
   "offices": [
    {
     "child_ids": [],

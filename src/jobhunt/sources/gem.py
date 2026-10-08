@@ -27,7 +27,7 @@ def _is_remote(raw: dict, location: str) -> bool | None:
     kind = str(raw.get("location_type") or "").lower()
     if kind == "remote":
         return True
-    if kind == "hybrid":
+    if kind in ("hybrid", "in_office"):
         return False
     return True if "remote" in f"{location} {raw.get('title', '')}".lower() else None
 

@@ -2682,9 +2682,31 @@ def test_gem_normalizes(gem_company, fixture_json):
     assert j.url == "https://jobs.gem.com/examplegem/9001"
     assert j.location == "Remote, United States"
     assert "Lead the & platform team." in j.body and "Own Kubernetes" in j.body and "<" not in j.body
-    assert j.posted_at.startswith("20")
-    # remote from Gem's location_type: remote, hybrid (explicitly not remote), or unknown
-    assert [j.remote for j in jobs] == [True, False, None]
+    assert j.posted_at == "2020-11-17T15:37:23.000Z"
+    # remote from Gem's location_type: remote, then hybrid and in_office (explicitly not remote)
+    assert [j.remote for j in jobs] == [True, False, False]
+
+
+@pytest.mark.parametrize(
+    "location_type, location, expected",
+    [
+        (None, "Remote, United States", True),
+        ("other", "Remote - US", True),
+        (None, "New York, United States", None),
+        ("other", "New York, United States", None),
+    ],
+)
+def test_gem_remote_falls_back_to_the_location(gem_company, fixture_json, location_type, location, expected):
+    raw = fixture_json("gem_job_posts.json")[2]
+    raw["location_type"] = location_type
+    raw["location"] = {"name": location}
+    assert gem.normalize(gem_company, raw).remote is expected
+
+
+def test_gem_url_falls_back_when_absolute_url_is_missing(gem_company, fixture_json):
+    raw = fixture_json("gem_job_posts.json")[0]
+    del raw["absolute_url"]
+    assert gem.normalize(gem_company, raw).url == "https://jobs.gem.com/examplegem/9001"
 
 
 @respx.mock
