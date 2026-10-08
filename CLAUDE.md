@@ -106,7 +106,7 @@ Endpoints, slug formats, gone-board signals and rate caps for each source are in
 - **Investigate first.** Check whether the careers site is backed by a JSON endpoint before writing a crawler.
 - **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.
 - **Fit the existing pipeline.** Output must still be `Job` models so filter, score, and letter stay unchanged.
-- **Off-limits:** Google (robots.txt disallows its job pages), Meta (its terms forbid automated collection without written permission), classic iCIMS portals (`Disallow: /`).
+- **Off-limits:** Google (robots.txt disallows its job pages), Meta (its terms forbid automated collection without written permission), classic iCIMS portals (`Disallow: /`), NEOGOV / governmentjobs.com and schooljobs.com (`Disallow: /` for all but named search engines, and its terms ban scraping even public pages), ctcLink (`Disallow: /`), SCALIS (its `/api/` is disallowed and its pages carry no job data), UKG / UltiPro job boards (`Disallow: */JobBoardView`), Pinpoint (`Disallow: /`), Dover (`Disallow: /api/`), Comeet (`Disallow: /`), PageUp (a bot wall), and UW Medicine's Workday site (robots.txt disallows `/UWMedHires/`). [docs/sources.md](docs/sources.md#not-covered-watch-these-by-hand) says what sits behind them.
 
 ## Roadmap
 
