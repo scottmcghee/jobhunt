@@ -102,8 +102,9 @@ def fetch(
     for p in with_ids(company, listing if isinstance(listing, list) else [], "uuid"):
         uuid = str(p["uuid"])
         first.setdefault(uuid, p)
-        if (label := _label(p.get("workLocation"))) and label not in places.setdefault(uuid, []):
-            places[uuid].append(label)
+        labels = places.setdefault(uuid, [])
+        if (label := _label(p.get("workLocation"))) and label not in labels:
+            labels.append(label)
     jobs = {u: (p, normalize(company, p, places=places[u])) for u, p in first.items()}
     wanted = [p for p, job in jobs.values() if wants_body(job)]
     run = pool.map if pool is not None else map

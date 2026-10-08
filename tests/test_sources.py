@@ -2831,3 +2831,15 @@ def test_rippling_detail_locations_replace_the_listing(rippling_company, fixture
     with httpx.Client() as client:
         jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: "Director" in job.title)
     assert jobs[0].location == "Seattle, WA; Remote (United States)"  # listed: "Remote (United States)"
+
+
+@respx.mock
+def test_rippling_keeps_a_posting_with_no_location(rippling_company, fixture_json):
+    listing = fixture_json("rippling_jobs.json")
+    listing[1]["workLocation"] = None
+    del listing[2]["workLocation"]
+    respx.get(RIP).mock(return_value=httpx.Response(200, json=listing))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: False)
+    assert [j.external_id for j in jobs] == RIP_IDS
+    assert [j.location for j in jobs] == ["Remote (United States)", "", ""]
