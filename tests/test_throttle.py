@@ -787,3 +787,27 @@ def test_connect_retries_sets_the_default_inner_transports_retries(monkeypatch):
     _no_proxy_env(monkeypatch)
     assert throttle.ThrottledTransport()._inner._pool._retries == 1
     assert throttle.ThrottledTransport(connect_retries=0)._inner._pool._retries == 0
+
+
+def _cookie_round_trip(client, url):
+    """Two GETs where the first answer sets a cookie; the Cookie header the second one sent."""
+    sent = []
+
+    def handler(request):
+        sent.append(request.headers.get("cookie"))
+        return httpx.Response(200, headers={"Set-Cookie": "PLAY_SESSION=abc; Path=/"})
+
+    route = respx.get(url).mock(side_effect=handler)
+    client.get(url)
+    client.get(url)
+    assert route.call_count == 2
+    return sent[1]
+
+
+@respx.mock
+def test_a_client_with_no_cookies_keeps_none():
+    # one shared client over a whole fetch collected ~20,000 Workday and BambooHR cookies, and
+    # httpx copies the jar on every request: 55 ms a request at 10,000 cookies
+    with httpx.Client(cookies=throttle.no_cookies()) as client:
+        assert _cookie_round_trip(client, URL) is None
+        assert len(client.cookies.jar) == 0

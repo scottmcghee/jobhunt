@@ -499,7 +499,9 @@ answers the same public JSON endpoint on its own host, the one its search page c
 
 Every request from `jobhunt fetch`, and from `python -m jobhunt.slugs --check`, goes through
 one throttled HTTP transport. It identifies itself with the User-Agent
-`jobhunt/0.1 (+personal job search tool)` (`fetch.user_agent`).
+`jobhunt/0.1 (+personal job search tool)` (`fetch.user_agent`). It keeps no cookies: no source
+needs them, and the ones Workday and BambooHR set would pile up to tens of thousands over a
+run, slowing every request (`throttle.no_cookies`).
 
 ### Rate groups and per-host limits
 

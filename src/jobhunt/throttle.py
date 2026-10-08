@@ -34,6 +34,7 @@ rate cap wake and raise ``Stopped``, and no new request is sent; one already sen
 from __future__ import annotations
 
 import email.utils
+import http.cookiejar
 import random
 import threading
 import time
@@ -66,6 +67,18 @@ TRANSIENT_ERRORS = (
 
 class Stopped(Exception):
     """The transport was stopped, so the request wasn't sent. Not an httpx.HTTPError, on purpose."""
+
+
+def no_cookies() -> http.cookiejar.CookieJar:
+    """A cookie jar that keeps none: pass it as ``httpx.Client(cookies=...)``.
+
+    One client serves a whole fetch, and Workday (6 or 7 per board) and BambooHR set cookies
+    that it would otherwise keep: about 20,000 by the end of a full run. httpx copies the jar
+    for every request, which then costs ~150 ms of CPU, so late in a run fetch spent most of
+    its time on cookies. No source needs them (checked on two boards of each in October 2026);
+    one that does should make its own client with a jar of its own.
+    """
+    return http.cookiejar.CookieJar(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
 
 
 def retry_after_seconds(value: str | None, now: float | None = None) -> float | None:

@@ -575,7 +575,11 @@ def main(argv: list[str] | None = None) -> int:
         connect_retries=0,
     )
     with httpx.Client(
-        headers=headers, timeout=fetch.timeout, follow_redirects=True, transport=transport
+        headers=headers,
+        timeout=fetch.timeout,
+        follow_redirects=True,
+        transport=transport,
+        cookies=throttle.no_cookies(),
     ) as client:
         constituents = fetch_constituents(client)
         by_title = fetch_title_sites(client, [c.article for c in constituents])

@@ -1478,3 +1478,19 @@ def test_a_posting_listed_twice_on_one_board_is_recorded_once(tmp_path, platform
     companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
     assert _fetch(tmp_path, companies) == 0
     assert [j.location for j in storage.load_jobs(tmp_path / "data")] == [platform_director_job.location]
+
+
+@respx.mock
+def test_the_fetch_client_keeps_no_cookies():
+    fetch = cli.settings.Settings().fetch
+    with cli._client(cli._transport(fetch, workers=2, per_host=2), fetch) as client:
+        sent = []
+
+        def handler(request):
+            sent.append(request.headers.get("cookie"))
+            return httpx.Response(200, headers={"Set-Cookie": "PLAY_SESSION=abc; Path=/"})
+
+        respx.get(GH.format("acme")).mock(side_effect=handler)
+        client.get(GH.format("acme"))
+        client.get(GH.format("acme"))
+        assert sent == [None, None] and len(client.cookies.jar) == 0
