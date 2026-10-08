@@ -729,6 +729,7 @@ def test_main_retries_a_wikidata_429(tmp_path, monkeypatch):
         respx.get(url).mock(return_value=httpx.Response(200, headers={"Set-Cookie": "WMF=x; Path=/"}))
         for _ in range(2):
             cookies_sent.append(client.get(url).request.headers.get("cookie"))
+        assert len(client.cookies.jar) == 0  # the client keeps none (throttle.no_cookies)
         return {}
 
     monkeypatch.setattr(survey, "fetch_sites", fetch_sites)
