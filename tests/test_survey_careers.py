@@ -740,7 +740,7 @@ def test_main_retries_a_wikidata_429(tmp_path, monkeypatch):
     assert wikidata.call_count == 2
     (built,) = built
     assert built._max_retries == 2 and built._max_retry_after == 30  # from the fetch settings
-    assert built.max_in_flight == 1  # one request at a time
+    assert built._slots is not None and built._slots._initial_value == 1  # one request at a time
 
 
 def test_main_tries_a_host_that_does_not_connect_once(tmp_path, monkeypatch):
