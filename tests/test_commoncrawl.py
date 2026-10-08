@@ -1,0 +1,135 @@
+"""Reading Common Crawl's URL index by byte range: blocks for host prefixes, and their URLs."""
+
+from __future__ import annotations
+
+import gzip
+import json
+
+import httpx
+import pytest
+import respx
+
+from jobhunt import commoncrawl as cc
+
+CRAWL = "CC-MAIN-2026-39"
+INDEXES = f"https://data.commoncrawl.org/cc-index/collections/{CRAWL}/indexes"
+
+
+def _line(surt: str, url: str) -> str:
+    record = {"url": url, "mime": "text/html", "status": "200"}
+    return f"{surt} 20260911222300 {json.dumps(record)}"
+
+
+# Three index blocks, as Common Crawl cuts them (each its own gzip member, in one shard file).
+# Gem's URLs start at the end of the block before the first one whose key is Gem's.
+BLOCKS = [
+    [
+        _line("com,geluk)/robots.txt", "https://geluk.com/robots.txt"),
+        _line("com,gem,jobs)/acme/1", "https://jobs.gem.com/acme/1"),
+    ],
+    [
+        _line("com,gem,jobs)/beta/2", "https://jobs.gem.com/Beta/2"),
+        _line("com,gem-beauty)/pages/x", "https://gem-beauty.com/pages/x"),
+    ],
+    [
+        _line("com,myworkdayjobs,wd5,acme)/external", "https://acme.wd5.myworkdayjobs.com/External"),
+        _line("com,myworkdayjobs,wd12,beta)/careers", "https://beta.wd12.myworkdayjobs.com/Careers"),
+    ],
+]
+
+
+def _shard_and_index() -> tuple[bytes, str]:
+    shard, index, offset = b"", [], 0
+    for n, block in enumerate(BLOCKS):
+        member = gzip.compress(("\n".join(block) + "\n").encode())
+        first_key = block[0].split(" ")[0]
+        index.append(f"{first_key} 20260911222300\tcdx-00073.gz\t{offset}\t{len(member)}\t{n + 1}")
+        shard += member
+        offset += len(member)
+    return shard, "\n".join(index) + "\n"
+
+
+SHARD, CLUSTER = _shard_and_index()
+
+
+def _serve_ranges(request: httpx.Request) -> httpx.Response:
+    start, end = request.headers["range"].removeprefix("bytes=").split("-")
+    return httpx.Response(206, content=SHARD[int(start) : int(end) + 1])
+
+
+@pytest.mark.parametrize(
+    ("host", "subdomains", "prefix"),
+    [
+        ("jobs.gem.com", False, "com,gem,jobs)"),
+        ("ats.rippling.com", False, "com,rippling,ats)"),
+        ("myworkdayjobs.com", True, "com,myworkdayjobs,"),
+        ("Jobs.Lever.co", False, "co,lever,jobs)"),
+    ],
+)
+def test_surt_prefix(host, subdomains, prefix):
+    assert cc.surt_prefix(host, subdomains=subdomains) == prefix
+
+
+def test_blocks_for_a_prefix_include_the_block_before_its_first_key():
+    blocks = cc.read_blocks(CLUSTER.splitlines())
+    picked = cc.blocks_for(blocks, ["com,gem,jobs)"])
+    assert [b.key for b in picked] == ["com,geluk)/robots.txt", "com,gem,jobs)/beta/2"]
+    assert picked[0].file == "cdx-00073.gz" and picked[0].offset == 0
+
+
+def test_a_prefix_with_no_block_of_its_own_gets_the_block_it_falls_in():
+    blocks = cc.read_blocks(CLUSTER.splitlines())
+    assert [b.key for b in cc.blocks_for(blocks, ["com,gem,jobs)/acme"])] == ["com,geluk)/robots.txt"]
+
+
+def test_blocks_for_several_prefixes_are_fetched_once_each():
+    blocks = cc.read_blocks(CLUSTER.splitlines())
+    picked = cc.blocks_for(blocks, ["com,gem,jobs)", "com,gem,jobs)/beta", "com,myworkdayjobs,"])
+    assert len(picked) == len({b.key for b in picked}) == 3
+
+
+@respx.mock
+def test_urls_reads_only_the_matching_lines_by_byte_range(tmp_path):
+    (tmp_path / CRAWL).mkdir()
+    (tmp_path / CRAWL / "cluster.idx").write_text(CLUSTER)
+    route = respx.get(f"{INDEXES}/cdx-00073.gz").mock(side_effect=_serve_ranges)
+    with httpx.Client() as client:
+        gem = list(cc.urls(client, CRAWL, ["com,gem,jobs)"], tmp_path))
+        workday = list(cc.urls(client, CRAWL, ["com,myworkdayjobs,"], tmp_path))
+    assert gem == ["https://jobs.gem.com/acme/1", "https://jobs.gem.com/Beta/2"]
+    assert workday == [
+        "https://acme.wd5.myworkdayjobs.com/External", "https://beta.wd12.myworkdayjobs.com/Careers"
+    ]
+    assert all(c.request.headers["range"].startswith("bytes=") for c in route.calls)
+    assert route.call_count == 4  # each prefix: its blocks and the one before (it may end there)
+
+
+@respx.mock
+def test_the_cluster_index_is_downloaded_once_and_cached(tmp_path):
+    route = respx.get(f"{INDEXES}/cluster.idx").mock(return_value=httpx.Response(200, text=CLUSTER))
+    with httpx.Client() as client:
+        path = cc.cluster_index(client, CRAWL, tmp_path)
+        assert cc.cluster_index(client, CRAWL, tmp_path) == path
+    assert route.call_count == 1 and path.read_text() == CLUSTER
+
+
+@respx.mock
+def test_a_failed_download_leaves_no_partial_index(tmp_path):
+    respx.get(f"{INDEXES}/cluster.idx").mock(return_value=httpx.Response(503))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        cc.cluster_index(client, CRAWL, tmp_path)
+    assert not list(tmp_path.rglob("cluster.idx*"))
+
+
+@respx.mock
+def test_latest_crawls_come_from_collinfo():
+    respx.get(cc.COLLINFO).mock(
+        return_value=httpx.Response(200, json=[{"id": "CC-MAIN-2026-39"}, {"id": "CC-MAIN-2026-34"}, {"id": "CC-MAIN-2026-30"}])
+    )
+    with httpx.Client() as client:
+        assert cc.latest_crawls(client, 2) == ["CC-MAIN-2026-39", "CC-MAIN-2026-34"]
+
+
+def test_a_malformed_index_line_is_skipped():
+    blocks = cc.read_blocks(["not an index line", *CLUSTER.splitlines()])
+    assert len(blocks) == 3
