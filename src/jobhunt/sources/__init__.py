@@ -23,6 +23,7 @@ from jobhunt.sources import (
     paradox,
     phenom,
     radancy,
+    rippling,
     smartrecruiters,
     successfactors,
     workable,
@@ -50,6 +51,7 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
     "successfactors": successfactors.fetch,
     "radancy": radancy.fetch,
     "paradox": paradox.fetch,
+    "rippling": rippling.fetch,
 }
 
 
@@ -79,8 +81,8 @@ def fetch_company(
     """Dispatch to the right ATS adapter for this company.
 
     ``wants_body`` matters only where descriptions cost a request each (Workday, SmartRecruiters,
-    BambooHR, Eightfold, Oracle, Apple, Phenom, Radancy, Paradox, and SuccessFactors sites without
-    a feed):
+    BambooHR, Eightfold, Oracle, Apple, Phenom, Radancy, Paradox, Rippling, and SuccessFactors
+    sites without a feed):
     those postings get a description only if it returns True. Other sources always include
     descriptions.
 
@@ -93,8 +95,9 @@ def fetch_company(
     ignore it. ``max_per_term`` caps how many postings one term may bring in (None: the source's
     own default; fetch passes fetch.max_per_term).
     With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple, Phenom, Radancy,
-    Paradox and SuccessFactors fetch later pages and descriptions concurrently on it (BambooHR,
-    Oracle, Apple, Phenom, Radancy, Paradox and SuccessFactors only descriptions).
+    Paradox, Rippling and SuccessFactors fetch later pages and descriptions concurrently on it
+    (BambooHR, Oracle, Apple, Phenom, Radancy, Paradox, Rippling and SuccessFactors only
+    descriptions).
     """
     if company.ats in SEARCH_FETCHERS:
         fetcher = SEARCH_FETCHERS[company.ats]
@@ -113,6 +116,7 @@ _API_HOSTS: dict[str, str] = {
     "api.lever.co": "lever",
     "api.ashbyhq.com": "ashby",
     "api.gem.com": "gem",
+    "api.rippling.com": "rippling",
     "api.smartrecruiters.com": "smartrecruiters",
     "apply.workable.com": "workable",
     "www.amazon.jobs": "amazon",

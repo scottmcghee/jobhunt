@@ -9,7 +9,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - Listing sources: [Greenhouse](#greenhouse), [Lever](#lever), [Ashby](#ashby),
   [Workable](#workable), [Gem](#gem), [iCIMS Career Sites](#icims-career-sites)
 - Listing sources with descriptions on demand: [Workday](#workday),
-  [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr),
+  [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr), [Rippling](#rippling),
   [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
 - Search sources: [Amazon](#amazon), [Eightfold](#eightfold), [Oracle Recruiting Cloud](#oracle-recruiting-cloud),
   [Apple](#apple), [Phenom](#phenom)
@@ -43,8 +43,8 @@ Greenhouse, Lever, Ashby, Workable and Gem. iCIMS Career Sites is a listing sour
 request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
-descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR, and
-SuccessFactors sites without a full feed, Radancy and Paradox.
+descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR,
+Rippling, and SuccessFactors sites without a full feed, Radancy and Paradox.
 `fetch` asks for a description only when the posting's title passes the title filter in
 `preferences.yaml`. Postings whose titles fail are rejected anyway, so nothing is lost.
 
@@ -88,6 +88,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
+| `rippling` | board name | one request each | 404, removed | `rippling` |
 | `bamboohr` | tenant | one request each | redirect to bamboohr.com, removed | `bamboohr` |
 | `radancy` | careers site host | one page each | no sitemap: 404, removed; no job URLs: empty, warned | the careers host |
 | `paradox` | careers site host | one page each | no sitemap: 404, removed; no job URLs: empty, warned | the careers host |
@@ -240,6 +241,24 @@ whose robots.txt disallows everything. A site's pages load scripts from `jibecdn
   infrastructure.
 - **Limits:** Workday reports a total of at most 2,000 postings, so a bigger site is read only
   that far.
+
+## Rippling
+
+```yaml
+  - name: Rippling
+    ats: rippling
+    slug: rippling
+```
+
+- **Slug:** the board name in `ats.rippling.com/<slug>`; case is kept.
+- **Endpoints:** `GET https://api.rippling.com/platform/api/ats/v1/board/<slug>/jobs` lists every
+  posting without descriptions, and `.../jobs/<uuid>` gives one posting's description (the role,
+  then the company blurb) and its creation date, asked for only when the title passes the filter.
+- **Location:** the listing has one entry per location, merged into one posting; a fetched
+  posting's own list of locations replaces them.
+- **Remote:** yes if a location or the title says "remote" (Rippling writes "Remote (United
+  States)"); otherwise unknown.
+- **Unknown board:** 404, removed.
 
 ## SmartRecruiters
 

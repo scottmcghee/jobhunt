@@ -31,6 +31,7 @@ from jobhunt.sources import (
     radancy,
     rate_group,
     request_group,
+    rippling,
     smartrecruiters,
     successfactors,
     workable,
@@ -1301,6 +1302,7 @@ def test_apple_location(locations, expected):
 PH = "https://careers.example.com/widgets"
 IC = "https://careers.example.com/api/jobs"  # iCIMS Career Sites
 GEM = "https://api.gem.com/job_board/v0/examplegem/job_posts/"
+RIP = "https://api.rippling.com/platform/api/ats/v1/board/examplerip/jobs"
 
 
 def _phenom_routes(fixture_json, detail=None):
@@ -2351,6 +2353,7 @@ def _requests_made(company, mocks):
         ("amazon_company", [("GET", AZ, "amazon_search.json")]),
         ("icims_careers_company", [("GET", IC, "icims_careers_jobs.json")]),
         ("gem_company", [("GET", GEM, "gem_job_posts.json")]),
+        ("rippling_company", [("GET", RIP + "/", "rippling_job.json"), ("GET", RIP, "rippling_jobs.json")]),
     ],
 )
 def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
@@ -2729,3 +2732,114 @@ def test_gem_skips_a_post_with_no_id(gem_company, fixture_json, caplog):
 def test_gem_rate_group():
     board = Company(name="x", ats="gem", slug="examplegem")
     assert rate_group(board) == "gem" == request_group(httpx.URL(GEM))
+
+
+# ------------------------------------------------------------------ Rippling
+
+RIP_IDS = [
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+    "33333333-3333-4333-8333-333333333333",
+]
+
+
+def _rippling(fixture_json, details=None):
+    respx.get(RIP).mock(return_value=httpx.Response(200, json=fixture_json("rippling_jobs.json")))
+    return respx.get(url__startswith=RIP + "/").mock(
+        return_value=details or httpx.Response(200, json=fixture_json("rippling_job.json"))
+    )
+
+
+@respx.mock
+def test_rippling_lists_then_describes_only_what_passes(rippling_company, fixture_json):
+    detail = _rippling(fixture_json)
+    wanted = lambda job: "Director" in job.title  # noqa: E731
+    with httpx.Client() as client:
+        jobs = fetch_company(rippling_company, client, wants_body=wanted)
+    assert [j.title for j in jobs] == [
+        "Director, Platform Engineering", "Head of Developer Experience", "Account Executive"
+    ]  # names come padded with spaces
+    assert detail.call_count == 1 and str(detail.calls[0].request.url).endswith(RIP_IDS[0])
+    j = jobs[0]
+    assert (j.source, j.company, j.company_slug, j.external_id) == ("rippling", "Example Rip", "examplerip", RIP_IDS[0])
+    assert j.key == f"rippling:examplerip:{RIP_IDS[0]}"
+    assert j.url == f"https://ats.rippling.com/examplerip/jobs/{RIP_IDS[0]}"
+    assert j.location == "Remote (United States)" and j.remote is True
+    # the role first, then the company blurb, as text
+    assert j.body.index("Lead the platform team.") < j.body.index("Example Rip makes & ships software.")
+    assert "Own Kubernetes" in j.body and "<" not in j.body
+    assert j.posted_at == "2026-01-27T23:24:57.958000+00:00"  # createdOn, in UTC
+    assert jobs[1].body == "" and jobs[1].location == "Seattle, WA" and jobs[1].remote is None
+
+
+@respx.mock
+def test_rippling_keeps_a_posting_whose_description_fails(rippling_company, fixture_json, caplog):
+    _rippling(fixture_json, details=httpx.Response(500))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: True)
+    assert len(jobs) == 3 and all(j.body == "" for j in jobs)
+    assert "no description" in caplog.text
+
+
+@respx.mock
+def test_rippling_fetches_descriptions_on_a_pool(rippling_company, fixture_json):
+    detail = _rippling(fixture_json)
+    with httpx.Client() as client, ThreadPoolExecutor(3) as pool:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: True, pool=pool)
+    assert detail.call_count == 3 and len(jobs) == 3
+
+
+@respx.mock
+def test_rippling_unknown_board_404_raises(rippling_company):
+    respx.get(RIP).mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        rippling.fetch(rippling_company, client)
+
+
+@respx.mock
+def test_rippling_skips_a_posting_with_no_uuid(rippling_company, fixture_json, caplog):
+    listing = fixture_json("rippling_jobs.json")
+    del listing[0]["uuid"]
+    respx.get(RIP).mock(return_value=httpx.Response(200, json=listing))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: False)
+    assert [j.external_id for j in jobs] == RIP_IDS[1:]
+    assert "skipped a posting with no uuid" in caplog.text
+
+
+def test_rippling_rate_group():
+    board = Company(name="x", ats="rippling", slug="examplerip")
+    assert rate_group(board) == "rippling" == request_group(httpx.URL(RIP))
+
+
+@respx.mock
+def test_rippling_merges_a_posting_listed_once_per_location(rippling_company, fixture_json):
+    listing = fixture_json("rippling_jobs.json")
+    second = {**listing[1], "workLocation": {"label": "Remote (United States)", "id": "Remote (United States)"}}
+    listing.insert(2, second)  # Rippling lists a posting once for each of its locations
+    respx.get(RIP).mock(return_value=httpx.Response(200, json=listing))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: False)
+    assert [j.external_id for j in jobs] == RIP_IDS
+    assert jobs[1].location == "Seattle, WA; Remote (United States)" and jobs[1].remote is True
+
+
+@respx.mock
+def test_rippling_detail_locations_replace_the_listing(rippling_company, fixture_json):
+    detail = {**fixture_json("rippling_job.json"), "workLocations": ["Seattle, WA", "Remote (United States)"]}
+    _rippling(fixture_json, details=httpx.Response(200, json=detail))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: "Director" in job.title)
+    assert jobs[0].location == "Seattle, WA; Remote (United States)"  # listed: "Remote (United States)"
+
+
+@respx.mock
+def test_rippling_keeps_a_posting_with_no_location(rippling_company, fixture_json):
+    listing = fixture_json("rippling_jobs.json")
+    listing[1]["workLocation"] = None
+    del listing[2]["workLocation"]
+    respx.get(RIP).mock(return_value=httpx.Response(200, json=listing))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: False)
+    assert [j.external_id for j in jobs] == RIP_IDS
+    assert [j.location for j in jobs] == ["Remote (United States)", "", ""]
