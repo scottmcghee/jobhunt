@@ -62,10 +62,11 @@ companies.yaml ──► fetch ──► filter ──► score ──► letter
 `jobhunt fetch` reads every board in `config/companies.yaml`. It supports ten applicant-tracking
 systems (Greenhouse, Lever, Ashby, Workable, Gem, Rippling, Workday, SmartRecruiters, BambooHR and
 SuccessFactors) and iCIMS's branded careers sites,
-plus Amazon, Apple, Eightfold, Oracle Recruiting Cloud and Phenom sites, which are too big to list
-and are searched by your target title words instead, and Radancy and Paradox careers sites, read
+plus Amazon, Apple, Eightfold, Oracle Recruiting Cloud and Phenom sites and USAJOBS (federal jobs;
+needs a free API key), which are too big to list and are searched by your target title words
+instead, and Radancy and Paradox careers sites, read
 through their sitemaps. It calls the public endpoints and pages the companies' own careers sites
-use, within their robots.txt, so no accounts are needed.
+use, within their robots.txt, so no accounts are needed, except USAJOBS's free API key.
 
 New postings that pass the filter are appended to `data/jobs.jsonl`. `data/seen.json` remembers
 what was already recorded, so running `fetch` again never adds a duplicate. A board found gone

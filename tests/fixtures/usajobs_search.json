@@ -1,0 +1,139 @@
+{
+ "LanguageCode": "EN",
+ "SearchParameters": {},
+ "SearchResult": {
+  "SearchResultCount": 3,
+  "SearchResultCountAll": 3,
+  "SearchResultItems": [
+   {
+    "MatchedObjectId": "900000001",
+    "RelevanceRank": 0,
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-26-001",
+     "PositionTitle": "Director, Cloud Infrastructure",
+     "PositionURI": "https://www.usajobs.gov:443/job/900000001",
+     "PositionLocationDisplay": "Anywhere in the U.S. (remote job)",
+     "PositionLocation": [
+      {
+       "LocationName": "Anywhere in the U.S. (remote job), United States",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "",
+       "CityName": "Anywhere in the U.S. (remote job), United States",
+       "Longitude": 0,
+       "Latitude": 0
+      }
+     ],
+     "OrganizationName": "Example Agency",
+     "DepartmentName": "Department of Examples",
+     "QualificationSummary": "<p>Ten years leading infrastructure.</p>",
+     "PublicationStartDate": "2026-09-30T00:00:00.0000",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Lead the &amp; agency's cloud platform.",
+       "MajorDuties": [
+        "Direct SRE teams",
+        "Own the AWS landing zone"
+       ],
+       "RemoteIndicator": true,
+       "TeleworkEligible": false
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "900000002",
+    "RelevanceRank": 0,
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-26-001",
+     "PositionTitle": "Supervisory IT Specialist (Director)",
+     "PositionURI": "https://www.usajobs.gov:443/job/900000002",
+     "PositionLocationDisplay": "Seattle, Washington",
+     "PositionLocation": [
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Washington",
+       "CityName": "Seattle, Washington",
+       "Longitude": 0,
+       "Latitude": 0
+      }
+     ],
+     "OrganizationName": "Example Agency",
+     "DepartmentName": "Department of Examples",
+     "QualificationSummary": "One year at GS-14.",
+     "PublicationStartDate": "2026-10-01T00:00:00.0000",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Manage enterprise IT.",
+       "MajorDuties": [
+        "Supervise staff"
+       ],
+       "RemoteIndicator": false,
+       "TeleworkEligible": true
+      }
+     }
+    }
+   },
+   {
+    "MatchedObjectId": "900000003",
+    "RelevanceRank": 0,
+    "MatchedObjectDescriptor": {
+     "PositionID": "EX-26-003",
+     "PositionTitle": "Program Analyst",
+     "PositionURI": "https://www.usajobs.gov:443/job/900000003",
+     "PositionLocationDisplay": "Location Negotiable After Selection",
+     "PositionLocation": [
+      {
+       "LocationName": "Salt Lake City, Utah",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Utah",
+       "CityName": "Salt Lake City, Utah",
+       "Longitude": 0,
+       "Latitude": 0
+      },
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Washington",
+       "CityName": "Seattle, Washington",
+       "Longitude": 0,
+       "Latitude": 0
+      },
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Washington",
+       "CityName": "Seattle, Washington",
+       "Longitude": 0,
+       "Latitude": 0
+      },
+      {
+       "LocationName": "Phoenix, Arizona",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Arizona",
+       "CityName": "Phoenix, Arizona",
+       "Longitude": 0,
+       "Latitude": 0
+      }
+     ],
+     "OrganizationName": "Other Example Office",
+     "DepartmentName": "Department of Examples",
+     "QualificationSummary": "",
+     "PublicationStartDate": "2026-10-02T00:00:00.0000",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Analyze programs.",
+       "MajorDuties": [],
+       "RemoteIndicator": false,
+       "TeleworkEligible": true
+      }
+     }
+    }
+   }
+  ],
+  "UserArea": {
+   "NumberOfPages": "1",
+   "IsRadialSearch": true
+  }
+ }
+}

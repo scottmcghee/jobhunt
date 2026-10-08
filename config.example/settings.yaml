@@ -71,6 +71,7 @@ fetch:
     eightfold: 500  # 10 a page
     oracle: 1000  # 200 a page
     phenom: 500  # 100 a page
+    usajobs: 2000  # 500 a page
 
 paths:
   # ~ expands, and a relative path is under the repo (like the defaults), whatever directory
@@ -81,3 +82,11 @@ paths:
 slugs:
   # Threads for `python -m jobhunt.slugs --check`. Env: JOBHUNT_SLUGS_CHECK_WORKERS
   check_workers: 4
+
+usajobs:
+  # The federal jobs source (`ats: usajobs`) needs a free API key from developer.usajobs.gov and
+  # the email address it was requested with; USAJOBS wants that email as each request's
+  # User-Agent. Both are secrets of a sort: keep them here (config/ is gitignored) or in the
+  # environment. null: USAJOBS boards are skipped with a warning.
+  api_key: null  # Env: JOBHUNT_USAJOBS_API_KEY
+  email: null  # Env: JOBHUNT_USAJOBS_EMAIL

@@ -1813,3 +1813,25 @@ def test_eval_rescore_skips_an_unusable_model_reply(tmp_path, scored_job, monkey
     (run,) = storage.read_jsonl(tmp_path / "data" / "evals.jsonl")
     assert run["metrics"]["n"] == 1
     assert any(b.job.key in r.getMessage() and "skipped" in r.getMessage() for r in caplog.records)
+
+
+def test_fetch_gives_usajobs_its_key_and_email_from_settings(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: USAJOBS\n    ats: usajobs\n    slug: remote\n")
+    monkeypatch.setenv("JOBHUNT_USAJOBS_API_KEY", "k-123")
+    monkeypatch.setenv("JOBHUNT_USAJOBS_EMAIL", "me@example.com")
+    seen = []
+    monkeypatch.setattr(cli, "fetch_company", lambda company, client, **kw: seen.append(kw) or [])
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert seen[0]["usajobs_auth"] == ("k-123", "me@example.com")
+
+
+def test_fetch_without_usajobs_settings_passes_no_credentials(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: USAJOBS\n    ats: usajobs\n    slug: remote\n")
+    monkeypatch.delenv("JOBHUNT_USAJOBS_API_KEY", raising=False)
+    monkeypatch.delenv("JOBHUNT_USAJOBS_EMAIL", raising=False)
+    seen = []
+    monkeypatch.setattr(cli, "fetch_company", lambda company, client, **kw: seen.append(kw) or [])
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert seen[0]["usajobs_auth"] is None

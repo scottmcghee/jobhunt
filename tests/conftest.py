@@ -188,3 +188,8 @@ def gem_company() -> Company:
 @pytest.fixture
 def rippling_company() -> Company:
     return Company(name="Example Rip", ats="rippling", slug="examplerip")
+
+
+@pytest.fixture
+def usajobs_company() -> Company:
+    return Company(name="USAJOBS", ats="usajobs", slug="Springfield, Illinois/50")

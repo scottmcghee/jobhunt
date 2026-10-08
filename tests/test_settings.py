@@ -25,7 +25,9 @@ def test_defaults_are_todays_values():
     assert f.transient_retries == 2
     # Workable's Cloudflare bans bursts of about 50 in 10 s; Microsoft's Eightfold site 429s at 1/s
     assert f.max_rate == {"workable": 1.4, "eightfold": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0}
-    assert f.max_per_term == {"amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500}
+    assert f.max_per_term == {
+        "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500, "usajobs": 2000
+    }
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
     assert s.slugs.check_workers == 4
 
@@ -219,3 +221,19 @@ def test_a_bad_max_per_term_key_in_the_file_is_rejected(tmp_path):
     p.write_text("fetch:\n  max_per_term:\n    Amazon: 9900\n")
     with pytest.raises(settings.SettingsError, match="fetch.max_per_term.*'amazon'"):
         settings.load(p, environ={})
+
+
+def test_usajobs_credentials_come_from_the_file_or_the_environment(tmp_path):
+    p = tmp_path / "settings.yaml"
+    p.write_text("usajobs:\n  api_key: from-file\n  email: me@example.com\n")
+    s = settings.load(p, environ={})
+    assert (s.usajobs.api_key, s.usajobs.email) == ("from-file", "me@example.com")
+    s = settings.load(p, environ={"JOBHUNT_USAJOBS_API_KEY": "from-env"})
+    assert s.usajobs.api_key == "from-env"
+    assert settings.Settings().usajobs.api_key is None  # off until set
+
+
+def test_the_usajobs_key_and_email_never_show_in_a_repr(tmp_path):
+    s = settings.Settings.model_validate({"usajobs": {"api_key": "s3cret", "email": "me@example.com"}})
+    assert "s3cret" not in repr(s) and "me@example.com" not in repr(s)
+    assert "s3cret" not in str(s)

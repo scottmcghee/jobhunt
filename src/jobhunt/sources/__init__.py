@@ -26,6 +26,7 @@ from jobhunt.sources import (
     rippling,
     smartrecruiters,
     successfactors,
+    usajobs,
     workable,
     workday,
 )
@@ -66,6 +67,7 @@ SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
     "oracle": oracle.fetch,
     "apple": apple.fetch,
     "phenom": phenom.fetch,
+    "usajobs": usajobs.fetch,  # also needs ``usajobs_auth``; see fetch_company
 }
 
 
@@ -77,6 +79,7 @@ def fetch_company(
     pool: Executor | None = None,
     search: Sequence[str] = (),
     max_per_term: int | None = None,
+    usajobs_auth: tuple[str, str] | None = None,
 ) -> list[Job]:
     """Dispatch to the right ATS adapter for this company.
 
@@ -90,15 +93,21 @@ def fetch_company(
     source) early. iCIMS Career Sites is paged too but ignores it: it reads every page, up to its
     own 100-page guard. The others are one request.
 
-    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom):
-    they search per term instead (``fetch`` passes the title filter's target-level words). Others
-    ignore it. ``max_per_term`` caps how many postings one term may bring in (None: the source's
-    own default; fetch passes fetch.max_per_term).
+    ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom,
+    USAJOBS): they search per term instead (``fetch`` passes the title filter's target-level
+    words). Others ignore it. ``max_per_term`` caps how many postings one term may bring in (None:
+    the source's own default; fetch passes fetch.max_per_term).
+    ``usajobs_auth`` is the (key, email) pair, handed to USAJOBS boards only; without it they are
+    skipped with a warning.
     With ``pool``, Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple, Phenom, Radancy,
     Paradox, Rippling and SuccessFactors fetch later pages and descriptions concurrently on it
     (BambooHR, Oracle, Apple, Phenom, Radancy, Paradox, Rippling and SuccessFactors only
     descriptions).
     """
+    if company.ats == "usajobs":  # the one source with credentials (key, email); no one else's
+        return usajobs.fetch(
+            company, client, search, max_pages, wants_body, pool, max_per_term, auth=usajobs_auth
+        )
     if company.ats in SEARCH_FETCHERS:
         fetcher = SEARCH_FETCHERS[company.ats]
         return fetcher(company, client, search, max_pages, wants_body, pool, max_per_term)
@@ -121,6 +130,7 @@ _API_HOSTS: dict[str, str] = {
     "apply.workable.com": "workable",
     "www.amazon.jobs": "amazon",
     "jobs.apple.com": "apple",
+    "data.usajobs.gov": "usajobs",
 }
 _WORKDAY_HOST = re.compile(r"[a-z0-9-]+\.(wd\d+)\.myworkdayjobs\.com")
 _BAMBOOHR_HOST = re.compile(r"[a-z0-9-]+\.bamboohr\.com")

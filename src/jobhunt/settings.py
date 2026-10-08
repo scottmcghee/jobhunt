@@ -76,11 +76,12 @@ class FetchSettings(_Section):
     # oracle, phenom). A term with more hits stops there, with a warning. Amazon can't page past
     # 9,900.
     max_per_term: dict[
-        Literal["amazon", "apple", "eightfold", "oracle", "phenom"],
+        Literal["amazon", "apple", "eightfold", "oracle", "phenom", "usajobs"],
         Annotated[StrictInt, Field(ge=1)],
     ] = Field(
         default_factory=lambda: {
-            "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500
+            "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500,
+            "usajobs": 2000,
         }
     )
 
@@ -130,11 +131,20 @@ class SlugsSettings(_Section):
     check_workers: int = Field(4, ge=1)  # threads for `python -m jobhunt.slugs --check`
 
 
+class UsajobsSettings(_Section):
+    """USAJOBS's search API needs a key (free, from developer.usajobs.gov) and the email it was
+    requested with, sent as the User-Agent. Secrets: kept out of reprs, never logged."""
+
+    api_key: str | None = Field(None, repr=False)
+    email: str | None = Field(None, repr=False)
+
+
 class Settings(_Section):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     fetch: FetchSettings = Field(default_factory=FetchSettings)
     paths: PathSettings = Field(default_factory=PathSettings)
     slugs: SlugsSettings = Field(default_factory=SlugsSettings)
+    usajobs: UsajobsSettings = Field(default_factory=UsajobsSettings)
 
 
 # Older names kept working; the JOBHUNT_<SECTION>_<KEY> form wins when both are set.
