@@ -467,6 +467,22 @@ def test_the_check_client_is_throttled_like_fetch(monkeypatch):
         assert client.follow_redirects
 
 
+@respx.mock
+def test_the_check_client_keeps_cookies_per_host_in_its_transport():
+    url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs"
+    sent = []
+
+    def handler(request):
+        sent.append(request.headers.get("cookie"))
+        return httpx.Response(200, headers={"Set-Cookie": "PLAY_SESSION=abc; Path=/"})
+
+    respx.get(url).mock(side_effect=handler)
+    with slugs._client() as client:
+        client.get(url)
+        client.get(url)
+        assert sent == [None, "PLAY_SESSION=abc"] and len(client.cookies.jar) == 0
+
+
 def test_main_check_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "lots")
     out = tmp_path / "out.yaml"

@@ -499,7 +499,12 @@ answers the same public JSON endpoint on its own host, the one its search page c
 
 Every request from `jobhunt fetch`, and from `python -m jobhunt.slugs --check`, goes through
 one throttled HTTP transport. It identifies itself with the User-Agent
-`jobhunt/0.1 (+personal job search tool)` (`fetch.user_agent`).
+`jobhunt/0.1 (+personal job search tool)` (`fetch.user_agent`). It sends each host back the
+cookies that host set itself: Cloudflare (in front of Workday and Workable) and Eightfold
+expect them, and Eightfold blocked a fetch that didn't. They're kept per exact host
+(unlike a browser, a `Domain=` cookie isn't shared with sibling subdomains), so the
+tens of thousands Workday and BambooHR set over a run don't slow every request
+(`throttle.no_cookies`).
 
 ### Rate groups and per-host limits
 

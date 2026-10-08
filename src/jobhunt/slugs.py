@@ -246,6 +246,7 @@ def _client(fetch: settings.FetchSettings | None = None) -> httpx.Client:
         timeout=fetch.timeout,
         headers={"User-Agent": fetch.user_agent},
         follow_redirects=True,
+        cookies=throttle.no_cookies(),
     )
 
 

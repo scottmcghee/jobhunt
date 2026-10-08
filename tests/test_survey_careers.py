@@ -722,13 +722,24 @@ def test_main_retries_a_wikidata_429(tmp_path, monkeypatch):
     monkeypatch.setattr(
         survey, "fetch_constituents", lambda client: [survey.Constituent("ACME", "Acme", "X", "Acme")]
     )
-    monkeypatch.setattr(survey, "fetch_sites", lambda client: {})
+    cookies_sent = []
+
+    def fetch_sites(client):  # two requests to one host; the first answer sets a cookie
+        url = "https://query.wikidata.org/sparql"
+        respx.get(url).mock(return_value=httpx.Response(200, headers={"Set-Cookie": "WMF=x; Path=/"}))
+        for _ in range(2):
+            cookies_sent.append(client.get(url).request.headers.get("cookie"))
+        assert len(client.cookies.jar) == 0  # the client keeps none (throttle.no_cookies)
+        return {}
+
+    monkeypatch.setattr(survey, "fetch_sites", fetch_sites)
     monkeypatch.setattr(
         survey, "survey_company", lambda *a, **k: survey.Result("ACME", "Acme", "X", None, [], [], [])
     )
     respx.get(survey.WIKI_API).mock(
         return_value=httpx.Response(
-            200, json={"query": {"pages": [{"title": "Acme", "pageprops": {"wikibase_item": "Q1"}}]}}
+            200,
+            json={"query": {"pages": [{"title": "Acme", "pageprops": {"wikibase_item": "Q1"}}]}},
         )
     )
     wikidata = respx.get(survey.WIKIDATA_API).mock(
@@ -738,6 +749,7 @@ def test_main_retries_a_wikidata_429(tmp_path, monkeypatch):
     known.write_text("companies: []\n")
     assert survey.main([str(tmp_path / "out"), "--companies", str(known), "--delay", "0"]) == 0
     assert wikidata.call_count == 2
+    assert cookies_sent == [None, "WMF=x"]  # sent back by the transport's jar for that host
     (built,) = built
     assert built._max_retries == 2 and built._max_retry_after == 30  # from the fetch settings
     assert built._slots is not None and built._slots._initial_value == 1  # one request at a time

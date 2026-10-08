@@ -57,6 +57,7 @@ def _client(transport: httpx.BaseTransport, fetch: settings.FetchSettings) -> ht
         timeout=fetch.timeout,
         headers={"User-Agent": fetch.user_agent},
         follow_redirects=True,
+        cookies=throttle.no_cookies(),
     )
 
 
