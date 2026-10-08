@@ -845,6 +845,46 @@ def test_a_retried_request_carries_the_cookie_its_429_set():
 
 
 @respx.mock
+def test_a_retry_carries_the_refreshed_cookie_its_429_set_not_the_stale_one():
+    clock = FakeClock()
+    sent = []
+
+    def handler(request):
+        sent.append(request.headers.get("cookie"))
+        if len(sent) == 1:
+            return httpx.Response(200, headers={"Set-Cookie": "__cf_bm=old; Path=/"})
+        if len(sent) == 2:
+            return httpx.Response(429, headers={"Retry-After": "1", "Set-Cookie": "__cf_bm=new; Path=/"})
+        return httpx.Response(200)
+
+    respx.get(URL).mock(side_effect=handler)
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    with httpx.Client(transport=transport, cookies=throttle.no_cookies()) as client:
+        client.get(URL)
+        assert client.get(URL).status_code == 200
+    assert sent == [None, "__cf_bm=old", "__cf_bm=new"]
+
+
+@respx.mock
+def test_a_callers_own_cookie_header_is_sent_as_is_on_every_try():
+    clock = FakeClock()
+    sent = []
+
+    def handler(request):
+        sent.append(request.headers.get("cookie"))
+        if len(sent) == 2:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, headers={"Set-Cookie": "PLAY_SESSION=abc; Path=/"})
+
+    respx.get(URL).mock(side_effect=handler)
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    with httpx.Client(transport=transport, cookies=throttle.no_cookies()) as client:
+        client.get(URL)  # the host's cookie is now in the transport's jar
+        assert client.get(URL, headers={"Cookie": "mine=1"}).status_code == 200
+    assert sent[1:] == ["mine=1", "mine=1"]
+
+
+@respx.mock
 def test_a_redirect_hop_carries_the_cookie_the_first_hop_set():
     first = "https://jobs.example.com/start"
     respx.get(first).mock(
