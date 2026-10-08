@@ -88,6 +88,11 @@ def test_blocks_for_several_prefixes_are_fetched_once_each():
     assert len(picked) == len({b.key for b in picked}) == 3
 
 
+def test_an_empty_index_picks_no_blocks():
+    assert cc.blocks_for([], ["com,gem,jobs)"]) == []
+    assert cc.select_blocks(iter([]), ["com,gem,jobs)"]) == []
+
+
 @respx.mock
 def test_urls_reads_only_the_matching_lines_by_byte_range(tmp_path):
     (tmp_path / CRAWL).mkdir()

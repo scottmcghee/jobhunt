@@ -104,6 +104,8 @@ def read_blocks(lines: Iterable[str]) -> list[Block]:
 
 def blocks_for(blocks: Sequence[Block], prefixes: Iterable[str]) -> list[Block]:
     """The blocks that may hold URLs under any of ``prefixes``, each once, in index order."""
+    if not blocks:
+        return []
     keys = [b.key for b in blocks]
     wanted: set[int] = set()
     for prefix in prefixes:
