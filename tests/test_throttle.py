@@ -28,13 +28,14 @@ class FakeClock:
 
 
 def _limiter(clock, **kw):
-    return throttle.GroupLimiter(clock=clock, sleep=clock.sleep, **kw)
+    return throttle.GroupLimiter(clock=clock, **kw)
 
 
 def test_limit_grows_on_success_up_to_the_ceiling():
-    lim = _limiter(FakeClock(), start=2, ceiling=4)
+    clock = FakeClock()
+    lim = _limiter(clock, start=2, ceiling=4)
     for _ in range(50):
-        lim.acquire()
+        assert lim.try_take(clock())
         lim.release(throttled=False)
     assert lim.limit == 4
 
@@ -42,12 +43,12 @@ def test_limit_grows_on_success_up_to_the_ceiling():
 def test_a_throttle_halves_the_limit_but_not_below_one():
     clock = FakeClock()
     lim = _limiter(clock, start=4, ceiling=6)
-    lim.acquire()
+    lim.try_take(clock())
     lim.release(throttled=True, retry_after=0)
     assert lim.limit == 2
     clock.now += 60  # past the cooldown
     for _ in range(3):
-        lim.acquire()
+        lim.try_take(clock())
         lim.release(throttled=True, retry_after=0)
         clock.now += 60
     assert lim.limit == 1
@@ -55,65 +56,47 @@ def test_a_throttle_halves_the_limit_but_not_below_one():
 
 def test_a_burst_of_throttles_halves_once_per_cooldown():
     # requests already in flight when the server starts refusing shouldn't collapse the limit
-    lim = _limiter(FakeClock(), start=4, ceiling=6)
+    clock = FakeClock()
+    lim = _limiter(clock, start=4, ceiling=6)
     for _ in range(3):
-        lim.acquire()
+        lim.try_take(clock())
     for _ in range(3):
         lim.release(throttled=True, retry_after=0)
     assert lim.limit == 2
 
 
+def test_a_group_takes_no_more_slots_than_its_limit():
+    clock = FakeClock()
+    lim = _limiter(clock, start=2, ceiling=6)
+    assert [lim.try_take(clock()) for _ in range(3)] == [True, True, False]
+    assert lim.in_flight == 2 and lim.requests == 2 and lim.max_in_flight == 2
+
+
 def test_a_rate_spaces_request_starts():
     clock = FakeClock()
     lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
-    for _ in range(3):
-        lim.acquire()  # slots are free, and the gap isn't taken here
-    assert clock.slept == []
-    for _ in range(3):
-        lim.space()  # only the rate holds them back
-    assert clock.slept == [0.5, 0.5]
+    assert lim.try_take(clock()) and lim.ready_at() == clock.now + 0.5
+    assert not lim.try_take(clock())  # a slot is free, but the gap isn't over
+    clock.now += 0.5
+    assert lim.try_take(clock())
     clock.now += 10  # idle time isn't banked as a burst
-    lim.space()
-    lim.space()
-    assert clock.slept == [0.5, 0.5, 0.5]
+    assert lim.try_take(clock()) and not lim.try_take(clock())
 
 
-def test_a_stop_while_spacing_raises_stopped():
-    import threading
-
-    stop = threading.Event()
-    lim = throttle.GroupLimiter(rate=0.01, stop=stop)  # a 100 s gap
-    lim.space()
-    stop.set()
-    with pytest.raises(throttle.Stopped):
-        lim.space()
-
-
-def test_space_reports_a_pause_that_began_while_it_slept():
-    clock = FakeClock()
-    lim = _limiter(clock, start=6, ceiling=6, rate=2.0)
-    assert lim.space() is True
-    lim.pause_until = clock.now + 5  # as a 429 elsewhere sets it during the 0.5 s gap
-    assert lim.space() is False
-    clock.now += 10
-    assert lim.space() is True
-
-
-def test_without_a_rate_requests_start_at_once():
-    clock = FakeClock()
-    lim = _limiter(clock, start=6, ceiling=6)
-    for _ in range(3):
-        lim.acquire()
-    assert clock.slept == []
-
-
-def test_acquire_waits_out_a_pause():
+def test_a_paused_group_takes_no_slot_until_the_pause_ends():
     clock = FakeClock()
     lim = _limiter(clock, start=2, ceiling=6)
-    lim.acquire()
+    lim.try_take(clock())
     lim.release(throttled=True, retry_after=7)
-    lim.acquire()  # must not start before the pause ends
-    assert sum(clock.slept) == pytest.approx(7)
+    assert lim.ready_at() == clock.now + 7 and not lim.try_take(clock())
+    clock.now += 7
+    assert lim.try_take(clock())
+
+
+def test_without_a_rate_or_a_pause_a_group_is_ready_at_once():
+    clock = FakeClock()
+    lim = _limiter(clock, start=6, ceiling=6)
+    assert lim.ready_at() <= clock.now
 
 
 @pytest.mark.parametrize(
@@ -317,7 +300,7 @@ def test_a_transient_retry_frees_its_slots_while_it_waits():
 
     def sleep(seconds):
         lim = transport.limiter(throttle.request_group(httpx.URL(URL)))
-        seen.append((lim.in_flight, transport._slots._value))
+        seen.append((lim.in_flight, transport._dispatcher.free))
         clock.sleep(seconds)
 
     transport._sleep = sleep
@@ -640,15 +623,15 @@ def test_stats_per_group():
 STOP_WAIT = 5  # seconds; only reached if a test is broken
 
 
-def _acquire_in_thread(lim):
-    """Start ``lim.acquire()`` on a thread; returns the thread and what acquire raised (if anything)."""
+def _acquire_in_thread(dispatcher, lim, share="g"):
+    """Start ``dispatcher.acquire(lim, share)`` on a thread; returns it and what it raised."""
     import threading
 
     raised: list[BaseException] = []
 
     def run():
         try:
-            lim.acquire()
+            dispatcher.acquire(lim, share)
         except BaseException as e:
             raised.append(e)
 
@@ -657,7 +640,7 @@ def _acquire_in_thread(lim):
     return thread, raised
 
 
-def test_a_limiter_waiting_out_a_pause_wakes_and_raises_when_stopped():
+def test_a_request_waiting_out_a_pause_wakes_and_raises_when_stopped():
     import threading
 
     stop, sleeping = threading.Event(), threading.Event()
@@ -666,30 +649,35 @@ def test_a_limiter_waiting_out_a_pause_wakes_and_raises_when_stopped():
         sleeping.set()
         stop.wait(seconds)
 
-    lim = throttle.GroupLimiter(start=2, ceiling=6, sleep=sleep, stop=stop)
-    lim.acquire()
+    dispatcher = throttle.Dispatcher(None, sleep=sleep, stop=stop)
+    lim = throttle.GroupLimiter(start=2, ceiling=6)
+    dispatcher.acquire(lim, "g")
     lim.release(throttled=True, retry_after=100)
-    thread, raised = _acquire_in_thread(lim)
+    dispatcher.release()
+    thread, raised = _acquire_in_thread(dispatcher, lim)
     assert sleeping.wait(STOP_WAIT)
     stop.set()
+    dispatcher.wake_all()
     thread.join(STOP_WAIT)
     assert not thread.is_alive()
     assert [type(e) for e in raised] == [throttle.Stopped]
-    assert lim.in_flight == 0
+    assert lim.in_flight == 0 and dispatcher.waiting() == 0
 
 
-def test_a_limiter_waiting_for_a_slot_wakes_and_raises_when_stopped():
+def test_a_request_waiting_for_a_slot_wakes_and_raises_when_stopped():
     import threading
 
     stop = threading.Event()
-    lim = throttle.GroupLimiter(start=1, ceiling=1, stop=stop)
-    lim.acquire()  # the only slot, never released
-    thread, raised = _acquire_in_thread(lim)
+    dispatcher = throttle.Dispatcher(None, stop=stop)
+    lim = throttle.GroupLimiter(start=1, ceiling=1)
+    dispatcher.acquire(lim, "g")  # the only slot, never released
+    thread, raised = _acquire_in_thread(dispatcher, lim)
     stop.set()
+    dispatcher.wake_all()
     thread.join(STOP_WAIT)
     assert not thread.is_alive()
     assert [type(e) for e in raised] == [throttle.Stopped]
-    assert lim.in_flight == 1
+    assert lim.in_flight == 1 and dispatcher.waiting() == 0
 
 
 def test_stopped_is_not_an_http_error():
@@ -764,9 +752,9 @@ def test_retry_limits_are_constructor_parameters():
 
 def test_cooldown_is_a_limiter_parameter():
     clock = FakeClock()
-    lim = throttle.GroupLimiter(start=4, ceiling=6, clock=clock, sleep=clock.sleep, cooldown=0)
+    lim = throttle.GroupLimiter(start=4, ceiling=6, clock=clock, cooldown=0)
     for _ in range(2):
-        lim.acquire()
+        lim.try_take(clock())
     lim.release(throttled=True)
     lim.release(throttled=True)
     assert lim.limit == 1  # no cooldown: both halvings count
@@ -787,3 +775,153 @@ def test_connect_retries_sets_the_default_inner_transports_retries(monkeypatch):
     _no_proxy_env(monkeypatch)
     assert throttle.ThrottledTransport()._inner._pool._retries == 1
     assert throttle.ThrottledTransport(connect_retries=0)._inner._pool._retries == 0
+
+
+# ------------------------------------------------------------------ sharing the global slots
+
+
+def _dispatcher(max_in_flight, clock=None):
+    clock = clock or FakeClock()
+    return throttle.Dispatcher(max_in_flight, clock=clock, sleep=clock.sleep), clock
+
+
+def test_a_waiter_is_granted_its_group_slot_and_a_global_slot_together():
+    d, clock = _dispatcher(1)
+    a, b = _limiter(clock, start=6, ceiling=6), _limiter(clock, start=6, ceiling=6)
+    first = d.enqueue(a, "a")
+    second = d.enqueue(b, "b")
+    assert first.granted and not second.granted
+    assert (a.in_flight, b.in_flight, d.free) == (1, 0, 0)  # a waiter holds no group slot
+    a.release()
+    d.release()
+    assert second.granted and (a.in_flight, b.in_flight, d.free) == (0, 1, 0)
+
+
+def test_freed_slots_go_to_the_classes_in_turn_not_to_the_one_with_most_waiters():
+    d, clock = _dispatcher(1)
+    holder = _limiter(clock, start=6, ceiling=6)
+    d.enqueue(holder, "holder")
+    tenants = [_limiter(clock, start=6, ceiling=6) for _ in range(5)]
+    oracle = [d.enqueue(lim, "oracle") for lim in tenants]  # five tenants, one class
+    big = _limiter(clock, start=6, ceiling=6)
+    workday = [d.enqueue(big, "workday:wd1") for _ in range(5)]
+    order = []
+    for _ in range(6):
+        d.release()  # the request that held the one global slot finished
+        granted = [w for w in oracle + workday if w.granted and w not in order]
+        assert len(granted) == 1
+        order.append(granted[0])
+    classes = ["oracle" if w in oracle else "workday" for w in order]
+    assert classes == ["oracle", "workday", "oracle", "workday", "oracle", "workday"]
+
+
+def test_one_big_group_gets_half_the_slots_against_fifty_one_board_tenants():
+    d, clock = _dispatcher(4)
+    big = _limiter(clock, start=6, ceiling=6)
+    waiters = [(_limiter(clock, start=6, ceiling=6), "oracle") for _ in range(50)]
+    waiters += [(big, "greenhouse")] * 50
+    waiters = [(lim, d.enqueue(lim, share)) for lim, share in waiters]
+    running = [pair for pair in waiters if pair[1].granted]
+    started = list(running)
+    for _ in range(40):  # the oldest request finishes; its slots go to the next class in turn
+        lim, _ = running.pop(0)
+        lim.release()
+        d.release()
+        for pair in waiters:
+            if pair[1].granted and pair not in started:
+                started.append(pair)
+                running.append(pair)
+    assert len(started) == 44
+    assert 20 <= sum(lim is big for lim, _ in started) <= 24  # not 4 of 44, as by arrival
+
+
+def test_a_rate_capped_waiter_holds_no_global_slot_while_its_gap_runs():
+    d, clock = _dispatcher(2)
+    workable = _limiter(clock, start=6, ceiling=6, rate=1.0)
+    lever = _limiter(clock, start=6, ceiling=6)
+    first, spaced = d.enqueue(workable, "workable"), d.enqueue(workable, "workable")
+    other = d.enqueue(lever, "lever")
+    assert first.granted and not spaced.granted and other.granted  # the second slot went to lever
+    assert d.free == 0
+
+
+def test_a_waiter_sleeps_out_its_groups_gap_then_goes():
+    d, clock = _dispatcher(None)
+    workable = _limiter(clock, start=6, ceiling=6, rate=2.0)
+    for _ in range(3):
+        d.acquire(workable, "workable")
+    assert clock.slept == [0.5, 0.5]
+
+
+def test_a_paused_group_waits_and_the_others_go_ahead():
+    d, clock = _dispatcher(1)
+    paused = _limiter(clock, start=6, ceiling=6)
+    paused.try_take(clock())
+    paused.release(throttled=True, retry_after=30)
+    held = d.enqueue(paused, "paused")
+    other = d.enqueue(_limiter(clock, start=6, ceiling=6), "other")
+    assert not held.granted and other.granted
+
+
+@respx.mock
+def test_the_transport_shares_global_slots_by_class():
+    # one global slot, held by lever; meanwhile three oracle tenants and greenhouse queue up
+    import threading
+    import time
+
+    order: list[str] = []
+    lever_in, finish_lever = threading.Event(), threading.Event()
+
+    def lever(request):
+        lever_in.set()
+        assert finish_lever.wait(STOP_WAIT)
+        return httpx.Response(200)
+
+    def record(request):
+        order.append(request.url.host)
+        return httpx.Response(200)
+
+    respx.get("https://api.lever.co/v0/postings/acme").mock(side_effect=lever)
+    respx.get(url__regex=r"https://t\d\.fa\.us2\.oraclecloud\.com/x").mock(side_effect=record)
+    respx.get(URL).mock(side_effect=record)
+    transport = throttle.ThrottledTransport(max_in_flight=1)
+    client = httpx.Client(transport=transport)
+    threads = [threading.Thread(target=client.get, args=("https://api.lever.co/v0/postings/acme",))]
+    threads[0].start()
+    assert lever_in.wait(STOP_WAIT)
+    urls = [f"https://t{i}.fa.us2.oraclecloud.com/x" for i in range(3)] + [URL, URL]
+    for n, url in enumerate(urls, start=1):
+        threads.append(threading.Thread(target=client.get, args=(url,)))
+        threads[-1].start()
+        while transport._dispatcher.waiting() < n:  # queued in this order
+            time.sleep(0.001)
+    finish_lever.set()
+    for t in threads:
+        t.join(STOP_WAIT)
+    classes = ["greenhouse" if host == "boards-api.greenhouse.io" else "oracle" for host in order]
+    assert classes == ["oracle", "greenhouse", "oracle", "greenhouse", "oracle"]
+
+
+def test_max_in_flight_is_readable():
+    assert throttle.ThrottledTransport(max_in_flight=3).max_in_flight == 3
+    assert throttle.ThrottledTransport().max_in_flight is None
+
+
+def test_a_pause_wakes_its_groups_waiters_to_sleep_it_out():
+    # a waiter for a full group is woken when a 429 pauses that group, then goes when the
+    # pause ends, rather than at its safety poll
+    import time
+
+    dispatcher = throttle.Dispatcher(None)
+    lim = throttle.GroupLimiter(start=1, ceiling=1)
+    dispatcher.acquire(lim, "g")  # the group's only slot
+    thread, raised = _acquire_in_thread(dispatcher, lim)
+    while dispatcher.waiting() < 1:
+        time.sleep(0.001)
+    started = time.monotonic()
+    lim.release(throttled=True, retry_after=0.2)
+    dispatcher.release(lim)
+    thread.join(STOP_WAIT)
+    assert not thread.is_alive() and not raised
+    assert 0.15 <= time.monotonic() - started < 1.0
+    assert lim.in_flight == 1
