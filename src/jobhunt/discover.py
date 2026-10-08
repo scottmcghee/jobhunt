@@ -135,7 +135,8 @@ def _load_cache(path: Path) -> dict[str, dict]:
 
 
 class _Polite(fingerprint.Polite):
-    """``fingerprint.Polite`` that also counts answers that mean "try later" (5xx, 429)."""
+    """``fingerprint.Polite`` that also counts failures that mean "try later": a request that got
+    no response, or an answer of 5xx or 429."""
 
     def __init__(self, client: httpx.Client, delay: float):
         super().__init__(client, delay)
@@ -145,7 +146,7 @@ class _Polite(fingerprint.Polite):
         self, url: str, follow_redirects: bool, json: dict | None = None
     ) -> httpx.Response | None:
         resp = super()._fetch(url, follow_redirects, json)
-        if resp is not None and (resp.status_code >= 500 or resp.status_code == 429):
+        if resp is None or resp.status_code >= 500 or resp.status_code == 429:
             self.transient += 1
         return resp
 
@@ -160,7 +161,7 @@ def survey_hosts(
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
     The cache is saved after every host, so an interrupted run keeps what it found. A host that
-    found nothing and had a request fail or answer 5xx or 429 (robots.txt included) isn't cached,
+    found no boards and had a request fail or answer 5xx or 429 (robots.txt included) isn't cached,
     so the next run tries it again; with ``refresh``, its cached boards are kept for this run.
     """
     cache = _load_cache(cache_path)
@@ -171,7 +172,7 @@ def survey_hosts(
             polite = _Polite(client, delay)
             home = f"https://{host}/"
             site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
-            if (polite.errors or polite.transient) and not (site.platforms or site.boards):
+            if polite.transient and not site.boards:
                 log.warning("%s: unreachable (%s)", host, ", ".join(polite.errors) or "5xx or 429")
                 if entry is None:
                     continue

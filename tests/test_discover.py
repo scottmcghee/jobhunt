@@ -141,6 +141,59 @@ def test_refresh_keeps_the_cached_boards_of_a_host_that_failed_for_now(tmp_path)
     assert json.loads(cache.read_text())["careers.acme.com"]["platforms"] == ["workday"]
 
 
+PHENOM_PAGE = '<script src="https://cdn.phenompeople.com/CareerConnectResources/x.js"></script>'
+PHENOM_SEARCH = {
+    "refineSearch": {
+        "data": {"jobs": [{"applyUrl": "https://acme.wd5.myworkdayjobs.com/External/job/Seattle/Director_R1"}]},
+        "totalHits": 1,
+    }
+}
+
+
+@respx.mock
+def test_a_platform_whose_board_request_failed_for_now_is_not_cached(tmp_path):
+    _careers_site(page=PHENOM_PAGE)
+    search = respx.post("https://careers.acme.com/widgets").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=PHENOM_SEARCH)]
+    )
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        assert discover.survey_hosts(["careers.acme.com"], client, cache, delay=0) == []
+        assert "careers.acme.com" not in json.loads(cache.read_text())  # tried again next time
+        again = discover.survey_hosts(["careers.acme.com"], client, cache, delay=0)
+    assert search.call_count == 2
+    assert [(b.ats, b.slug) for b in again] == [("workday", "acme/External")]
+
+
+@respx.mock
+def test_refresh_keeps_the_cached_boards_when_a_board_request_failed_for_now(tmp_path):
+    _careers_site(page=PHENOM_PAGE)
+    respx.post("https://careers.acme.com/widgets").mock(
+        side_effect=[httpx.Response(200, json=PHENOM_SEARCH), httpx.Response(503)]
+    )
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.acme.com"], client, cache, delay=0)
+        again = discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, refresh=True)
+    assert [b.slug for b in again] == ["acme/External"]
+    assert [b["slug"] for b in json.loads(cache.read_text())["careers.acme.com"]["boards"]] == ["acme/External"]
+
+
+@respx.mock
+def test_a_host_that_redirects_forever_is_cached(tmp_path):
+    respx.get("https://careers.loop.com/robots.txt").mock(return_value=httpx.Response(404))
+    page = respx.get("https://careers.loop.com/").mock(
+        return_value=httpx.Response(302, headers={"location": "https://careers.loop.com/"})
+    )
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.loop.com"], client, cache, delay=0)
+        calls = page.call_count
+        discover.survey_hosts(["careers.loop.com"], client, cache, delay=0)
+    assert json.loads(cache.read_text())["careers.loop.com"]["platforms"] == []
+    assert page.call_count == calls  # a permanent failure: not tried again
+
+
 # ------------------------------------------------------------------ Common Crawl
 
 
