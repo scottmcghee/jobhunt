@@ -59,9 +59,9 @@ companies.yaml ──► fetch ──► filter ──► score ──► letter
 
 ### 1. Fetch
 
-`jobhunt fetch` reads every board in `config/companies.yaml`. It supports eight applicant-tracking
-systems (Greenhouse, Lever, Ashby, Workable, Workday, SmartRecruiters, BambooHR and SuccessFactors)
-and iCIMS's branded careers sites,
+`jobhunt fetch` reads every board in `config/companies.yaml`. It supports nine applicant-tracking
+systems (Greenhouse, Lever, Ashby, Workable, Gem, Workday, SmartRecruiters, BambooHR and
+SuccessFactors) and iCIMS's branded careers sites,
 plus Amazon, Apple, Eightfold, Oracle Recruiting Cloud and Phenom sites, which are too big to list
 and are searched by your target title words instead, and Radancy and Paradox careers sites, read
 through their sitemaps. It calls the public endpoints and pages the companies' own careers sites

@@ -49,6 +49,8 @@ from jobhunt.schema import Company
         ("https://apply.workable.com/1871", ("workable", "1871")),
         ("https://apply.workable.com/12345/j/A1B2C3D4E5", ("workable", "12345")),
         ("https://jobs.ashbyhq.com/Some%20Co", ("ashby", "Some Co")),
+        ("https://jobs.gem.com/examplegem/4965519002", ("gem", "examplegem")),
+        ("https://jobs.gem.com/ExampleGem", ("gem", "ExampleGem")),
         ("https://jobs.smartrecruiters.com/AbbVie/3743990009679496-manager?trid=x", ("smartrecruiters", "AbbVie")),
         ("https://careers.smartrecruiters.com/AveryDennison", ("smartrecruiters", "AveryDennison")),
         ("https://careers.smartrecruiters.com/BoydGaming/main-street-station", ("smartrecruiters", "BoydGaming")),

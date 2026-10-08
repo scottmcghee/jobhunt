@@ -7,7 +7,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - [How sources work](#how-sources-work)
 - [At a glance](#at-a-glance)
 - Listing sources: [Greenhouse](#greenhouse), [Lever](#lever), [Ashby](#ashby),
-  [Workable](#workable), [iCIMS Career Sites](#icims-career-sites)
+  [Workable](#workable), [Gem](#gem), [iCIMS Career Sites](#icims-career-sites)
 - Listing sources with descriptions on demand: [Workday](#workday),
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr),
   [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
@@ -39,7 +39,7 @@ don't know or care where a posting came from.
 Sources fall into three groups.
 
 **Listing sources** return every open posting, with its description, in one request per board:
-Greenhouse, Lever, Ashby and Workable. iCIMS Career Sites is a listing source too, but paged: one
+Greenhouse, Lever, Ashby, Workable and Gem. iCIMS Career Sites is a listing source too, but paged: one
 request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
@@ -84,6 +84,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `lever` | company name | in the listing | 404, removed | `lever` |
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
 | `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
+| `gem` | board name | in the listing | 404, removed | `gem` |
 | `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
@@ -169,6 +170,21 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
   so after a burst of about 50 requests in 10 seconds. It also has a longer-window limit: at a
   steady 1.9 a second, 429s began after 900 to 1,250 requests, and in a full fetch enough of
   them tripped the circuit breaker, skipping about 1,900 boards.
+
+## Gem
+
+```yaml
+  - name: Gem
+    ats: gem
+    slug: gem
+```
+
+- **Slug:** the board name in `jobs.gem.com/<slug>`; case is kept.
+- **Endpoint:** `GET https://api.gem.com/job_board/v0/<slug>/job_posts/`, Gem's documented Job
+  Board API. One request, descriptions included, in much the shape of Greenhouse's.
+- **Remote:** from Gem's `location_type`: `remote` is yes, `hybrid` is no; otherwise yes only if
+  the location or title says "remote".
+- **Unknown board:** 404, removed.
 
 ## iCIMS Career Sites
 

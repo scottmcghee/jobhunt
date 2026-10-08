@@ -178,3 +178,8 @@ def make_completer(payload: dict):
 
     complete.calls = calls  # type: ignore[attr-defined]
     return complete
+
+
+@pytest.fixture
+def gem_company() -> Company:
+    return Company(name="ExampleGem", ats="gem", slug="examplegem")

@@ -21,6 +21,7 @@ from jobhunt.sources import (
     bamboohr,
     eightfold,
     fetch_company,
+    gem,
     greenhouse,
     icims_careers,
     lever,
@@ -1299,6 +1300,7 @@ def test_apple_location(locations, expected):
 
 PH = "https://careers.example.com/widgets"
 IC = "https://careers.example.com/api/jobs"  # iCIMS Career Sites
+GEM = "https://api.gem.com/job_board/v0/examplegem/job_posts/"
 
 
 def _phenom_routes(fixture_json, detail=None):
@@ -2348,6 +2350,7 @@ def _requests_made(company, mocks):
         ("bamboohr_company", [("GET", BH + "/list", "bamboohr_list.json"), ("GET", BH + "/", "bamboohr_job.json")]),
         ("amazon_company", [("GET", AZ, "amazon_search.json")]),
         ("icims_careers_company", [("GET", IC, "icims_careers_jobs.json")]),
+        ("gem_company", [("GET", GEM, "gem_job_posts.json")]),
     ],
 )
 def test_every_request_counts_against_its_boards_rate_group(company_fixture, mocks, request, fixture_json):
@@ -2660,3 +2663,47 @@ def test_a_configured_rate_overrides_the_crawl_delay(icims_careers_company, fixt
     with httpx.Client(transport=transport) as client:
         icims_careers.fetch(icims_careers_company, client)
     assert transport.limiter("careers.example.com").rate == pytest.approx(0.1)
+
+
+# ------------------------------------------------------------------ Gem
+
+
+@respx.mock
+def test_gem_normalizes(gem_company, fixture_json):
+    respx.get(GEM).mock(return_value=httpx.Response(200, json=fixture_json("gem_job_posts.json")))
+    with httpx.Client() as client:
+        jobs = fetch_company(gem_company, client)
+    assert [j.title for j in jobs] == [
+        "Director of Platform Engineering", "Head of Developer Experience", "Account Executive"
+    ]
+    j = jobs[0]
+    assert (j.source, j.company, j.company_slug, j.external_id) == ("gem", "ExampleGem", "examplegem", "9001")
+    assert j.key == "gem:examplegem:9001"
+    assert j.url == "https://jobs.gem.com/examplegem/9001"
+    assert j.location == "Remote, United States"
+    assert "Lead the & platform team." in j.body and "Own Kubernetes" in j.body and "<" not in j.body
+    assert j.posted_at.startswith("20")
+    # remote from Gem's location_type: remote, hybrid (explicitly not remote), or unknown
+    assert [j.remote for j in jobs] == [True, False, None]
+
+
+@respx.mock
+def test_gem_unknown_board_404_raises(gem_company):
+    respx.get(GEM).mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        gem.fetch(gem_company, client)
+
+
+@respx.mock
+def test_gem_skips_a_post_with_no_id(gem_company, fixture_json, caplog):
+    posts = fixture_json("gem_job_posts.json")
+    del posts[0]["id"]
+    respx.get(GEM).mock(return_value=httpx.Response(200, json=posts))
+    with httpx.Client() as client:
+        assert [j.external_id for j in gem.fetch(gem_company, client)] == ["9002", "9003"]
+    assert "skipped a posting with no id" in caplog.text
+
+
+def test_gem_rate_group():
+    board = Company(name="x", ats="gem", slug="examplegem")
+    assert rate_group(board) == "gem" == request_group(httpx.URL(GEM))

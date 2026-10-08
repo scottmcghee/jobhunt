@@ -46,10 +46,11 @@ _GREENHOUSE_API = "boards-api.greenhouse.io"
 _BOARD_HOSTS: dict[str, ATSName] = {
     "jobs.lever.co": "lever",
     "jobs.ashbyhq.com": "ashby",
+    "jobs.gem.com": "gem",
     "jobs.smartrecruiters.com": "smartrecruiters",
     "careers.smartrecruiters.com": "smartrecruiters",
 }
-_KEEPS_CASE: set[ATSName] = {"ashby", "smartrecruiters"}  # the others are case-insensitive
+_KEEPS_CASE: set[ATSName] = {"ashby", "smartrecruiters", "gem"}  # the others are case-insensitive
 
 # apply.workable.com/<account>/..., or the older <account>.workable.com/jobs/... (which redirects
 # there). Workable's own sites use other subdomains, and their paths never start /jobs or /j.

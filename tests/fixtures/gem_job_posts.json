@@ -1,0 +1,116 @@
+[
+ {
+  "absolute_url": "https://jobs.gem.com/examplegem/9001",
+  "content": "<p>Lead the &amp; platform team.</p><ul><li>Own Kubernetes</li></ul>",
+  "content_plain": "Lead the &amp; platform team.<ul><li>Own Kubernetes</li></ul>",
+  "created_at": "2020-11-17T15:37:20.000Z",
+  "departments": [
+   {
+    "child_ids": [],
+    "id": "4022145002",
+    "name": "Engineering",
+    "parent_id": null
+   }
+  ],
+  "employment_type": "full_time",
+  "first_published_at": "2020-11-17T15:37:23.000Z",
+  "id": "9001",
+  "internal_job_id": "9001",
+  "location": {
+   "name": "Remote, United States"
+  },
+  "location_type": "remote",
+  "offices": [
+   {
+    "child_ids": [],
+    "child_office_external_ids": [],
+    "id": "4010840002",
+    "location": {
+     "name": "Remote, United States"
+    },
+    "name": "Remote, United States",
+    "parent_id": null,
+    "parent_office_external_id": null
+   }
+  ],
+  "requisition_id": "R-9001",
+  "title": "Director of Platform Engineering",
+  "updated_at": "2026-03-10T21:20:54.077Z"
+ },
+ {
+  "absolute_url": "https://jobs.gem.com/examplegem/9002",
+  "content": "<p>Build internal tools.</p>",
+  "content_plain": "Build internal tools.",
+  "created_at": "2025-12-04T17:50:36.133Z",
+  "departments": [
+   {
+    "child_ids": [],
+    "id": "4022145002",
+    "name": "Engineering",
+    "parent_id": null
+   }
+  ],
+  "employment_type": "full_time",
+  "first_published_at": "2025-12-04T18:31:33.628Z",
+  "id": "9002",
+  "internal_job_id": "9002",
+  "location": {
+   "name": "Seattle, United States"
+  },
+  "location_type": "hybrid",
+  "offices": [
+   {
+    "child_ids": [],
+    "child_office_external_ids": [],
+    "id": "4010840002",
+    "location": {
+     "name": "Seattle, United States"
+    },
+    "name": "Seattle, United States",
+    "parent_id": null,
+    "parent_office_external_id": null
+   }
+  ],
+  "requisition_id": "R-9002",
+  "title": "Head of Developer Experience",
+  "updated_at": "2026-03-10T21:11:50.768Z"
+ },
+ {
+  "absolute_url": "https://jobs.gem.com/examplegem/9003",
+  "content": "<p>Sell things.</p>",
+  "content_plain": "Sell things.",
+  "created_at": "2026-02-05T01:13:43.095Z",
+  "departments": [
+   {
+    "child_ids": [],
+    "id": "4022148002",
+    "name": "Engineering",
+    "parent_id": null
+   }
+  ],
+  "employment_type": "full_time",
+  "first_published_at": "2026-02-05T01:14:45.923Z",
+  "id": "9003",
+  "internal_job_id": "9003",
+  "location": {
+   "name": "New York, United States"
+  },
+  "location_type": null,
+  "offices": [
+   {
+    "child_ids": [],
+    "child_office_external_ids": [],
+    "id": "4010840002",
+    "location": {
+     "name": "New York, United States"
+    },
+    "name": "New York, United States",
+    "parent_id": null,
+    "parent_office_external_id": null
+   }
+  ],
+  "requisition_id": "R-9003",
+  "title": "Account Executive",
+  "updated_at": "2026-03-11T18:51:26.435Z"
+ }
+]
