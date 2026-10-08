@@ -2612,6 +2612,19 @@ def test_icims_careers_dedupes_a_posting_that_shifts_between_pages(icims_careers
 
 
 @respx.mock
+def test_icims_careers_ids_are_the_requisition_id(icims_careers_company, fixture_json, caplog):
+    page = fixture_json("icims_careers_jobs.json")
+    page["jobs"][0]["data"]["slug"] = "director-platform-engineering"  # the id comes from req_id
+    page["jobs"][1]["data"]["req_id"] = None  # no requisition id: skipped, whatever its slug
+    respx.get(IC).mock(return_value=httpx.Response(200, json=page))
+    with httpx.Client() as client:
+        jobs = icims_careers.fetch(icims_careers_company, client)
+    assert [j.external_id for j in jobs] == ["70001", "70003"]
+    assert jobs[0].url == "https://careers.example.com/jobs/70001"
+    assert "skipped a posting with no req_id" in caplog.text
+
+
+@respx.mock
 def test_icims_careers_404_raises(icims_careers_company):
     respx.get(IC).mock(return_value=httpx.Response(404))
     with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):

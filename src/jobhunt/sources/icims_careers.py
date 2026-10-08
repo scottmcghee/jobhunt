@@ -43,7 +43,7 @@ def _posted(value: object) -> str | None:
 
 
 def normalize(company: Company, data: dict) -> Job:
-    job_id = str(data.get("slug") or data["req_id"])
+    job_id = str(data["req_id"])  # the requisition id, which /jobs/<id> links by
     location = data.get("full_location") or data.get("short_location") or ""
     title = data.get("title", "")
     parts = (data.get(k) for k in ("description", "responsibilities", "qualifications"))

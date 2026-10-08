@@ -571,7 +571,8 @@ delay and is built into the source, though an entry for its host overrides it.
 
 Keys are the group names `jobhunt -v fetch` prints, and are case-sensitive. Setting `max_rate`, in the
 file or in `JOBHUNT_FETCH_MAX_RATE`, replaces the whole map, so copy these four into it to keep
-them. `{}` removes every cap.
+them. Groups not listed have no cap, except iCIMS Career Sites; `{}` removes every configured
+cap, while an iCIMS site keeps its built-in 0.2/s unless its host gets its own entry.
 
 ### Retries
 
