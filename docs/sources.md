@@ -604,7 +604,7 @@ or finds nothing.
 
 ## Not covered: watch these by hand
 
-Some platforms forbid automated access, in robots.txt or in their terms, so `jobhunt` doesn't
+Some platforms forbid automated access in robots.txt or their terms, or block it outright, so `jobhunt` doesn't
 support them, and their boards must not be added to `companies.yaml`. Nothing enforces this for
 listing and API sources: `jobhunt` checks robots.txt itself only for the sitemap sources, so
 check a board's robots.txt before adding it. Their jobs are worth a manual search or the
@@ -619,7 +619,7 @@ platform's own email alerts.
 | SCALIS | Small companies | robots.txt disallows `/api/`, where the listings come from; the pages themselves have none | The company's careers page |
 | Pinpoint, Dover | Startups | robots.txt disallows the boards (Pinpoint) or their API (Dover) | The company's careers page |
 | Classic iCIMS portals (`careers-<company>.icims.com`) | Many mid-size and large employers | robots.txt: `Disallow: /` | Their newer branded careers sites often allow it |
-| Any board whose robots.txt disallows its own path | Some employers on platforms `jobhunt` otherwise reads; some Workday sites disallow their site path | robots.txt disallows that board (`jobhunt` won't notice; check before adding a board) | The employer's careers page |
+| Any board whose robots.txt disallows its own path | Some employers on platforms `jobhunt` otherwise reads; some Workday sites disallow their site path | robots.txt disallows that board (only the sitemap sources notice; check before adding a board) | The employer's careers page |
 | Google, Meta | Themselves | Google's robots.txt disallows its job pages; Meta's terms forbid automated collection | Their careers sites' own alerts |
 
 Federal jobs are different: USAJOBS publishes an official API for exactly this.
