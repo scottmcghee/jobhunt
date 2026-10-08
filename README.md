@@ -112,6 +112,41 @@ drifts: a "$4M cloud budget" becomes "about $4 million". Here every factual clai
 written once, by a person, in the Kit. The model's job is choosing, plus the two sentences that
 need the posting. Treat the result as a first draft and tune it to your voice.
 
+### 5. Track applications
+
+When you apply to a job jobhunt found, record it, and record what comes of it:
+
+```bash
+jobhunt applied greenhouse:northwind:4410 --resume v2 --warm   # a referral, resume v2
+jobhunt outcome greenhouse:northwind:4410 screen
+jobhunt applications
+```
+
+`--warm` marks a warm contact (a referral or an intro), and `--date` (default today, in UTC)
+backdates either command; `applied --force` corrects an application and keeps its original date
+unless `--date` is given. An outcome is one of `no_response`, `rejected`, `screen`, `interview`, `offer`
+or `withdrawn`, and the latest one is where the application stands. `jobhunt applications` lists
+them, then breaks them down by resume version, warm or cold, and the score jobhunt gave the job,
+so questions like "did the new resume get more replies?" have numbers behind them (a fictional
+example):
+
+```
+2026-09-20  rejected     8/10  v1       cold  Northwind        Director of Platform Engineering
+2026-09-22  no_response  7/10  v1       cold  Contoso          Director, Developer Experience
+2026-10-01  interview    8/10  v2       warm  Fabrikam         VP, Infrastructure
+2026-10-02  pending      7/10  v2       cold  Tailspin         Director of SRE
+
+by resume:
+             applied  replied  screen+ interview+ offer days to reply
+  v1               2        1        0          0     0            10
+  v2               2        1        1          1     0             3
+```
+
+"Replied" counts any answer, a rejection included; "days to reply" is the median from applying
+to the first one. Everything is appended to `data/applications.jsonl` (a correction is a newer
+entry), which stays on your machine. `jobhunt list --hide-applied` leaves out jobs you've
+applied to.
+
 ## Configuration
 
 Everything personal lives in `config/`, which is gitignored. Copy `config.example/` to start; its
@@ -134,9 +169,12 @@ To make it yours, rewrite `profile.md` and the Kit in your own words, edit the f
 |---|---|---|
 | `jobhunt fetch` | Pull postings, filter them, record the new ones | `--company NAME`, `--dry-run`, `--resume`, `--workers N`, `--per-host N` |
 | `jobhunt score` | Score every recorded job that has no score yet | `--limit N`, `--rescore` |
-| `jobhunt list` | Show scored jobs, best first, with their keys | `--min-score N` |
+| `jobhunt list` | Show scored jobs, best first, with their keys | `--min-score N`, `--hide-applied` |
 | `jobhunt letter` | Write letters for high scorers that don't have one | `--min-score N`, `--job KEY`, `--force` |
 | `jobhunt run` | `fetch`, then `score`, then `letter` | any of the above |
+| `jobhunt applied KEY` | Record an application to a job jobhunt found | `--resume VERSION` (required), `--warm`, `--date`, `--force` |
+| `jobhunt outcome KEY STATUS` | Record what came of it | `--date` |
+| `jobhunt applications` | Each application, and reply rates by resume, warm or cold, and score | |
 
 - `--company NAME` fetches every board whose `name` in `companies.yaml` matches, ignoring case.
   Harvested Workday sites of one tenant share a name, so `--company adobe` fetches all of

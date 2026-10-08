@@ -10,6 +10,7 @@ A small, well-tested Python CLI that:
 2. **Filters** them against hard constraints (title level, location, remote policy, keywords).
 3. **Scores** each surviving role 1–10 against a fixed candidate profile using Claude, with a written rationale.
 4. **Generates** a tailored cover letter for high-scoring roles by assembling pre-written proof modules from a Cover Letter Kit, never by inventing claims.
+5. **Tracks** applications to the roles it found and their outcomes, with reply rates by resume version, warm or cold contact, and score.
 
 It is also a portfolio piece. Code quality, tests, and the README matter as much as the output.
 
@@ -43,11 +44,13 @@ src/jobhunt/
   filter.py           # pure: list[Job] x Preferences -> list[Job]
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
-  storage.py          # data/ and output/: seen-set, gone-board and fetch-progress ledgers, JSONL records, letters
+  storage.py          # data/ and output/: seen-set, gone-board and fetch-progress ledgers, JSONL records
+                      # (jobs, scores, applications), letters
   throttle.py         # polite HTTP for fetch: adaptive per-group concurrency, rate caps, 429/Retry-After and transient retries
   runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the only module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
-  cli.py              # `jobhunt fetch | score | list | letter | run`
+  applications.py     # pure: applied/outcome events -> applications, and reply stats by group
+  cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications`
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
                       # offline, except --check, which fetches the first page of each new board via sources/
 tests/

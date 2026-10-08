@@ -6,6 +6,7 @@
                  Boards that answered fine are absent.
 - jobs.jsonl   : every Job that passed the filter, appended once.
 - scores.jsonl : every ScoredJob, appended once per job.
+- applications.jsonl : applied/outcome events, appended (see applications.py).
 - output/      : one Markdown letter per generated job.
 """
 
@@ -19,6 +20,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from jobhunt.applications import Event
 from jobhunt.schema import Job, Letter, ScoredJob
 
 log = logging.getLogger(__name__)
@@ -150,6 +152,10 @@ def load_jobs(data_dir: Path) -> list[Job]:
 
 def load_scores(data_dir: Path) -> list[ScoredJob]:
     return [ScoredJob.model_validate(r) for r in read_jsonl(data_dir / "scores.jsonl")]
+
+
+def load_application_events(data_dir: Path) -> list[Event]:
+    return [Event.model_validate(r) for r in read_jsonl(data_dir / "applications.jsonl")]
 
 
 def _slug(s: str) -> str:
