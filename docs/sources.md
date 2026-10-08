@@ -584,6 +584,9 @@ without both, a USAJOBS board is skipped with a warning.
 - **Company:** each posting's agency (`OrganizationName`), not "USAJOBS".
 - **Id:** the control number (`MatchedObjectId`, the number in its link); one announcement can list
   several.
+- **Location:** every place the posting lists (`PositionLocation`), joined with "; ": its
+  display (`PositionLocationDisplay`) says just "Multiple Locations" or "Location Negotiable
+  After Selection" when there are several. The display only when the list is empty.
 - **Remote:** yes if USAJOBS marks it remote or its location says so.
 - **Titles:** federal technology leadership is often "Supervisory IT Specialist" or "Chief ...",
   which the usual target words don't search for; an `include_for_tags` entry for a tag on the

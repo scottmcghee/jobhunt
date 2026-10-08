@@ -2886,11 +2886,22 @@ def test_usajobs_normalizes(usajobs_company, fixture_json):
     assert j.key == "usajobs:Springfield, Illinois/50:900000001"
     assert j.title == "Director, Cloud Infrastructure"
     assert j.url == "https://www.usajobs.gov/job/900000001"  # without the :443
-    assert j.location == "Anywhere in the U.S. (remote job)" and j.remote is True
+    assert j.location == "Anywhere in the U.S. (remote job), United States" and j.remote is True
     assert jobs[1].remote is None and jobs[1].location == "Seattle, Washington"
     assert "Lead the & agency's cloud platform." in j.body and "Own the AWS landing zone" in j.body
     assert "Ten years leading infrastructure." in j.body and "<" not in j.body
     assert j.posted_at == "2026-09-30T00:00:00+00:00"
+
+
+def test_usajobs_a_multi_location_posting_lists_its_places(usajobs_company, fixture_json, prefs):
+    raw = fixture_json("usajobs_search.json")["SearchResult"]["SearchResultItems"][2]
+    job = usajobs.normalize(usajobs_company, raw)
+    # the display is a placeholder ("Location Negotiable After Selection"); the places are listed
+    assert job.location == "Salt Lake City, Utah; Seattle, Washington; Phoenix, Arizona"
+    assert job.remote is None and check_location(job, prefs) is None
+    d = raw["MatchedObjectDescriptor"]
+    bare = usajobs.normalize(usajobs_company, {**raw, "MatchedObjectDescriptor": {**d, "PositionLocation": []}})
+    assert bare.location == "Location Negotiable After Selection"  # no list: the display
 
 
 @respx.mock

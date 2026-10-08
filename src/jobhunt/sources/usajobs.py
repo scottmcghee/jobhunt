@@ -70,7 +70,11 @@ def normalize(company: Company, item: dict) -> Job:
         "\n".join(to_text(x) for x in duties if isinstance(x, str)),
         to_text(d.get("QualificationSummary")),
     ]
-    location = d.get("PositionLocationDisplay") or ""
+    # the display is a placeholder ("Multiple Locations") when there are several; list them
+    places = [p.get("LocationName") for p in d.get("PositionLocation") or [] if isinstance(p, dict)]
+    location = "; ".join(dict.fromkeys(p for p in places if isinstance(p, str) and p)) or (
+        d.get("PositionLocationDisplay") or ""
+    )
     cid = str(item["MatchedObjectId"])
     url = str(d.get("PositionURI") or f"https://www.usajobs.gov/job/{cid}").replace(":443/", "/")
     remote = details.get("RemoteIndicator") is True or "remote" in location.lower()

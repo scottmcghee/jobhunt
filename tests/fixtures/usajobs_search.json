@@ -13,6 +13,16 @@
      "PositionTitle": "Director, Cloud Infrastructure",
      "PositionURI": "https://www.usajobs.gov:443/job/900000001",
      "PositionLocationDisplay": "Anywhere in the U.S. (remote job)",
+     "PositionLocation": [
+      {
+       "LocationName": "Anywhere in the U.S. (remote job), United States",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "",
+       "CityName": "Anywhere in the U.S. (remote job), United States",
+       "Longitude": 0,
+       "Latitude": 0
+      }
+     ],
      "OrganizationName": "Example Agency",
      "DepartmentName": "Department of Examples",
      "QualificationSummary": "<p>Ten years leading infrastructure.</p>",
@@ -38,6 +48,16 @@
      "PositionTitle": "Supervisory IT Specialist (Director)",
      "PositionURI": "https://www.usajobs.gov:443/job/900000002",
      "PositionLocationDisplay": "Seattle, Washington",
+     "PositionLocation": [
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Washington",
+       "CityName": "Seattle, Washington",
+       "Longitude": 0,
+       "Latitude": 0
+      }
+     ],
      "OrganizationName": "Example Agency",
      "DepartmentName": "Department of Examples",
      "QualificationSummary": "One year at GS-14.",
@@ -61,7 +81,41 @@
      "PositionID": "EX-26-003",
      "PositionTitle": "Program Analyst",
      "PositionURI": "https://www.usajobs.gov:443/job/900000003",
-     "PositionLocationDisplay": "Everett, Washington",
+     "PositionLocationDisplay": "Location Negotiable After Selection",
+     "PositionLocation": [
+      {
+       "LocationName": "Salt Lake City, Utah",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Utah",
+       "CityName": "Salt Lake City, Utah",
+       "Longitude": 0,
+       "Latitude": 0
+      },
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Washington",
+       "CityName": "Seattle, Washington",
+       "Longitude": 0,
+       "Latitude": 0
+      },
+      {
+       "LocationName": "Seattle, Washington",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Washington",
+       "CityName": "Seattle, Washington",
+       "Longitude": 0,
+       "Latitude": 0
+      },
+      {
+       "LocationName": "Phoenix, Arizona",
+       "CountryCode": "United States",
+       "CountrySubDivisionCode": "Arizona",
+       "CityName": "Phoenix, Arizona",
+       "Longitude": 0,
+       "Latitude": 0
+      }
+     ],
      "OrganizationName": "Other Example Office",
      "DepartmentName": "Department of Examples",
      "QualificationSummary": "",
