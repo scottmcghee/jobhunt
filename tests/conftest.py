@@ -183,3 +183,8 @@ def make_completer(payload: dict):
 @pytest.fixture
 def gem_company() -> Company:
     return Company(name="ExampleGem", ats="gem", slug="examplegem")
+
+
+@pytest.fixture
+def rippling_company() -> Company:
+    return Company(name="Example Rip", ats="rippling", slug="examplerip")

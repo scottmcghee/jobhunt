@@ -23,6 +23,7 @@ from jobhunt.sources import (
     paradox,
     phenom,
     radancy,
+    rippling,
     smartrecruiters,
     successfactors,
     workable,
@@ -50,6 +51,7 @@ ON_DEMAND_FETCHERS: dict[ATSName, PagedFetcher] = {
     "successfactors": successfactors.fetch,
     "radancy": radancy.fetch,
     "paradox": paradox.fetch,
+    "rippling": rippling.fetch,
 }
 
 
@@ -113,6 +115,7 @@ _API_HOSTS: dict[str, str] = {
     "api.lever.co": "lever",
     "api.ashbyhq.com": "ashby",
     "api.gem.com": "gem",
+    "api.rippling.com": "rippling",
     "api.smartrecruiters.com": "smartrecruiters",
     "apply.workable.com": "workable",
     "www.amazon.jobs": "amazon",

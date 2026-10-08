@@ -51,6 +51,8 @@ from jobhunt.schema import Company
         ("https://jobs.ashbyhq.com/Some%20Co", ("ashby", "Some Co")),
         ("https://jobs.gem.com/examplegem/4965519002", ("gem", "examplegem")),
         ("https://jobs.gem.com/ExampleGem", ("gem", "ExampleGem")),
+        ("https://ats.rippling.com/examplerip/jobs/11111111-1111-4111-8111-111111111111", ("rippling", "examplerip")),
+        ("https://ats.rippling.com/examplerip/jobs", ("rippling", "examplerip")),
         ("https://jobs.smartrecruiters.com/AbbVie/3743990009679496-manager?trid=x", ("smartrecruiters", "AbbVie")),
         ("https://careers.smartrecruiters.com/AveryDennison", ("smartrecruiters", "AveryDennison")),
         ("https://careers.smartrecruiters.com/BoydGaming/main-street-station", ("smartrecruiters", "BoydGaming")),

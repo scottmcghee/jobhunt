@@ -21,6 +21,8 @@
 #               API: https://apply.workable.com/api/v1/widget/accounts/<account>?details=true
 #   Gem:        jobs.gem.com/<slug>   (case-sensitive)
 #               API: https://api.gem.com/job_board/v0/<slug>/job_posts/
+#   Rippling:   ats.rippling.com/<slug>   (case kept)
+#               API: https://api.rippling.com/platform/api/ats/v1/board/<slug>/jobs
 #   BambooHR:   <tenant>.bamboohr.com/careers
 #               API: https://<tenant>.bamboohr.com/careers/list, then /careers/<id>/detail
 #               An unknown tenant redirects to bamboohr.com; that counts like a 404.
