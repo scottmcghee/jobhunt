@@ -24,7 +24,7 @@ def test_defaults_are_todays_values():
     assert (f.max_retries, f.max_retry_after, f.cooldown, f.breaker, f.prune_after_404s) == (3, 120.0, 5.0, 5, 3)
     assert f.transient_retries == 2
     # Workable's Cloudflare bans bursts of about 50 in 10 s; Microsoft's Eightfold site 429s at 1/s
-    assert f.max_rate == {"workable": 2.0, "eightfold": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0}
+    assert f.max_rate == {"workable": 1.4, "eightfold": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0}
     assert f.max_per_term == {"amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500}
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
     assert s.slugs.check_workers == 4

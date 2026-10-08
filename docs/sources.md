@@ -81,7 +81,7 @@ never removed; `fetch` logs a warning for an empty board instead.
 | `greenhouse` | board token | in the listing | 404, removed | `greenhouse` |
 | `lever` | company name | in the listing | 404, removed | `lever` |
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
-| `workable` | account | in the listing | 404, removed | `workable` (2 requests/s) |
+| `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
 | `bamboohr` | tenant | one request each | redirect to bamboohr.com, removed | `bamboohr` |
@@ -162,8 +162,10 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Remote:** yes if Workable's `telecommuting` flag is set. The flag is false for both on-site
   and hybrid roles, so false means unknown, unless the location or title says "remote".
 - **Unknown board:** 404, removed.
-- **Rate cap:** 2 requests a second. Workable's Cloudflare front end bans an IP for a minute or so
-  after a burst of about 50 requests in 10 seconds.
+- **Rate cap:** 1.4 requests a second. Workable's Cloudflare front end bans an IP for a minute or
+  so after a burst of about 50 requests in 10 seconds. It also has a longer-window limit: at a
+  steady 1.9 a second, 429s began after 900 to 1,250 requests, and in a full fetch enough of
+  them tripped the circuit breaker, skipping about 1,900 boards.
 
 ## Workday
 
@@ -533,7 +535,7 @@ A group can also be held to a number of requests per second, `fetch.max_rate` in
 
 | Group | Cap | Why |
 |---|---|---|
-| `workable` | 2/s | Cloudflare bans an IP after about 50 requests in 10 seconds. |
+| `workable` | 1.4/s | Cloudflare bans an IP after about 50 requests in 10 seconds, and 429s a steady 1.9/s after about 1,000. |
 | `eightfold` | 2/s | Every `*.eightfold.ai` board; 20 fetched side by side were answered 405. |
 | `apply.careers.microsoft.com` | 0.5/s | Microsoft's site answered 429 to requests one second apart. |
 | `apple` | 1/s | Each page is about 300 KB. |

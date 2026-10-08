@@ -54,7 +54,8 @@ fetch:
   # JSON, e.g. '{"workable": 3, "eightfold": 2, "apply.careers.microsoft.com": 0.5, "apple": 1}'
   # Microsoft's careers site (Eightfold) answered 429 to requests one second apart.
   max_rate:
-    workable: 2.0
+    # Cloudflare 429s a steady ~1.9/s after 900-1,250 requests; 2827 boards at 1.4/s is ~34 min
+    workable: 1.4
     eightfold: 2.0  # every *.eightfold.ai board; 20 fetched side by side were answered 405
     apply.careers.microsoft.com: 0.5
     apple: 1.0  # each Apple search or job page is a ~300 KB server-rendered page
