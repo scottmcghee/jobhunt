@@ -8,9 +8,10 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
 
 - **Known platforms.** Board URLs on Workday, Greenhouse, Lever, Ashby, SmartRecruiters,
   Workable, BambooHR, Eightfold, Gem and Rippling follow patterns, and Common Crawl's index keeps
-  each platform's URLs together, so ``commoncrawl.urls`` finds every one a crawl saw for a few
-  MB of downloads. ``slugs.board_from_url`` turns them into boards (new Workday datacenters
-  included). Oracle is opt-in (``--platforms oracle``): its prefix is all of oraclecloud.com.
+  each platform's URLs together, so ``commoncrawl.urls`` finds every one a crawl saw for about
+  100 MB of index (cached after the first run) plus some tens of MB of index blocks per crawl.
+  ``slugs.board_from_url`` turns them into boards (new Workday datacenters included).
+  Oracle is opt-in (``--platforms oracle``): its prefix is all of oraclecloud.com.
 - **Careers hosts.** A company's own careers site (``careers.acme.com``) says nothing in its URL,
   so each host in ``--hosts`` files (plain hosts, URLs, or lines grepped from a Common Crawl
   ``cluster.idx``) gets the S&P 500 survey's fingerprinting (``fingerprint.survey_site``): its
@@ -133,6 +134,22 @@ def _load_cache(path: Path) -> dict[str, dict]:
     return cache if isinstance(cache, dict) else {}
 
 
+class _Polite(fingerprint.Polite):
+    """``fingerprint.Polite`` that also counts answers that mean "try later" (5xx, 429)."""
+
+    def __init__(self, client: httpx.Client, delay: float):
+        super().__init__(client, delay)
+        self.transient = 0
+
+    def _fetch(
+        self, url: str, follow_redirects: bool, json: dict | None = None
+    ) -> httpx.Response | None:
+        resp = super()._fetch(url, follow_redirects, json)
+        if resp is not None and (resp.status_code >= 500 or resp.status_code == 429):
+            self.transient += 1
+        return resp
+
+
 def survey_hosts(
     hosts: Iterable[str],
     client: httpx.Client,
@@ -143,28 +160,31 @@ def survey_hosts(
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
     The cache is saved after every host, so an interrupted run keeps what it found. A host that
-    gave no response at all isn't cached, so the next run tries it again.
+    found nothing and had a request fail or answer 5xx or 429 (robots.txt included) isn't cached,
+    so the next run tries it again; with ``refresh``, its cached boards are kept for this run.
     """
     cache = _load_cache(cache_path)
     boards: list[Company] = []
     for host in hosts:
         entry = cache.get(host)
         if entry is None or refresh:
-            polite = fingerprint.Polite(client, delay)
+            polite = _Polite(client, delay)
             home = f"https://{host}/"
             site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
-            if polite.errors and not polite.responses:
-                log.warning("%s: unreachable (%s)", host, polite.errors[0])
-                continue
-            entry = {
-                "surveyed_at": datetime.now(UTC).isoformat(),
-                "platforms": site.platforms,
-                "pages": site.pages,
-                "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],
-            }
-            cache[host] = entry
-            storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
-            log.info("%s: %s", host, ", ".join(entry["platforms"]) or "no platform found")
+            if (polite.errors or polite.transient) and not (site.platforms or site.boards):
+                log.warning("%s: unreachable (%s)", host, ", ".join(polite.errors) or "5xx or 429")
+                if entry is None:
+                    continue
+            else:
+                entry = {
+                    "surveyed_at": datetime.now(UTC).isoformat(),
+                    "platforms": site.platforms,
+                    "pages": site.pages,
+                    "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],
+                }
+                cache[host] = entry
+                storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
+                log.info("%s: %s", host, ", ".join(entry["platforms"]) or "no platform found")
         for raw in entry.get("boards") or []:
             try:
                 boards.append(Company.model_validate(raw))
@@ -204,6 +224,16 @@ def _host_client(fetch: settings.FetchSettings) -> httpx.Client:
     )
 
 
+def _at_least_one(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {value!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, not {number}")
+    return number
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m jobhunt.discover", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -211,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                         default=DEFAULT_PLATFORMS, metavar="P",
                         help=f"platforms to find in Common Crawl (default: all but oracle; "
                              f"choices: {', '.join(PLATFORM_HOSTS)})")
-    parser.add_argument("--crawls", type=int, default=1, metavar="N",
+    parser.add_argument("--crawls", type=_at_least_one, default=1, metavar="N",
                         help="how many of the latest crawls to read (default 1)")
     parser.add_argument("--no-crawl", action="store_true", help="skip Common Crawl")
     parser.add_argument("--hosts", nargs="+", type=Path, default=[], metavar="FILE",

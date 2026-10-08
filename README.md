@@ -245,7 +245,8 @@ python -m jobhunt.discover --platforms gem rippling --check # just these; drop b
 On platforms whose board URLs follow a pattern (Workday, Greenhouse, Lever, Ashby,
 SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Rippling; Oracle with `--platforms oracle`),
 it reads [Common Crawl](https://commoncrawl.org/)'s URL index: each platform's URLs sit together,
-so a few MB of downloads finds every board a crawl saw (5,749 new ones in a test run). Careers
+so about 100 MB of index (cached after the first run) plus some tens of MB of index blocks per
+crawl finds every board a crawl saw (5,749 new ones in a test run). Careers
 sites on companies' own domains (`careers.acme.com`) say nothing in their URLs, so each host in a
 `--hosts` file (plain hosts, URLs, or lines grepped from Common Crawl's `cluster.idx`) is read the
 way the S&P 500 survey reads a site: which platform it runs, and the board it points at. Hosts are
