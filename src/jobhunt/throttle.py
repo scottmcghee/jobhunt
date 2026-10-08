@@ -3,10 +3,12 @@
 Every request goes through ``ThrottledTransport``. It finds the request's rate-limit group
 (``sources.request_group``: a Workday datacenter or an API host) and:
 
-- waits for a free slot in that group's ``GroupLimiter`` and out any pause a 429 set; then, for a
-  group with a rate cap (``max_rate``), after taking a global slot (``max_in_flight``), until
-  the cap allows the next send, so requests that queued for a global slot don't go out together
-  (one that a 429 paused the group meanwhile gives its slots back and waits out the pause);
+- waits in the ``Dispatcher`` until it can take a slot in its group's ``GroupLimiter`` and one
+  of the ``max_in_flight`` global slots, both at once: the group must be under its limit, past
+  any pause a 429 set and, with a rate cap (``max_rate``), past the gap since its last send.
+  Waiting requests hold no slot. When global slots are scarce, the share classes
+  (``sources.share_class``: the rate group, but every Oracle tenant together) take turns, so a
+  crowd of small groups can't starve a big one;
 - retries a 429, or a 503 that carries Retry-After, after Retry-After seconds or a 1/2/4 s
   backoff, up to ``MAX_RETRIES`` times (a Retry-After under a second, like Cloudflare's "0" on a
   rate-limit ban, counts as none, so it gets the backoff rather than instant retries); the last
@@ -34,17 +36,19 @@ rate cap wake and raise ``Stopped``, and no new request is sent; one already sen
 from __future__ import annotations
 
 import email.utils
+import math
 import random
 import threading
 import time
 import urllib.request
+from collections import deque
 from collections.abc import Callable
 from datetime import UTC
 from typing import TYPE_CHECKING
 
 import httpx
 
-from jobhunt.sources import request_group
+from jobhunt.sources import request_group, share_class
 
 if TYPE_CHECKING:
     from jobhunt.settings import FetchSettings
@@ -54,6 +58,7 @@ MAX_RETRY_AFTER = 120.0  # seconds; a server asking for more gets a skipped boar
 COOLDOWN = 5.0  # seconds between two halvings of one group's limit
 TRANSIENT_RETRIES = 2
 TRANSIENT_STATUSES = frozenset({500, 502, 504})
+_POLL = 5.0  # seconds; a waiting request's safety net: it is woken when anything changes
 # Failures that a retry a moment later usually gets past. Not, say, UnsupportedProtocol.
 TRANSIENT_ERRORS = (
     httpx.ConnectError,
@@ -86,15 +91,16 @@ def retry_after_seconds(value: str | None, now: float | None = None) -> float | 
 
 
 class GroupLimiter:
-    """How many requests one group may have in flight, and when it may send again."""
+    """How many requests one group may have in flight, and when it may send again.
+
+    The ``Dispatcher`` takes its slots (``try_take``); the transport gives them back (``release``).
+    """
 
     def __init__(
         self,
         start: int = 2,
         ceiling: int = 6,
         clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] | None = None,
-        stop: threading.Event | None = None,
         cooldown: float | None = None,
         rate: float | None = None,
     ):
@@ -110,51 +116,30 @@ class GroupLimiter:
         self.max_in_flight = 0
         self._cooldown_until = 0.0
         self._clock = clock
-        self._stop = stop or threading.Event()
-        self._sleep = sleep or self._stop.wait  # by default a pause ends early on a stop
-        self._cond = threading.Condition()
+        self._lock = threading.Lock()
 
-    def acquire(self) -> None:
-        """Wait for a slot and out any pause; raises ``Stopped`` on ``stop``."""
-        while True:
-            if self._stop.is_set():
-                raise Stopped
-            with self._cond:
-                wait = self.pause_until - self._clock()
-                if wait <= 0:
-                    if self.in_flight < int(self.limit):
-                        self.in_flight += 1
-                        self.requests += 1
-                        self.max_in_flight = max(self.max_in_flight, self.in_flight)
-                        return
-                    self._cond.wait(0.05)
-                    continue
-            self._sleep(wait)  # outside the lock, so releases aren't blocked meanwhile
+    def ready_at(self) -> float:
+        """When the group may send next, slots allowing: after any pause, and its rate's gap."""
+        with self._lock:
+            return max(self.pause_until, self._next_start if self.rate else 0.0)
 
-    def space(self) -> bool:
-        """Wait until the rate cap allows the next send; raises ``Stopped`` on ``stop``.
-
-        Called just before the send, so the gap holds between actual sends. False: a 429 paused
-        the group during the wait, so don't send; release neutrally and ``acquire`` again.
-        """
-        if self.rate:
-            with self._cond:
-                now = self._clock()
-                start = max(now, self._next_start)  # from now when idle, so idle isn't a burst
-                self._next_start = start + 1 / self.rate
-            if start > now:
-                self._sleep(start - now)  # outside the lock, so others can reserve meanwhile
-        if self._stop.is_set():
-            raise Stopped
-        with self._cond:
-            if self.pause_until > self._clock():
-                self.requests -= 1  # not sent; acquire() counts it again
+    def try_take(self, now: float) -> bool:
+        """Take a slot if the group is under its limit and ready at ``now``."""
+        with self._lock:
+            if now < self.pause_until or (self.rate and now < self._next_start):
                 return False
+            if self.in_flight >= int(self.limit):
+                return False
+            self.in_flight += 1
+            self.requests += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            if self.rate:  # from now, not from the last gap's end, so idle time isn't a burst
+                self._next_start = now + 1 / self.rate
             return True
 
     def release(self, throttled: bool = False, retry_after: float = 0.0, neutral: bool = False):
         """Free a slot. A success grows the limit, a throttle shrinks it, ``neutral`` neither."""
-        with self._cond:
+        with self._lock:
             self.in_flight -= 1
             now = self._clock()
             if throttled:
@@ -165,7 +150,135 @@ class GroupLimiter:
                 self.pause_until = max(self.pause_until, now + retry_after)
             elif not neutral:
                 self.limit = min(float(self.ceiling), self.limit + 1 / self.limit)
-            self._cond.notify_all()
+
+
+class Waiter:
+    """One request waiting in the ``Dispatcher``; ``granted`` once it holds both its slots."""
+
+    __slots__ = ("limiter", "share", "granted", "wake")
+
+    def __init__(self, limiter: GroupLimiter, share: str):
+        self.limiter, self.share, self.granted = limiter, share, False
+        # set on its grant, so a grant wakes only its own waiter; or when a gap or pause begins
+        self.wake = threading.Event()
+
+
+class Dispatcher:
+    """Hands each request its group's slot and a global slot together, sharing them fairly.
+
+    Waiting requests queue by share class. Whenever slots may have come free, the classes take
+    turns, round robin, each granting its first waiter whose group can take a slot now; so a
+    class gets the same turns whether it has one waiter or a thousand. ``max_in_flight`` None
+    means no global cap, and only the groups' limits apply.
+    """
+
+    def __init__(
+        self,
+        max_in_flight: int | None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] | None = None,
+        stop: threading.Event | None = None,
+    ):
+        self.max_in_flight = max_in_flight
+        self.free: float = max_in_flight if max_in_flight else math.inf
+        self._clock = clock
+        self._stop = stop or threading.Event()
+        self._sleep = sleep or self._stop.wait  # by default a wait ends early on a stop
+        self._queues: dict[str, deque[Waiter]] = {}  # in the order classes first appeared
+        self._turn = 0  # index into _queues of the class whose turn is next
+        self._lock = threading.Lock()
+
+    def acquire(self, limiter: GroupLimiter, share: str) -> None:
+        """Wait until the request holds both its slots; raises ``Stopped`` on ``stop``."""
+        waiter = self.enqueue(limiter, share)
+        while True:
+            with self._lock:
+                if waiter.granted:
+                    return
+                if self._stop.is_set():
+                    self._queues[share].remove(waiter)
+                    raise Stopped
+                wait = limiter.ready_at() - self._clock()
+            if wait > 0:  # out a pause or a rate gap; then nobody else may hand out its slot
+                self._sleep(wait)
+                with self._lock:
+                    self._dispatch()
+            else:  # for a slot: whoever frees one grants it, or wakes it when a gap or pause begins
+                woken = waiter.wake.wait(_POLL)
+                waiter.wake.clear()  # a grant is read from ``granted``, under the lock
+                if not woken:
+                    with self._lock:
+                        self._dispatch()
+
+    def enqueue(self, limiter: GroupLimiter, share: str) -> Waiter:
+        """Queue a request without waiting; it may be granted at once."""
+        waiter = Waiter(limiter, share)
+        with self._lock:
+            self._queues.setdefault(share, deque()).append(waiter)
+            self._dispatch()
+        return waiter
+
+    def release(self, limiter: GroupLimiter | None = None) -> None:
+        """Give a global slot back (after ``limiter``'s), and hand out what came free.
+
+        If that release paused the group (a 429), its waiters are woken to sleep the pause out.
+        """
+        with self._lock:
+            self.free += 1
+            self._dispatch()
+            if limiter is not None and limiter.ready_at() > self._clock():
+                self._wake_group(limiter)
+
+    def wake_all(self) -> None:
+        """Wake every waiter, so a stop is noticed at once."""
+        with self._lock:
+            for queue in self._queues.values():
+                for waiter in queue:
+                    waiter.wake.set()
+
+    def waiting(self) -> int:
+        with self._lock:
+            return sum(len(q) for q in self._queues.values())
+
+    def _dispatch(self) -> None:
+        """Grant waiters, the classes in turn, while global slots last. Holds ``_lock``."""
+        if self._stop.is_set():  # grant nothing more: waiters raise ``Stopped``, uncounted
+            return
+        while self.free > 0:
+            now = self._clock()
+            shares = list(self._queues)
+            for i in range(len(shares)):
+                index = (self._turn + i) % len(shares)
+                if waiter := self._first_ready(self._queues[shares[index]], now):
+                    break
+            else:
+                break
+            self._queues[waiter.share].remove(waiter)
+            waiter.granted = True
+            waiter.wake.set()
+            self.free -= 1
+            self._turn = (index + 1) % len(shares)
+            if waiter.limiter.rate:  # its group's next gap starts now: its waiters sleep it out
+                self._wake_group(waiter.limiter)
+
+    def _wake_group(self, limiter: GroupLimiter) -> None:
+        """Wake the waiters of one group, to recheck when it is ready. Holds ``_lock``."""
+        for queue in self._queues.values():
+            for other in queue:
+                if other.limiter is limiter:
+                    other.wake.set()
+
+    @staticmethod
+    def _first_ready(queue: deque[Waiter], now: float) -> Waiter | None:
+        """The first waiter whose group takes a slot now; each group is asked once."""
+        asked: set[int] = set()
+        for waiter in queue:
+            if id(waiter.limiter) in asked:
+                continue
+            if waiter.limiter.try_take(now):
+                return waiter
+            asked.add(id(waiter.limiter))
+        return None
 
 
 def _throttled(response: httpx.Response) -> bool:
@@ -222,8 +335,12 @@ class ThrottledTransport(httpx.BaseTransport):
         self._limiters: dict[str, GroupLimiter] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        # Caps requests in flight across all groups; taken after the group's slot, never before.
-        self._slots = threading.BoundedSemaphore(max_in_flight) if max_in_flight else None
+        # Caps requests in flight across all groups, and shares them out between groups.
+        self._dispatcher = Dispatcher(max_in_flight, clock=clock, sleep=sleep, stop=self._stop)
+
+    @property
+    def max_in_flight(self) -> int | None:
+        return self._dispatcher.max_in_flight
 
     def limiter(self, group: str) -> GroupLimiter:
         with self._lock:
@@ -232,8 +349,6 @@ class ThrottledTransport(httpx.BaseTransport):
                     self._start,
                     self._ceiling,
                     clock=self._clock,
-                    sleep=self._sleep,
-                    stop=self._stop,
                     cooldown=self._cooldown,
                     rate=self._max_rate.get(group),
                 )
@@ -254,26 +369,15 @@ class ThrottledTransport(httpx.BaseTransport):
         }
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        limiter = self.limiter(request_group(request.url))
+        group = request_group(request.url)
+        limiter, share = self.limiter(group), share_class(group)
         retries = transient = 0
         while True:
-            limiter.acquire()
+            self._dispatcher.acquire(limiter, share)
             response = None
             try:
-                if self._slots is None:
-                    if not limiter.space():  # paused meanwhile: wait it out in acquire()
-                        limiter.release(neutral=True)
-                        continue
-                    response = self._send(request)
-                    response.read()  # a body that stalls or drops fails here, so it is retried
-                else:
-                    with self._slots:
-                        # after the global slot, so queued requests don't bunch
-                        if not limiter.space():  # paused meanwhile: wait it out in acquire()
-                            limiter.release(neutral=True)
-                            continue
-                        response = self._send(request)
-                        response.read()
+                response = self._send(request)
+                response.read()  # a body that stalls or drops fails here, so it is retried
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
                 delay = retry_after_seconds(retry_after)
@@ -282,36 +386,47 @@ class ThrottledTransport(httpx.BaseTransport):
             except TRANSIENT_ERRORS:
                 if response is not None:
                     response.close()
-                limiter.release(neutral=True)
+                self._release(limiter, neutral=True)
                 if transient == self._transient_retries:
                     raise
                 transient += 1
                 self._backoff(transient)
                 continue
             except BaseException:
-                limiter.release(neutral=True)
+                self._release(limiter, neutral=True)
                 raise
             if throttled:
                 if delay is not None and delay > self._max_retry_after:
-                    limiter.release(throttled=True, retry_after=self._max_retry_after)
+                    self._release(limiter, throttled=True, retry_after=self._max_retry_after)
                     return response
                 if retries == self._max_retries:
-                    limiter.release(throttled=True)
+                    self._release(limiter, throttled=True)
                     return response
                 if delay is None:
                     delay = 2.0**retries + self._jitter()
                 retries += 1
                 response.close()
-                limiter.release(throttled=True, retry_after=delay)
+                self._release(limiter, throttled=True, retry_after=delay)
                 continue
             if response.status_code in TRANSIENT_STATUSES and transient < self._transient_retries:
                 transient += 1
                 response.close()
-                limiter.release(neutral=True)
+                self._release(limiter, neutral=True)
                 self._backoff(transient)
                 continue
-            limiter.release(neutral=response.status_code >= 500)
+            self._release(limiter, neutral=response.status_code >= 500)
             return response
+
+    def _release(
+        self,
+        limiter: GroupLimiter,
+        throttled: bool = False,
+        retry_after: float = 0.0,
+        neutral: bool = False,
+    ) -> None:
+        """Give back the group's slot (adjusting its limit), then the global one."""
+        limiter.release(throttled=throttled, retry_after=retry_after, neutral=neutral)
+        self._dispatcher.release(limiter)
 
     def _backoff(self, attempt: int) -> None:
         """Wait before transient retry ``attempt`` (1, 2, ...); a stop cuts it short."""
@@ -325,6 +440,7 @@ class ThrottledTransport(httpx.BaseTransport):
     def stop(self) -> None:
         """Send nothing more; wake every request waiting for a slot or out a pause."""
         self._stop.set()
+        self._dispatcher.wake_all()
 
     def close(self) -> None:
         self.stop()

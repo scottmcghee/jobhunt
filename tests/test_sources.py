@@ -28,6 +28,7 @@ from jobhunt.sources import (
     radancy,
     rate_group,
     request_group,
+    share_class,
     smartrecruiters,
     successfactors,
     workable,
@@ -2383,6 +2384,16 @@ def test_rate_groups():
     assert rate_group(ef) == "apply.careers.microsoft.com"
     assert request_group(httpx.URL("https://apply.careers.microsoft.com/api/pcsx/search")) == rate_group(ef)
     assert request_group(httpx.URL("https://www.bamboohr.com.evil.example/x")) == "www.bamboohr.com.evil.example"
+
+
+def test_share_classes():
+    # every Oracle tenant is its own host and rate group, but they take turns for the global
+    # request slots as one, so hundreds of one-board tenants can't crowd out the big groups
+    for host in ("eeho.fa.us2.oraclecloud.com", "jpmc.fa.oraclecloud.com"):
+        assert share_class(host) == "oracle"
+    for group in ("workday:wd1", "workday:wd5", "greenhouse", "careers.example.com", "eightfold"):
+        assert share_class(group) == group
+    assert share_class("x.oraclecloud.com.evil.example") == "x.oraclecloud.com.evil.example"
 
 
 # ------------------------------------------------------------------ concurrent pages and details
