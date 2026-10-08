@@ -2822,3 +2822,12 @@ def test_rippling_merges_a_posting_listed_once_per_location(rippling_company, fi
         jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: False)
     assert [j.external_id for j in jobs] == RIP_IDS
     assert jobs[1].location == "Seattle, WA; Remote (United States)" and jobs[1].remote is True
+
+
+@respx.mock
+def test_rippling_detail_locations_replace_the_listing(rippling_company, fixture_json):
+    detail = {**fixture_json("rippling_job.json"), "workLocations": ["Seattle, WA", "Remote (United States)"]}
+    _rippling(fixture_json, details=httpx.Response(200, json=detail))
+    with httpx.Client() as client:
+        jobs = rippling.fetch(rippling_company, client, wants_body=lambda job: "Director" in job.title)
+    assert jobs[0].location == "Seattle, WA; Remote (United States)"  # listed: "Remote (United States)"

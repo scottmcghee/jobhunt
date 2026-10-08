@@ -86,6 +86,12 @@ _SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]*")
 _NOT_SLUGS = {"embed", "robots.txt", "llms.txt", "favicon.ico", "sitemap.xml"}
 _NOT_WORKDAY_SITES = {"wday", "job", "details", "login"}
 _NOT_SMARTRECRUITERS = {"oneclick-ui", "my-applications", "external-referrals", "xhtmlized"}
+_NOT_RIPPLING = {"api", "internal"}
+_NOT_SLUGS_FOR: dict[ATSName, set[str]] = {
+    "smartrecruiters": _NOT_SMARTRECRUITERS, "rippling": _NOT_RIPPLING
+}
+# ats.rippling.com/<locale>/<slug>/... (fr-FR, es-419) is the same board as /<slug>/...
+_RIPPLING_LOCALE = re.compile(r"[a-z]{2}-([A-Z]{2}|\d{3})")
 
 
 def _greenhouse_slug(host: str, segments: list[str], query: str) -> str:
@@ -164,13 +170,16 @@ def board_from_url(url: str) -> Company | None:
     if host == _GREENHOUSE_API or _GREENHOUSE_BOARD.fullmatch(host):
         ats, slug = "greenhouse", _greenhouse_slug(host, segments, parts.query)
     elif host in _BOARD_HOSTS:
-        ats, slug = _BOARD_HOSTS[host], segments[0] if segments else ""
+        ats = _BOARD_HOSTS[host]
+        if ats == "rippling" and segments and _RIPPLING_LOCALE.fullmatch(segments[0]):
+            segments = segments[1:]
+        slug = segments[0] if segments else ""
     else:
         return None
 
     if ats not in _KEEPS_CASE:
         slug = slug.lower()
-    not_slugs = _NOT_SLUGS | _NOT_SMARTRECRUITERS if ats == "smartrecruiters" else _NOT_SLUGS
+    not_slugs = _NOT_SLUGS | _NOT_SLUGS_FOR.get(ats, set())
     if not _SLUG.fullmatch(slug) or slug.lower() in not_slugs:
         return None
     return Company(name=slug, ats=ats, slug=slug)

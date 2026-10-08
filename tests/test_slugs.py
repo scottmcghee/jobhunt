@@ -53,6 +53,8 @@ from jobhunt.schema import Company
         ("https://jobs.gem.com/ExampleGem", ("gem", "ExampleGem")),
         ("https://ats.rippling.com/examplerip/jobs/11111111-1111-4111-8111-111111111111", ("rippling", "examplerip")),
         ("https://ats.rippling.com/examplerip/jobs", ("rippling", "examplerip")),
+        ("https://ats.rippling.com/fr-FR/examplerip/jobs/11111111-1111-4111-8111-111111111111", ("rippling", "examplerip")),
+        ("https://ats.rippling.com/es-419/examplerip/jobs", ("rippling", "examplerip")),  # a locale first
         ("https://jobs.smartrecruiters.com/AbbVie/3743990009679496-manager?trid=x", ("smartrecruiters", "AbbVie")),
         ("https://careers.smartrecruiters.com/AveryDennison", ("smartrecruiters", "AveryDennison")),
         ("https://careers.smartrecruiters.com/BoydGaming/main-street-station", ("smartrecruiters", "BoydGaming")),
@@ -66,6 +68,9 @@ from jobhunt.schema import Company
         ("https://job-boards.anz.greenhouse.io/robots.txt", None),
         ("https://boards.greenhouse.io/embed/job_board", None),
         ("https://boards-api.greenhouse.io/v1/boards/", None),
+        ("https://ats.rippling.com/api/jobs", None),
+        ("https://ats.rippling.com/internal/x", None),
+        ("https://ats.rippling.com/fr-FR", None),
         ("https://jobs.smartrecruiters.com/", None),
         ("https://jobs.smartrecruiters.com/robots.txt", None),
         ("https://jobs.smartrecruiters.com/oneclick-ui/company/X/publication/1", None),
