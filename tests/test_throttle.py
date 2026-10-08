@@ -698,6 +698,54 @@ def test_a_stopped_transport_sends_nothing(how):
     assert transport.limiter("greenhouse").in_flight == 0
 
 
+def test_a_request_stopped_before_its_slot_is_not_counted():
+    transport = throttle.ThrottledTransport(inner=httpx.MockTransport(lambda r: httpx.Response(200)))
+    client = httpx.Client(transport=transport)
+    client.get("https://api.lever.co/v0/postings/acme")
+    transport.stop()
+    with pytest.raises(throttle.Stopped):
+        client.get("https://api.lever.co/v0/postings/acme")
+    assert transport.stats()["lever"]["requests"] == 1  # "requests sent" stays true after Ctrl-C
+
+
+def test_a_stop_wakes_a_request_waiting_for_its_group_slot_at_once():
+    import threading
+    import time
+
+    first_in, finish_first = threading.Event(), threading.Event()
+
+    def handler(request):
+        first_in.set()
+        assert finish_first.wait(STOP_WAIT)
+        return httpx.Response(200)
+
+    transport = throttle.ThrottledTransport(inner=httpx.MockTransport(handler), start=1, ceiling=1)
+    first = threading.Thread(target=transport.handle_request, args=(httpx.Request("GET", URL),), daemon=True)
+    first.start()
+    assert first_in.wait(STOP_WAIT)
+    raised: list[BaseException] = []
+
+    def second():
+        try:
+            transport.handle_request(httpx.Request("GET", URL))
+        except BaseException as e:
+            raised.append(e)
+
+    waiting = threading.Thread(target=second, daemon=True)
+    waiting.start()
+    while transport._dispatcher.waiting() < 1:
+        time.sleep(0.001)
+    time.sleep(0.05)  # in its wait for a slot
+    started = time.monotonic()
+    transport.stop()
+    waiting.join(STOP_WAIT)
+    elapsed = time.monotonic() - started
+    finish_first.set()
+    first.join(STOP_WAIT)
+    assert [type(e) for e in raised] == [throttle.Stopped]
+    assert elapsed < 1.0  # woken by the stop, not by its safety poll
+
+
 def test_a_request_waiting_for_a_global_slot_is_not_sent_after_a_stop():
     import threading
 
@@ -925,3 +973,29 @@ def test_a_pause_wakes_its_groups_waiters_to_sleep_it_out():
     assert not thread.is_alive() and not raised
     assert 0.15 <= time.monotonic() - started < 1.0
     assert lim.in_flight == 1
+
+
+def test_a_grant_that_starts_a_gap_wakes_its_groups_waiters_to_sleep_it_out():
+    # two slots held by h; g (2/s) has two waiters. Freeing one h slot grants g's first and
+    # starts its gap; the second h slot comes free during the gap, so g's second waiter must
+    # already be sleeping the gap out, not waiting for a release or its safety poll
+    import time
+
+    dispatcher = throttle.Dispatcher(2)
+    g = throttle.GroupLimiter(start=6, ceiling=6, rate=2.0)
+    h = throttle.GroupLimiter(start=6, ceiling=6)
+    assert dispatcher.enqueue(h, "h").granted and dispatcher.enqueue(h, "h").granted
+    threads = [_acquire_in_thread(dispatcher, g)[0] for _ in range(2)]
+    while dispatcher.waiting() < 2:
+        time.sleep(0.001)
+    time.sleep(0.05)  # both in their wait for a slot
+    started = time.monotonic()
+    h.release()
+    dispatcher.release(h)  # g's first goes, and its gap begins
+    h.release()
+    dispatcher.release(h)  # a free slot, but g's gap is still running
+    for thread in threads:
+        thread.join(STOP_WAIT)
+    assert not any(thread.is_alive() for thread in threads)
+    assert time.monotonic() - started < 1.5
+    assert g.in_flight == 2

@@ -242,6 +242,8 @@ class Dispatcher:
 
     def _dispatch(self) -> None:
         """Grant waiters, the classes in turn, while global slots last. Holds ``_lock``."""
+        if self._stop.is_set():  # grant nothing more: waiters raise ``Stopped``, uncounted
+            return
         while self.free > 0:
             now = self._clock()
             shares = list(self._queues)
