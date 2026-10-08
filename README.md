@@ -230,9 +230,29 @@ plain `jobhunt fetch` starts over with every board; a completed fetch deletes th
 
 ## Finding companies
 
-The comments in `companies.yaml` show how to read a board's slug off its careers page. Two tools
-help find boards in bulk. Both write a file for you to review and paste into `companies.yaml`, and
-both leave out boards you already have.
+The comments in `companies.yaml` show how to read a board's slug off its careers page. Three tools
+help find boards in bulk. Each writes a file for you to review and paste into `companies.yaml`, and
+each leaves out boards you already have.
+
+**Discovery** finds boards two ways at once, and is the one to start with:
+
+```bash
+python -m jobhunt.discover                                  # every known platform, latest crawl
+python -m jobhunt.discover --hosts careers_hosts.txt        # and these companies' careers sites
+python -m jobhunt.discover --platforms gem rippling --check # just these; drop boards with no jobs
+```
+
+On platforms whose board URLs follow a pattern (Workday, Greenhouse, Lever, Ashby,
+SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Rippling; Oracle with `--platforms oracle`),
+it reads [Common Crawl](https://commoncrawl.org/)'s URL index: each platform's URLs sit together,
+so about 100 MB of index (cached after the first run) plus some tens of MB of index blocks per
+crawl finds every board a crawl saw (5,749 new ones in a test run). Careers
+sites on companies' own domains (`careers.acme.com`) say nothing in their URLs, so each host in a
+`--hosts` file (plain hosts, URLs, or lines grepped from Common Crawl's `cluster.idx`) is read the
+way the S&P 500 survey reads a site: which platform it runs, and the board it points at. Hosts are
+cached in `data/discovery/hosts.json`, so a rerun visits only new ones. It writes
+`data/discovered.yaml`; boards from careers hosts are named after the host, so fix names as you
+paste.
 
 **The slugs harvester** finds board URLs in any text file, such as lines grepped from
 [Common Crawl](https://index.commoncrawl.org/) index files, saved HTML, or a plain list of URLs:
