@@ -541,7 +541,7 @@ def cmd_applied(args: argparse.Namespace, data_dir: Path) -> int:
     event = apps.Event(
         job_key=job.key,
         kind="applied",
-        date=args.date,
+        date=args.date or (earlier.applied if earlier else _today()),
         company=job.company,
         title=job.title,
         score=scores[-1] if scores else None,
@@ -560,9 +560,12 @@ def cmd_outcome(args: argparse.Namespace, data_dir: Path) -> int:
         hint = "record it first with `jobhunt applied`"
         print(f"no application to {args.key}; {hint}", file=sys.stderr)
         return 2
+    app = applied[args.key]
+    if args.date < app.applied:
+        print(f"{args.date} is before the application ({app.applied})", file=sys.stderr)
+        return 2
     event = apps.Event(job_key=args.key, kind="outcome", date=args.date, status=args.status)
     storage.append_jsonl(data_dir / "applications.jsonl", event.model_dump())
-    app = applied[args.key]
     print(f"{event.date}: {app.company}: {app.title} -> {args.status}")
     return 0
 
@@ -610,6 +613,10 @@ def cmd_run(args: argparse.Namespace, data_dir: Path, output_dir: Path) -> int:
 
 
 # --------------------------------------------------------------------------- parser
+
+
+def _today() -> str:
+    return datetime.now(UTC).date().isoformat()
 
 
 def _iso_date(value: str) -> str:
@@ -680,19 +687,19 @@ def build_parser() -> argparse.ArgumentParser:
     li.add_argument("--min-score", type=int, metavar="N", help="hide jobs scoring below N")
     li.add_argument("--hide-applied", action="store_true", help="hide jobs already applied to")
 
-    today = datetime.now(UTC).date().isoformat()
     date_help = "the day it happened, YYYY-MM-DD (default: today, UTC)"
     ad = sub.add_parser("applied", help="record an application to a job jobhunt found")
     ad.add_argument("key", help="the job's key, as `jobhunt list` shows it")
     ad.add_argument("--resume", required=True, metavar="VERSION", help="the resume version sent")
     ad.add_argument("--warm", action="store_true", help="a warm contact (referral, intro)")
-    ad.add_argument("--date", type=_iso_date, default=today, help=date_help)
+    applied_help = f"{date_help[:-1]}; a --force correction keeps the earlier date)"
+    ad.add_argument("--date", type=_iso_date, help=applied_help)
     ad.add_argument("--force", action="store_true", help="record it again (a correction)")
 
     oc = sub.add_parser("outcome", help="record what came of an application")
     oc.add_argument("key", help="the job's key")
     oc.add_argument("status", choices=apps.STATUSES)
-    oc.add_argument("--date", type=_iso_date, default=today, help=date_help)
+    oc.add_argument("--date", type=_iso_date, default=_today(), help=date_help)
 
     sub.add_parser("applications", help="each application, and response rates by group")
 

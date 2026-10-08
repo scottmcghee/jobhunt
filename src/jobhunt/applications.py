@@ -53,6 +53,7 @@ class Application(BaseModel):
     resume: str | None
     warm: bool | None
     status: Status | None = None  # the latest outcome; None: nothing yet
+    status_date: str | None = None  # the date of that outcome
     reached: Status | None = None  # the furthest stage (screen, interview, offer), if any
     first_reply: str | None = None  # the date of the first outcome that was a reply
 
@@ -73,7 +74,7 @@ def fold(events: Iterable[Event]) -> list[Application]:
     for event in events:
         current = apps.get(event.job_key)
         if event.kind == "applied":
-            outcomes = {"status", "reached", "first_reply"}
+            outcomes = {"status", "status_date", "reached", "first_reply"}
             kept = current.model_dump(include=outcomes) if current else {}
             apps[event.job_key] = Application(
                 job_key=event.job_key,
@@ -86,7 +87,8 @@ def fold(events: Iterable[Event]) -> list[Application]:
                 **kept,
             )
         elif current is not None and event.status is not None:
-            current.status = event.status
+            if current.status_date is None or event.date >= current.status_date:
+                current.status, current.status_date = event.status, event.date  # a tie: the later
             if event.status in STAGES and not _at_least(current, event.status):
                 current.reached = event.status
             first = current.first_reply

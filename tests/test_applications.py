@@ -37,6 +37,22 @@ def test_the_latest_outcome_is_the_status_and_the_furthest_stage_is_kept():
     assert app.first_reply == "2026-10-05"
 
 
+def test_the_status_is_the_outcome_with_the_latest_date_not_the_last_recorded():
+    events = [
+        _applied(date="2026-09-20"),
+        _outcome(status="interview", date="2026-10-05"),
+        _outcome(status="screen", date="2026-10-01"),  # backdated, recorded late
+    ]
+    (app,) = ap.fold(events)
+    assert (app.status, app.reached, app.first_reply) == ("interview", "interview", "2026-10-01")
+
+
+def test_on_the_same_day_the_outcome_recorded_later_wins():
+    events = [_applied(), _outcome(status="screen"), _outcome(status="rejected")]
+    (app,) = ap.fold(events)
+    assert app.status == "rejected"
+
+
 def test_no_response_and_withdrawn_are_not_replies():
     (app,) = ap.fold([_applied(), _outcome(status="no_response"), _outcome(status="withdrawn", date="2026-10-09")])
     assert app.status == "withdrawn" and app.first_reply is None and app.reached is None

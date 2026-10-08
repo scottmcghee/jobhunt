@@ -122,8 +122,9 @@ jobhunt outcome greenhouse:northwind:4410 screen
 jobhunt applications
 ```
 
-`--warm` marks a warm contact (a referral or an intro), and `--date` (default today) backdates
-either command. An outcome is one of `no_response`, `rejected`, `screen`, `interview`, `offer`
+`--warm` marks a warm contact (a referral or an intro), and `--date` (default today, in UTC)
+backdates either command; `applied --force` corrects an application and keeps its original date
+unless `--date` is given. An outcome is one of `no_response`, `rejected`, `screen`, `interview`, `offer`
 or `withdrawn`, and the latest one is where the application stands. `jobhunt applications` lists
 them, then breaks them down by resume version, warm or cold, and the score jobhunt gave the job,
 so questions like "did the new resume get more replies?" have numbers behind them (a fictional
