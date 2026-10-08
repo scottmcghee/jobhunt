@@ -76,11 +76,12 @@ class FetchSettings(_Section):
     # oracle, phenom). A term with more hits stops there, with a warning. Amazon can't page past
     # 9,900.
     max_per_term: dict[
-        Literal["amazon", "apple", "eightfold", "oracle", "phenom"],
+        Literal["amazon", "apple", "eightfold", "oracle", "phenom", "usajobs"],
         Annotated[StrictInt, Field(ge=1)],
     ] = Field(
         default_factory=lambda: {
-            "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500
+            "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500,
+            "usajobs": 2000,
         }
     )
 

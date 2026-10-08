@@ -90,7 +90,7 @@ def normalize(company: Company, item: dict) -> Job:
 
 def _page(
     company: Company, client: httpx.Client, term: str, page: int, auth: tuple[str, str]
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int, int]:
     key, email = auth
     resp = client.get(
         BASE,
@@ -100,6 +100,7 @@ def _page(
         },
         headers={"Host": "data.usajobs.gov", "User-Agent": email, "Authorization-Key": key},
         extensions={RATE: RATE_CAP},
+        follow_redirects=False,  # the key and email go to data.usajobs.gov only
     )
     resp.raise_for_status()
     result = resp.json().get("SearchResult") or {}
@@ -108,7 +109,11 @@ def _page(
         pages = int((result.get("UserArea") or {}).get("NumberOfPages") or 1)
     except ValueError:
         pages = 1
-    return items, pages
+    try:
+        total = int(result.get("SearchResultCountAll") or 0)
+    except ValueError:
+        total = 0
+    return items, pages, total
 
 
 def fetch(
@@ -130,9 +135,9 @@ def fetch(
     cap = max_per_term or MAX_PER_TERM
     found: dict[str, Job] = {}
     for term in terms(search, source="usajobs"):
-        page, pages, seen = 1, 1, 0
+        page, pages, seen, total = 1, 1, 0, 0
         while page <= pages and seen < cap and (max_pages is None or page <= max_pages):
-            items, pages = _page(company, client, term, page, auth)
+            items, pages, total = _page(company, client, term, page, auth)
             for item in items[: cap - seen]:
                 if item.get("MatchedObjectId"):
                     job = normalize(company, item)
@@ -141,5 +146,9 @@ def fetch(
             if not items:
                 break
             page += 1
+        if seen >= cap and total > cap:
+            log.warning(
+                "usajobs %s: %r has %d hits; kept the first %d", company.slug, term, total, cap
+            )
     log.info("usajobs %s: %d jobs", company.slug, len(found))
     return list(found.values())

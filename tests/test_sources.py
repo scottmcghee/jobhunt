@@ -2937,5 +2937,25 @@ def test_usajobs_without_a_key_or_email_is_skipped_with_a_warning(usajobs_compan
     assert "usajobs.api_key and usajobs.email" in caplog.text
 
 
+@respx.mock
+def test_usajobs_does_not_follow_a_redirect_with_the_key(usajobs_company):
+    respx.get(UJ).mock(
+        return_value=httpx.Response(302, headers={"Location": "https://other.example.com/steal"})
+    )
+    elsewhere = respx.get(url__startswith="https://other.example.com/")
+    with httpx.Client(follow_redirects=True) as client, pytest.raises(httpx.HTTPStatusError):
+        usajobs.fetch(usajobs_company, client, ["director"], auth=UJ_AUTH)
+    assert elsewhere.call_count == 0  # the key and email never leave data.usajobs.gov
+
+
+@respx.mock
+def test_usajobs_a_term_that_hits_the_cap_is_truncated_and_logged(usajobs_company, fixture_json, caplog):
+    _usajobs(fixture_json)
+    with httpx.Client() as client:
+        jobs = usajobs.fetch(usajobs_company, client, ["director"], max_per_term=2, auth=UJ_AUTH)
+    assert [j.external_id for j in jobs] == ["900000001", "900000002"]
+    assert "'director' has 3 hits; kept the first 2" in caplog.text
+
+
 def test_usajobs_rate_group(usajobs_company):
     assert rate_group(usajobs_company) == "usajobs" == request_group(httpx.URL(UJ))
