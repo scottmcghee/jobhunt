@@ -1585,6 +1585,9 @@ def test_a_correction_cannot_move_the_application_after_an_outcome(tmp_path, sco
     assert _applications(tmp_path, "applied", key, "--resume", "v1", "--force", "--date", "2026-09-20") == 2
     assert "after an outcome" in capsys.readouterr().err
     assert [e["kind"] for e in _events(tmp_path)] == ["applied", "outcome", "outcome"]
+    # Between the two outcomes: still after the first, which need not be a reply.
+    assert _applications(tmp_path, "applied", key, "--resume", "v1", "--force", "--date", "2026-09-07") == 2
+    assert [e["kind"] for e in _events(tmp_path)] == ["applied", "outcome", "outcome"]
     assert _applications(tmp_path, "applied", key, "--resume", "v1", "--force", "--date", "2026-09-05") == 0
 
 
