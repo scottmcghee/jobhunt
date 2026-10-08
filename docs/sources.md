@@ -39,7 +39,8 @@ don't know or care where a posting came from.
 Sources fall into three groups.
 
 **Listing sources** return every open posting, with its description, in one request per board:
-Greenhouse, Lever, Ashby and Workable.
+Greenhouse, Lever, Ashby and Workable. iCIMS Career Sites is a listing source too, but paged: one
+request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
 descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR, and

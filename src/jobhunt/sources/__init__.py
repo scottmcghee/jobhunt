@@ -83,7 +83,8 @@ def fetch_company(
     descriptions.
 
     ``max_pages`` stops paged listings (Workday, SmartRecruiters, and each search of a search
-    source) early; the others are one request.
+    source) early. iCIMS Career Sites is paged too but ignores it: it reads every page, up to its
+    own 100-page guard. The others are one request.
 
     ``search`` matters only for sites too big to list (Amazon, Eightfold, Oracle, Apple, Phenom):
     they search per term instead (``fetch`` passes the title filter's target-level words). Others
