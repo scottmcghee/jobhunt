@@ -54,6 +54,8 @@ src/jobhunt/
   evaluate.py         # pure: a sample of jobs to label; labels vs. model scores -> agreement metrics
   cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications
                       #  | label | eval`
+  commoncrawl.py      # Common Crawl's URL index read by byte range: every URL a crawl saw under some hosts
+  fingerprint.py      # which hiring platform a careers site runs, and its board (survey and discovery)
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
                       # offline, except --check, which fetches the first page of each new board via sources/
 tests/
@@ -104,7 +106,7 @@ Endpoints, slug formats, gone-board signals and rate caps for each source are in
 **Companies with no supported ATS** (e.g., Apple) are case-by-case and may need crawling HTML rather than calling an API.
 
 - **Investigate first.** Check whether the careers site is backed by a JSON endpoint before writing a crawler.
-- **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures.
+- **Crawling rules.** Respect `robots.txt` and rate limits, and test crawlers against saved HTML fixtures. One exception, the owner's decision: Common Crawl's published index files are downloaded from data.commoncrawl.org although its robots.txt disallows crawlers, because its own documentation directs people to download them there; this is personal, non-commercial use of a public dataset (`commoncrawl.py`).
 - **Fit the existing pipeline.** Output must still be `Job` models so filter, score, and letter stay unchanged.
 - **Off-limits:** Google (robots.txt disallows its job pages), Meta (its terms forbid automated collection without written permission), classic iCIMS portals (`Disallow: /`), NEOGOV / governmentjobs.com and schooljobs.com (`Disallow: /` for all but named search engines, and its terms ban scraping even public pages), ctcLink (`Disallow: /`), SCALIS (its `/api/` is disallowed and its pages carry no job data), UKG / UltiPro job boards (`Disallow: */JobBoardView`), Pinpoint (`Disallow: /`), Dover (`Disallow: /api/`), PageUp (a bot wall), and any board whose robots.txt disallows its own path (some Workday sites disallow their site path). [docs/sources.md](docs/sources.md#not-covered-watch-these-by-hand) says what sits behind them.
 
