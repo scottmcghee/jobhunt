@@ -11,6 +11,7 @@ A small, well-tested Python CLI that:
 3. **Scores** each surviving role 1–10 against a fixed candidate profile using Claude, with a written rationale.
 4. **Generates** a tailored cover letter for high-scoring roles by assembling pre-written proof modules from a Cover Letter Kit, never by inventing claims.
 5. **Tracks** applications to the roles it found and their outcomes, with reply rates by resume version, warm or cold contact, and score.
+6. **Evaluates** the scorer against the candidate's own labels for a sample of jobs.
 
 It is also a portfolio piece. Code quality, tests, and the README matter as much as the output.
 
@@ -45,12 +46,14 @@ src/jobhunt/
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
   storage.py          # data/ and output/: seen-set, gone-board and fetch-progress ledgers, JSONL records
-                      # (jobs, scores, applications), letters
+                      # (jobs, scores, applications, labels, evals), letters
   throttle.py         # polite HTTP for fetch: adaptive per-group concurrency, rate caps, 429/Retry-After and transient retries
   runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the only module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
   applications.py     # pure: applied/outcome events -> applications, and reply stats by group
-  cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications`
+  evaluate.py         # pure: a sample of jobs to label; labels vs. model scores -> agreement metrics
+  cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications
+                      #  | label | eval`
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;
                       # offline, except --check, which fetches the first page of each new board via sources/
 tests/

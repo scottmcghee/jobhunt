@@ -7,6 +7,7 @@
 - jobs.jsonl   : every Job that passed the filter, appended once.
 - scores.jsonl : every ScoredJob, appended once per job.
 - applications.jsonl : applied/outcome events, appended (see applications.py).
+- labels.jsonl : the candidate's own scores for a sample of jobs; evals.jsonl : eval runs.
 - output/      : one Markdown letter per generated job.
 """
 
@@ -21,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from jobhunt.applications import Event
+from jobhunt.evaluate import Label
 from jobhunt.schema import Job, Letter, ScoredJob
 
 log = logging.getLogger(__name__)
@@ -156,6 +158,14 @@ def load_scores(data_dir: Path) -> list[ScoredJob]:
 
 def load_application_events(data_dir: Path) -> list[Event]:
     return [Event.model_validate(r) for r in read_jsonl(data_dir / "applications.jsonl")]
+
+
+def load_labels(data_dir: Path) -> dict[str, Label]:
+    """The candidate's labels by job key; a later label for a job replaces an earlier one."""
+    return {
+        label.job_key: label
+        for label in (Label.model_validate(r) for r in read_jsonl(data_dir / "labels.jsonl"))
+    }
 
 
 def _slug(s: str) -> str:

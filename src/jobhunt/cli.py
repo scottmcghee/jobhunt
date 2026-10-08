@@ -16,6 +16,8 @@ cover letters for the top scorers from the pre-written modules in config/kit/.
                                                      record an application to a found job
     jobhunt outcome KEY STATUS [--date D]            record what came of it
     jobhunt applications                             each application, and response rates
+    jobhunt label   [--sample N]                     score a sample of jobs yourself
+    jobhunt eval    [--rescore]                      how well the scorer agrees with you
 
 A job key is source:company_slug:external_id, e.g. greenhouse:huntress:7777533003.
 """
@@ -38,12 +40,13 @@ from pathlib import Path
 import httpx
 
 from jobhunt import applications as apps
-from jobhunt import config, settings, storage, throttle
+from jobhunt import config, evaluate, settings, storage, throttle
 from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, backend_name, make_completer, model_name
 from jobhunt.runner import BoardRunner
-from jobhunt.schema import Company, Job
+from jobhunt.schema import Company, Job, ScoredJob
+from jobhunt.score import SYSTEM as SCORE_SYSTEM
 from jobhunt.score import score_job
 from jobhunt.sources import fetch_company, rate_group
 
@@ -607,6 +610,152 @@ def cmd_applications(args: argparse.Namespace, data_dir: Path) -> int:
     return 0
 
 
+LABEL_BODY_CHARS = 1500  # of a posting's description shown while labeling; the URL has the rest
+
+
+def _ask_score() -> int | str | None:
+    """The candidate's score, 1-10; None to skip the job, "q" to stop."""
+    while True:
+        reply = input("Your score, 1 to 10 (Enter skips, q quits): ").strip().lower()
+        if reply in ("", "q"):
+            return reply or None
+        if reply.isdigit() and 1 <= int(reply) <= 10:
+            return int(reply)
+        print("  a score is a whole number from 1 to 10")
+
+
+def cmd_label(args: argparse.Namespace, data_dir: Path) -> int:
+    labels = storage.load_labels(data_dir)
+    need = args.sample - len(labels)
+    if need <= 0:
+        print(f"already {len(labels)} labeled; `jobhunt eval` compares them with the scorer.")
+        return 0
+    latest = {s.job.key: s for s in storage.load_scores(data_dir)}
+    todo = evaluate.sample(latest.values(), set(labels), need)
+    if not todo:
+        print("no scored jobs left to label.")
+        return 0
+    print(f"{len(todo)} job(s) to label with your own score, 1 to 10, as the scorer would.")
+    print("The scorer's score stays hidden until `jobhunt eval`. q or Ctrl-D stops; labels keep.")
+    done = 0
+    try:
+        for i, s in enumerate(todo, start=1):
+            job = s.job
+            print(f"\n[{i}/{len(todo)}] {job.company}: {job.title}")
+            print(f"  {job.location or 'location not given'}")
+            print(f"  {job.url}\n")
+            body = job.body[:LABEL_BODY_CHARS]
+            more = " ..." if len(job.body) > LABEL_BODY_CHARS else ""
+            print("  " + body.replace("\n", "\n  ") + more + "\n")
+            score = _ask_score()
+            if score == "q":
+                break
+            if score is None:
+                continue
+            note = input("Note (optional): ").strip()
+            label = evaluate.Label(job_key=job.key, score=score, note=note)
+            storage.append_jsonl(data_dir / "labels.jsonl", label.model_dump())
+            done += 1
+    except (EOFError, KeyboardInterrupt):
+        print()
+    print(f"\n{done} labeled now, {len(labels) + done} in all.")
+    return 0
+
+
+def _rescore_labeled(
+    args: argparse.Namespace,
+    keys: list[str],
+    latest: dict[str, ScoredJob],
+    complete: Completer | None,
+) -> dict[str, ScoredJob]:
+    """The labeled jobs scored afresh with the current prompt and model; scores.jsonl untouched."""
+    llm = args.settings.llm
+    complete = complete or _completer(llm)
+    label = _model_label(llm)
+    profile, kit = config.load_profile(), config.load_kit()
+    fresh = {}
+    for key in keys:
+        job = latest[key].job
+        try:
+            fresh[key] = score_job(
+                job, profile, kit, complete, llm.score_max_tokens, llm.body_chars, label
+            )
+        except (ValueError, KeyError) as e:  # unusable model reply: left out of this run
+            log.warning("%s: %s — skipped (%s: %s)", key, job.title, type(e).__name__, e)
+    return fresh
+
+
+def cmd_eval(args: argparse.Namespace, data_dir: Path, complete: Completer | None = None) -> int:
+    labels = storage.load_labels(data_dir)
+    if not labels:
+        print("no labels yet: `jobhunt label` asks for your own scores first.", file=sys.stderr)
+        return 2
+    latest = {s.job.key: s for s in storage.load_scores(data_dir)}
+    keys = [k for k in labels if k in latest]
+    if args.rescore:
+        scored = _rescore_labeled(args, keys, latest, complete)
+        source, prompt = "rescored", evaluate.fingerprint(SCORE_SYSTEM)
+    else:
+        scored = {k: latest[k] for k in keys}
+        source, prompt = "stored", None
+    pairs = [
+        evaluate.Pair(
+            job_key=k,
+            company=s.job.company,
+            title=s.job.title,
+            human=labels[k].score,
+            model=s.score.score,
+            rationale=s.score.rationale,
+        )
+        for k, s in scored.items()
+    ]
+    if not pairs:
+        print("none of the labeled jobs has a score to compare.", file=sys.stderr)
+        return 2
+    threshold = config.load_preferences().scoring.min_score_for_letter
+    m = evaluate.metrics(pairs, threshold)
+    models = sorted({s.score.model for s in scored.values()})
+    _print_eval(m, pairs, source, models)
+    run = {
+        "run_at": datetime.now(UTC).isoformat(),
+        "source": source,
+        "models": models,
+        "prompt": prompt,
+        "metrics": m.model_dump(),
+    }
+    storage.append_jsonl(data_dir / "evals.jsonl", run)
+    return 0
+
+
+def _share(x: float | None) -> str:
+    return "-" if x is None else f"{x:.0%}"
+
+
+def _print_eval(
+    m: evaluate.Metrics, pairs: list[evaluate.Pair], source: str, models: list[str]
+) -> None:
+    how = "scored just now" if source == "rescored" else "their stored scores"
+    print(f"{m.n} labeled job(s), {how} ({', '.join(models)})\n")
+    rank = "-" if m.spearman is None else f"{m.spearman:.2f}"
+    lean = "higher" if m.bias > 0 else "lower" if m.bias < 0 else "neither higher nor lower"
+    print(f"  rank agreement (Spearman, -1 to 1)  {rank}")
+    lean = f"the scorer scores {lean} than you"
+    print(f"  mean error {m.mae:.2f} points; bias {m.bias:+.2f} ({lean})")
+    print(f"  within one point: {_share(m.within_1)}")
+    print(f"\n  at the letter line ({m.threshold}+):")
+    print(f"    you said yes to {m.tp + m.fn}; the scorer found {m.tp} (recall {_share(m.recall)})")
+    print(
+        f"    the scorer said yes to {m.tp + m.fp}; you agreed on {m.tp}"
+        f" (precision {_share(m.precision)})"
+    )
+    print("\nbiggest disagreements:")
+    for p in evaluate.disagreements(pairs):
+        if p.model == p.human:
+            break
+        print(f"  you {p.human:>2}, scorer {p.model:>2}  {p.company}: {p.title}")
+        print(f"      {p.rationale}")
+
+
 def cmd_run(args: argparse.Namespace, data_dir: Path, output_dir: Path) -> int:
     rc = cmd_fetch(args, data_dir)
     if rc:
@@ -708,6 +857,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("applications", help="each application, and response rates by group")
 
+    lb = sub.add_parser("label", help="score a sample of jobs yourself, for `jobhunt eval`")
+    lb.add_argument(
+        "--sample", type=_at_least_one, default=50, metavar="N",
+        help="how many labeled jobs to have in all (default 50)",
+    )
+    ev = sub.add_parser("eval", help="how well the scorer agrees with your labels")
+    ev.add_argument(
+        "--rescore", action="store_true",
+        help="score the labeled jobs again with the current prompt and model (one call each)",
+    )
+
     le = sub.add_parser("letter", help="generate letters for high scorers")
     le.add_argument("--min-score", type=int, metavar="N", help=min_score_help)
     le.add_argument("--job", metavar="KEY", help=job_help)
@@ -761,6 +921,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_outcome(args, args.data_dir)
         if args.cmd == "applications":
             return cmd_applications(args, args.data_dir)
+        if args.cmd == "label":
+            return cmd_label(args, args.data_dir)
+        if args.cmd == "eval":
+            return cmd_eval(args, args.data_dir)
         if args.cmd == "list":
             return cmd_list(args, args.data_dir)
         if args.cmd == "run":
