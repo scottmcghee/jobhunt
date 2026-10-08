@@ -1481,7 +1481,7 @@ def test_a_posting_listed_twice_on_one_board_is_recorded_once(tmp_path, platform
 
 
 @respx.mock
-def test_the_fetch_client_keeps_no_cookies():
+def test_the_fetch_client_keeps_cookies_per_host_in_its_transport():
     fetch = cli.settings.Settings().fetch
     with cli._client(cli._transport(fetch, workers=2, per_host=2), fetch) as client:
         sent = []
@@ -1493,4 +1493,5 @@ def test_the_fetch_client_keeps_no_cookies():
         respx.get(GH.format("acme")).mock(side_effect=handler)
         client.get(GH.format("acme"))
         client.get(GH.format("acme"))
-        assert sent == [None, None] and len(client.cookies.jar) == 0
+        assert sent == [None, "PLAY_SESSION=abc"]  # sent back, like a browser
+        assert len(client.cookies.jar) == 0  # by the transport's jar for that host, not the client's

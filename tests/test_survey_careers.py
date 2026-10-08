@@ -748,7 +748,7 @@ def test_main_retries_a_wikidata_429(tmp_path, monkeypatch):
     known.write_text("companies: []\n")
     assert survey.main([str(tmp_path / "out"), "--companies", str(known), "--delay", "0"]) == 0
     assert wikidata.call_count == 2
-    assert cookies_sent == [None, None]  # the first answer's cookie wasn't kept
+    assert cookies_sent == [None, "WMF=x"]  # sent back by the transport's jar for that host
     (built,) = built
     assert built._max_retries == 2 and built._max_retry_after == 30  # from the fetch settings
     assert built._slots is not None and built._slots._initial_value == 1  # one request at a time

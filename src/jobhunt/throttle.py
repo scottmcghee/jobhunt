@@ -70,13 +70,14 @@ class Stopped(Exception):
 
 
 def no_cookies() -> http.cookiejar.CookieJar:
-    """A cookie jar that keeps none: pass it as ``httpx.Client(cookies=...)``.
+    """A client cookie jar that keeps none: pass it as ``httpx.Client(cookies=...)``.
 
-    One client serves a whole fetch, and Workday (6 or 7 per board) and BambooHR set cookies
-    that it would otherwise keep: about 20,000 by the end of a full run. httpx copies the jar
-    for every request, which then costs ~150 ms of CPU, so late in a run fetch spent most of
-    its time on cookies. No source needs them (checked on two boards of each in October 2026);
-    one that does should make its own client with a jar of its own.
+    ``ThrottledTransport`` keeps cookies instead, one small jar per host. A client's own jar
+    holds every host's: Workday sets 6 or 7 per board and BambooHR 1 or 2, so about 20,000 by
+    the end of a full fetch, and httpx copies the whole jar for every request, ~150 ms of CPU
+    each by then. Cookies still matter: Workday and Workable are behind Cloudflare, whose
+    ``__cf_bm`` marks a returning client, and Eightfold blocked a cookie-less fetch within
+    minutes.
     """
     return http.cookiejar.CookieJar(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
 
@@ -233,6 +234,7 @@ class ThrottledTransport(httpx.BaseTransport):
         )
         self._max_rate = dict(max_rate or {})  # rate group -> most requests sent per second
         self._limiters: dict[str, GroupLimiter] = {}
+        self._cookies: dict[str, httpx.Cookies] = {}  # host -> the cookies it set
         self._lock = threading.Lock()
         self._stop = threading.Event()
         # Caps requests in flight across all groups; taken after the group's slot, never before.
@@ -266,8 +268,13 @@ class ThrottledTransport(httpx.BaseTransport):
             for group, lim in sorted(limiters.items())
         }
 
+    def _jar(self, host: str) -> httpx.Cookies:
+        with self._lock:
+            return self._cookies.setdefault(host, httpx.Cookies())
+
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         limiter = self.limiter(request_group(request.url))
+        own_cookies = "cookie" in request.headers  # set by the caller: sent as they are
         retries = transient = 0
         while True:
             limiter.acquire()
@@ -277,7 +284,7 @@ class ThrottledTransport(httpx.BaseTransport):
                     if not limiter.space():  # paused meanwhile: wait it out in acquire()
                         limiter.release(neutral=True)
                         continue
-                    response = self._send(request)
+                    response = self._send(request, own_cookies)
                     response.read()  # a body that stalls or drops fails here, so it is retried
                 else:
                     with self._slots:
@@ -285,7 +292,7 @@ class ThrottledTransport(httpx.BaseTransport):
                         if not limiter.space():  # paused meanwhile: wait it out in acquire()
                             limiter.release(neutral=True)
                             continue
-                        response = self._send(request)
+                        response = self._send(request, own_cookies)
                         response.read()
                 throttled = _throttled(response)
                 retry_after = response.headers.get("retry-after") if throttled else None
@@ -330,10 +337,18 @@ class ThrottledTransport(httpx.BaseTransport):
         """Wait before transient retry ``attempt`` (1, 2, ...); a stop cuts it short."""
         (self._sleep or self._stop.wait)(2.0 ** (attempt - 1) + self._jitter())
 
-    def _send(self, request: httpx.Request) -> httpx.Response:
+    def _send(self, request: httpx.Request, own_cookies: bool = False) -> httpx.Response:
+        """Send with the host's cookies, and keep the ones it sets (see ``no_cookies``)."""
         if self._stop.is_set():  # stopped while waiting for the slot
             raise Stopped
-        return self._inner.handle_request(request)
+        jar = self._jar(request.url.host)
+        if not own_cookies:
+            request.headers.pop("cookie", None)  # a retry's: it may have new ones now
+            jar.set_cookie_header(request)
+        response = self._inner.handle_request(request)
+        response.request = request
+        jar.extract_cookies(response)
+        return response
 
     def stop(self) -> None:
         """Send nothing more; wake every request waiting for a slot or out a pause."""

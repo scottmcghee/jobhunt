@@ -789,25 +789,90 @@ def test_connect_retries_sets_the_default_inner_transports_retries(monkeypatch):
     assert throttle.ThrottledTransport(connect_retries=0)._inner._pool._retries == 0
 
 
-def _cookie_round_trip(client, url):
-    """Two GETs where the first answer sets a cookie; the Cookie header the second one sent."""
+def _setting_cookies(name="PLAY_SESSION"):
+    """A respx side effect that records each request's Cookie header and sets a cookie."""
     sent = []
 
     def handler(request):
         sent.append(request.headers.get("cookie"))
-        return httpx.Response(200, headers={"Set-Cookie": "PLAY_SESSION=abc; Path=/"})
+        return httpx.Response(200, headers={"Set-Cookie": f"{name}=abc; Path=/"})
 
-    route = respx.get(url).mock(side_effect=handler)
-    client.get(url)
-    client.get(url)
-    assert route.call_count == 2
-    return sent[1]
+    return handler, sent
 
 
 @respx.mock
-def test_a_client_with_no_cookies_keeps_none():
-    # one shared client over a whole fetch collected ~20,000 Workday and BambooHR cookies, and
-    # httpx copies the jar on every request: 55 ms a request at 10,000 cookies
+def test_the_client_jar_keeps_no_cookies():
     with httpx.Client(cookies=throttle.no_cookies()) as client:
-        assert _cookie_round_trip(client, URL) is None
-        assert len(client.cookies.jar) == 0
+        handler, sent = _setting_cookies()
+        respx.get(URL).mock(side_effect=handler)
+        client.get(URL)
+        client.get(URL)
+    assert sent == [None, None] and len(client.cookies.jar) == 0
+
+
+@respx.mock
+def test_the_transport_sends_a_hosts_cookies_back_to_that_host_only():
+    lever = "https://api.lever.co/v0/postings/acme"
+    greenhouse, to_greenhouse = _setting_cookies()
+    respx.get(URL).mock(side_effect=greenhouse)
+    lever_route = respx.get(lever).mock(return_value=httpx.Response(200))
+    transport = throttle.ThrottledTransport()
+    with httpx.Client(transport=transport, cookies=throttle.no_cookies()) as client:
+        client.get(URL)
+        client.get(lever)
+        client.get(URL)
+    assert to_greenhouse == [None, "PLAY_SESSION=abc"]
+    assert "cookie" not in lever_route.calls[0].request.headers
+
+
+@respx.mock
+def test_a_retried_request_carries_the_cookie_its_429_set():
+    # Cloudflare (Workday, Workable) sets its bot-management cookie on a 429 too
+    clock = FakeClock()
+    sent = []
+
+    def handler(request):
+        sent.append(request.headers.get("cookie"))
+        if len(sent) == 1:
+            return httpx.Response(429, headers={"Retry-After": "1", "Set-Cookie": "__cf_bm=x; Path=/"})
+        return httpx.Response(200)
+
+    respx.get(URL).mock(side_effect=handler)
+    transport = throttle.ThrottledTransport(clock=clock, sleep=clock.sleep, jitter=lambda: 0.0)
+    with httpx.Client(transport=transport, cookies=throttle.no_cookies()) as client:
+        assert client.get(URL).status_code == 200
+    assert sent == [None, "__cf_bm=x"]
+
+
+@respx.mock
+def test_a_redirect_hop_carries_the_cookie_the_first_hop_set():
+    first = "https://jobs.example.com/start"
+    respx.get(first).mock(
+        return_value=httpx.Response(302, headers={"Location": "/jobs", "Set-Cookie": "_vscid=1; Path=/"})
+    )
+    second = respx.get("https://jobs.example.com/jobs").mock(return_value=httpx.Response(200))
+    transport = throttle.ThrottledTransport()
+    with httpx.Client(transport=transport, cookies=throttle.no_cookies(), follow_redirects=True) as client:
+        assert client.get(first).status_code == 200
+    assert second.calls[0].request.headers.get("cookie") == "_vscid=1"
+
+
+def test_a_request_costs_the_same_however_many_hosts_set_cookies():
+    # one shared jar with ~20,000 cookies cost ~150 ms of CPU a request; per host, it stays flat
+    import time
+
+    transport = throttle.ThrottledTransport(inner=httpx.MockTransport(lambda r: httpx.Response(200)))
+    client = httpx.Client(transport=transport, cookies=throttle.no_cookies())
+
+    def per_request():
+        start = time.perf_counter()
+        for _ in range(50):
+            client.get(URL)
+        return (time.perf_counter() - start) / 50
+
+    empty = per_request()
+    for i in range(5000):  # 5,000 tenants, 6 cookies each, as Workday sets
+        jar = transport._jar(f"t{i}.wd1.myworkdayjobs.com")
+        for name in ("PLAY_SESSION", "wd-browser-id", "CALYPSO_SESSION", "wday_vps_cookie", "__cf_bm", "__cflb"):
+            jar.set(name, "v" * 40, domain=f"t{i}.wd1.myworkdayjobs.com")
+    assert per_request() < empty * 3 + 0.002
