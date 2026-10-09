@@ -348,7 +348,7 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         progress.start()
 
     def title_passes(company: Company) -> Callable[[Job], bool]:
-        return lambda job: jfilter.check_title(job, prefs, company.tags) is None
+        return lambda job: jfilter.title_passes(job, prefs, company.tags)
 
     new_jobs: list[Job] = []
     dead: set[str] = set()

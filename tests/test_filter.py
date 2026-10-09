@@ -362,3 +362,25 @@ def test_a_rejected_place_is_kept_when_the_location_also_names_an_accepted_one(p
     r = jfilter.evaluate(only, p)
     assert not r.passed and "canada" in r.reason
     assert not jfilter.evaluate(_job("VP, Infrastructure", "London", remote=True), p).passed
+
+
+def test_an_accepted_place_in_the_title_does_not_override_a_rejected_location(prefs):
+    job = _job("Director, Platform Engineering - US Payments (USA)", "Bengaluru, India", remote=True)
+    r = jfilter.evaluate(job, prefs)
+    assert not r.passed and "rejected" in r.reason
+
+
+def test_a_devex_title_passes_the_example_title_domain_rule(prefs):
+    job = _job("Director, DevEx", "Seattle, WA", body="Own our internal platform.")
+    r = jfilter.evaluate(job, prefs)
+    assert r.passed, r.reason
+
+
+def test_title_passes_checks_the_title_and_the_title_domain_rule(prefs):
+    assert jfilter.title_passes(_job("Director of Platform Engineering"), prefs)
+    assert not jfilter.title_passes(_job("Senior Software Engineer"), prefs)  # no target level
+    strict = _domain(prefs, "engineering", exempt=["public-sector"])
+    ops = _job("Director of Operations")
+    assert not jfilter.title_passes(ops, strict)  # no domain word in the title
+    assert jfilter.title_passes(ops, strict, ["public-sector"])  # exempt board
+    assert jfilter.title_passes(_job("Director of Operations", body=""), _domain(prefs))  # rule off

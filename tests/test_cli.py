@@ -374,6 +374,25 @@ def test_a_tagged_board_takes_its_extra_target_words(tmp_path, monkeypatch):
     assert seen["small"] == (base, False)
 
 
+
+def test_a_title_without_a_domain_word_does_not_fetch_its_body(tmp_path, monkeypatch):
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  - name: Small\n    ats: greenhouse\n    slug: small\n")
+    seen = {}
+
+    def fetch(company, client, **kw):
+        def job(title):
+            return cli.Job(source="greenhouse", company=company.name, company_slug=company.slug,
+                           external_id="x", title=title, location="Seattle, WA", url="https://x")
+
+        seen["ops"] = kw["wants_body"](job("Director of Operations"))
+        seen["platform"] = kw["wants_body"](job("Director of Platform Engineering"))
+        return []
+
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert seen == {"ops": False, "platform": True}
+
 @respx.mock
 def test_search_caps_come_from_settings(tmp_path, monkeypatch):
     companies = tmp_path / "companies.yaml"
