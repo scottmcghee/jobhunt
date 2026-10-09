@@ -29,7 +29,8 @@ def test_defaults_are_todays_values():
         "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500, "usajobs": 2000
     }
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
-    assert s.slugs.check_workers == 4
+    assert (s.slugs.check_workers, s.slugs.check_progress_every) == (4, 50)
+    assert (s.discover.max_attempts, s.discover.retry_after_hours) == (3, 24.0)
 
 
 def test_the_template_documents_every_setting_at_its_default():
@@ -196,6 +197,13 @@ def test_a_nan_max_rate_in_the_file_is_rejected(tmp_path):
     p.write_text("fetch:\n  max_rate:\n    workable: .nan\n")
     with pytest.raises(settings.SettingsError, match="fetch.max_rate"):
         settings.load(p, environ={})
+
+
+@pytest.mark.parametrize("value", ["inf", "nan", "-1", "1e12"])
+def test_a_bad_retry_after_hours_names_the_variable(tmp_path, value):
+    # inf and huge values would pass "ge=0", then overflow timedelta(hours=...) in discover
+    with pytest.raises(settings.SettingsError, match="JOBHUNT_DISCOVER_RETRY_AFTER_HOURS"):
+        settings.load(tmp_path / "nope.yaml", environ={"JOBHUNT_DISCOVER_RETRY_AFTER_HOURS": value})
 
 
 def test_max_per_term_from_the_file_and_json_in_the_environment(tmp_path):

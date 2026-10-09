@@ -24,7 +24,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -298,12 +298,27 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
 
 
 def check(
-    companies: list[Company], client: httpx.Client, workers: int | None = None
+    companies: list[Company],
+    client: httpx.Client,
+    workers: int | None = None,
+    progress_every: int | None = None,
 ) -> list[Company]:
-    """The boards that have open postings, in their original order."""
+    """The boards that have open postings, in their original order.
+
+    Logs a running count; an interrupt (Ctrl-C) cancels the checks not yet started.
+    """
+    every = progress_every or settings.SlugsSettings().check_progress_every
+    log.info("checking %d boards", len(companies))
     with ThreadPoolExecutor(workers or check_workers()) as pool:
-        keep = list(pool.map(lambda c: _has_jobs(c, client), companies))
-    return [c for c, k in zip(companies, keep, strict=True) if k]
+        futures = [pool.submit(_has_jobs, c, client) for c in companies]
+        try:
+            for done, _ in enumerate(as_completed(futures), 1):
+                if done % every == 0 or done == len(futures):
+                    log.info("checked %d of %d boards", done, len(futures))
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    return [c for c, f in zip(companies, futures, strict=True) if f.result()]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -329,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             log.error("%s", e)
             return 2
         with _client(s.fetch) as client:
-            checked = check(found, client, s.slugs.check_workers)
+            checked = check(found, client, s.slugs.check_workers, s.slugs.check_progress_every)
         log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
         found = checked
     args.out.write_text(render(found))

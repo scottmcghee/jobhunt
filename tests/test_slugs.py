@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import as_completed
 
 import httpx
 import pytest
@@ -342,6 +344,37 @@ def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
     assert "Empty: no open postings" in caplog.text
 
 
+def test_check_reports_its_progress(monkeypatch, caplog):
+    monkeypatch.setattr(slugs, "_has_jobs", lambda company, client: company.slug != "dead")
+    boards = [Company(name=s, ats="greenhouse", slug=s) for s in ("a", "dead", "c")]
+    caplog.set_level("INFO", logger="jobhunt.slugs")
+    with httpx.Client() as client:
+        kept = slugs.check(boards, client, workers=2, progress_every=2)
+    assert [c.slug for c in kept] == ["a", "c"]  # in the original order
+    assert "checking 3 boards" in caplog.text
+    assert "checked 2 of 3 boards" in caplog.text and "checked 3 of 3 boards" in caplog.text
+
+
+def test_an_interrupt_during_check_cancels_the_checks_not_yet_started(monkeypatch):
+    calls = []
+
+    def slow_check(company, client):
+        calls.append(company.slug)
+        time.sleep(0.2)
+        return True
+
+    def interrupted(futures):
+        yield next(iter(as_completed(futures)))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(slugs, "_has_jobs", slow_check)
+    monkeypatch.setattr(slugs, "as_completed", interrupted)
+    boards = [Company(name=str(i), ats="greenhouse", slug=str(i)) for i in range(10)]
+    with httpx.Client() as client, pytest.raises(KeyboardInterrupt):
+        slugs.check(boards, client, workers=1)
+    assert len(calls) < len(boards)
+
+
 @respx.mock
 def test_check_drops_a_board_it_cannot_read_and_carries_on(caplog):
     # an Eightfold careers page with no domain raises ValueError: unfetchable as configured
@@ -502,6 +535,7 @@ def test_main_check_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch
 
 def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY", "7")
     monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
     seen = {}
 
@@ -509,15 +543,15 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
         seen["agent"] = fetch.user_agent
         return httpx.Client()
 
-    def check(found, client, workers):
-        seen["workers"] = workers
+    def check(found, client, workers, progress_every):
+        seen["workers"], seen["every"] = workers, progress_every
         return found
 
     monkeypatch.setattr(slugs, "_client", client)
     monkeypatch.setattr(slugs, "check", check)
     monkeypatch.setattr(slugs, "check_workers", lambda: pytest.fail("settings loaded again"))
     assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(tmp_path / "o"), "--check"]) == 0
-    assert seen == {"agent": "test-agent/1", "workers": 3}
+    assert seen == {"agent": "test-agent/1", "workers": 3, "every": 7}
 
 
 def test_check_pool_size_comes_from_the_argument_or_settings(monkeypatch):

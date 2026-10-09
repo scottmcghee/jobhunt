@@ -8,6 +8,8 @@ one public JSON endpoint on their own host, descriptions included:
 
 A board is ``ats: icims_careers`` with ``slug:`` the site's host. A posting's page is
 ``https://{host}/jobs/{id}``, which the site redirects to its own path (``/careers-home/jobs/...``).
+The id is the posting's ``req_id``; postings a site pulls from another iCIMS portal may have none,
+and then their ``slug`` (the same number, which their page links by) stands in.
 
 Their robots.txt allows everything but asks for a 5-second crawl delay, so each site is its own
 rate group, capped at 0.2 requests a second (a ``fetch.max_rate`` entry for the host overrides it).
@@ -43,7 +45,7 @@ def _posted(value: object) -> str | None:
 
 
 def normalize(company: Company, data: dict) -> Job:
-    job_id = str(data["req_id"])  # the requisition id, which /jobs/<id> links by
+    job_id = str(data["req_id"])  # the requisition id (or its stand-in), which /jobs/<id> links by
     location = data.get("full_location") or data.get("short_location") or ""
     title = data.get("title", "")
     parts = (data.get(k) for k in ("description", "responsibilities", "qualifications"))
@@ -88,6 +90,7 @@ def fetch(company: Company, client: httpx.Client) -> list[Job]:
         if not more:  # an empty page ends the listing, whatever the total says
             break
         rows += more
+    rows = [{**r, "req_id": r.get("req_id") or r.get("slug")} for r in rows]
     jobs: dict[str, Job] = {}
     for data in with_ids(company, rows, "req_id"):
         job = normalize(company, data)

@@ -206,7 +206,9 @@ whose robots.txt disallows everything. A site's pages load scripts from `jibecdn
   page calls; `N` counts from 1, and the reply reports `totalCount`. Every page is read until that
   total (at most 100 pages), descriptions included: the description, responsibilities and
   qualifications.
-- **Job link:** `https://<host>/jobs/<id>`, which the site redirects to its own path.
+- **Job link:** `https://<host>/jobs/<id>`, which the site redirects to its own path. The id
+  is the posting's `req_id`; postings a site pulls from another iCIMS portal may have none,
+  and then their `slug` (the same number) stands in.
 - **Remote:** yes if the location or title says "remote"; otherwise unknown.
 - **Unknown board:** 404, removed; a host that doesn't resolve is a connection error, and kept.
 - **Rate cap:** 0.2 requests a second per site: their robots.txt allows everything but asks for

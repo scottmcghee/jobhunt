@@ -129,6 +129,15 @@ class PathSettings(_Section):
 
 class SlugsSettings(_Section):
     check_workers: int = Field(4, ge=1)  # threads for `python -m jobhunt.slugs --check`
+    check_progress_every: int = Field(50, ge=1)  # boards between --check progress lines
+
+
+class DiscoverSettings(_Section):
+    """`python -m jobhunt.discover`: how often a careers host that failed for now is tried again."""
+
+    max_attempts: int = Field(3, ge=1)  # surveys of a host that stays unreachable
+    # between two surveys of such a host; capped at 100 years so timedelta(hours=...) can't overflow
+    retry_after_hours: float = Field(24.0, ge=0, le=24 * 365 * 100)
 
 
 class UsajobsSettings(_Section):
@@ -144,6 +153,7 @@ class Settings(_Section):
     fetch: FetchSettings = Field(default_factory=FetchSettings)
     paths: PathSettings = Field(default_factory=PathSettings)
     slugs: SlugsSettings = Field(default_factory=SlugsSettings)
+    discover: DiscoverSettings = Field(default_factory=DiscoverSettings)
     usajobs: UsajobsSettings = Field(default_factory=UsajobsSettings)
 
 

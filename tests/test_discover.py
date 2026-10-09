@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 import respx
 
-from jobhunt import discover
+from jobhunt import discover, settings
 from jobhunt.schema import Company
 
 
 @pytest.fixture(autouse=True)
 def _no_delay(monkeypatch):
     monkeypatch.setattr(discover.fingerprint.time, "sleep", lambda s: None)
+
+
+NOW = datetime(2026, 10, 9, 12, tzinfo=UTC)
 
 
 # ------------------------------------------------------------------ careers hosts from a file
@@ -91,12 +95,109 @@ def test_refresh_visits_cached_hosts_again(tmp_path):
 
 
 @respx.mock
-def test_an_unreachable_host_is_not_cached(tmp_path):
-    respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+def test_an_unreachable_host_is_tried_again_after_a_day(tmp_path):
+    robots = respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
     cache = tmp_path / "hosts.json"
     with httpx.Client() as client:
-        assert discover.survey_hosts(["careers.down.com"], client, cache, delay=0) == []
-    assert "careers.down.com" not in json.loads(cache.read_text())  # tried again next time
+        assert discover.survey_hosts(["careers.down.com"], client, cache, delay=0, now=NOW) == []
+        entry = json.loads(cache.read_text())["careers.down.com"]
+        assert entry["failures"] == 1 and "boards" not in entry
+        discover.survey_hosts(["careers.down.com"], client, cache, delay=0, now=NOW + timedelta(hours=23))
+        assert robots.call_count == 1  # too soon
+        discover.survey_hosts(["careers.down.com"], client, cache, delay=0, now=NOW + timedelta(hours=25))
+    assert robots.call_count == 2
+    assert json.loads(cache.read_text())["careers.down.com"]["failures"] == 2
+
+
+@respx.mock
+def test_each_host_is_stamped_with_the_time_it_was_tried(tmp_path, monkeypatch):
+    respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+    _careers_site()
+    ticks = iter(NOW + timedelta(hours=h) for h in range(10))
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(ticks)
+
+    monkeypatch.setattr(discover, "datetime", Clock)
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.down.com", "careers.acme.com"], client, cache, delay=0)
+    entries = json.loads(cache.read_text())
+    assert entries["careers.down.com"]["failed_at"] < entries["careers.acme.com"]["surveyed_at"]
+
+
+@respx.mock
+def test_an_unreachable_host_is_given_up_after_three_tries_until_refresh(tmp_path, caplog):
+    robots = respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+    cache = tmp_path / "hosts.json"
+    caplog.set_level("INFO", logger="jobhunt.discover")
+    with httpx.Client() as client:
+        for day in range(5):
+            discover.survey_hosts(["careers.down.com"], client, cache, delay=0, now=NOW + timedelta(days=day))
+        assert robots.call_count == settings.DiscoverSettings().max_attempts == 3
+        assert "1 given up after 3 tries" in caplog.records[-1].getMessage()
+        discover.survey_hosts(["careers.down.com"], client, cache, delay=0, refresh=True, now=NOW + timedelta(days=5))
+    assert robots.call_count == 4
+
+
+@respx.mock
+def test_retries_follow_the_discover_settings(tmp_path):
+    robots = respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+    cache = tmp_path / "hosts.json"
+    rules = settings.DiscoverSettings(max_attempts=2, retry_after_hours=1)
+    with httpx.Client() as client:
+        for hours in (0, 0.5, 1, 2, 3):
+            discover.survey_hosts(
+                ["careers.down.com"], client, cache, delay=0, now=NOW + timedelta(hours=hours), rules=rules
+            )
+    assert robots.call_count == 2  # at 0 h and 1 h: 0.5 h is too soon, and after 2 tries it's given up
+
+
+def test_main_passes_the_discover_settings_down(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBHUNT_DISCOVER_MAX_ATTEMPTS", "5")
+    seen = {}
+
+    def survey(hosts, client, cache, delay, refresh, rules):
+        seen["rules"] = rules
+        return []
+
+    monkeypatch.setattr(discover, "survey_hosts", survey)
+    hosts = tmp_path / "hosts.txt"
+    hosts.write_text("careers.acme.com\n")
+    assert discover.main(["--no-crawl", "--hosts", str(hosts), "--data-dir", str(tmp_path)]) == 0
+    assert seen["rules"].max_attempts == 5
+
+
+@respx.mock
+def test_a_host_that_failed_before_and_answers_now_is_cached_as_surveyed(tmp_path):
+    respx.get("https://careers.acme.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://careers.acme.com/").mock(
+        side_effect=[httpx.ConnectTimeout("slow"), httpx.Response(200, text=WORKDAY_PAGE)]
+    )
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, now=NOW)
+        again = discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, now=NOW + timedelta(days=2))
+    assert [b.slug for b in again] == ["acme/External"]
+    entry = json.loads(cache.read_text())["careers.acme.com"]
+    assert entry["platforms"] == ["workday"] and "failures" not in entry
+
+
+@respx.mock
+def test_progress_counts_the_hosts_to_survey(tmp_path, caplog):
+    _careers_site()
+    _careers_site("careers.beta.com")
+    cache = tmp_path / "hosts.json"
+    caplog.set_level("INFO", logger="jobhunt.discover")
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.acme.com"], client, cache, delay=0)
+        caplog.clear()
+        discover.survey_hosts(["careers.acme.com", "careers.beta.com"], client, cache, delay=0)
+    messages = [r.getMessage() for r in caplog.records]
+    assert "[1/1] careers.beta.com: workday" in messages
+    assert messages[0].startswith("2 careers hosts: 1 to survey, 1 cached")
 
 
 @respx.mock
@@ -109,13 +210,14 @@ def test_an_unreachable_host_is_not_cached(tmp_path):
         (httpx.Response(404), httpx.Response(429)),
     ],
 )
-def test_a_host_that_failed_for_now_is_not_cached(tmp_path, robots, page):
+def test_a_host_that_failed_for_now_is_cached_as_a_failure(tmp_path, robots, page):
     respx.get("https://careers.flaky.com/robots.txt").mock(return_value=robots)
     respx.get("https://careers.flaky.com/").mock(side_effect=[page])
     cache = tmp_path / "hosts.json"
     with httpx.Client() as client:
         assert discover.survey_hosts(["careers.flaky.com"], client, cache, delay=0) == []
-    assert "careers.flaky.com" not in json.loads(cache.read_text())  # tried again next time
+    entry = json.loads(cache.read_text())["careers.flaky.com"]
+    assert entry["failures"] == 1 and "boards" not in entry  # tried again after a day
 
 
 @respx.mock
@@ -158,9 +260,9 @@ def test_a_platform_whose_board_request_failed_for_now_is_not_cached(tmp_path):
     )
     cache = tmp_path / "hosts.json"
     with httpx.Client() as client:
-        assert discover.survey_hosts(["careers.acme.com"], client, cache, delay=0) == []
-        assert "careers.acme.com" not in json.loads(cache.read_text())  # tried again next time
-        again = discover.survey_hosts(["careers.acme.com"], client, cache, delay=0)
+        assert discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, now=NOW) == []
+        assert json.loads(cache.read_text())["careers.acme.com"]["failures"] == 1
+        again = discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, now=NOW + timedelta(days=2))
     assert search.call_count == 2
     assert [(b.ats, b.slug) for b in again] == [("workday", "acme/External")]
 
@@ -265,13 +367,43 @@ def test_main_check_drops_boards_with_no_postings(monkeypatch, tmp_path):
         discover.commoncrawl, "urls",
         lambda client, crawl, prefixes, cache_dir: iter(["https://jobs.gem.com/live", "https://jobs.gem.com/dead"]),
     )
-    monkeypatch.setattr(discover.slugs, "check", lambda boards, client, workers: [b for b in boards if b.slug == "live"])
+    monkeypatch.setattr(discover.slugs, "check", lambda boards, client, workers, progress_every: [b for b in boards if b.slug == "live"])
     out = tmp_path / "discovered.yaml"
     rc = discover.main([
         "--companies", str(_companies(tmp_path)), "--platforms", "gem", "--check",
         "--data-dir", str(tmp_path), "-o", str(out),
     ])
     assert rc == 0 and "slug: live" in out.read_text() and "dead" not in out.read_text()
+
+
+def test_main_interrupted_while_checking_leaves_the_unchecked_boards(monkeypatch, tmp_path):
+    monkeypatch.setattr(discover.commoncrawl, "latest_crawls", lambda client, n: ["CC-MAIN-2026-39"])
+    monkeypatch.setattr(
+        discover.commoncrawl, "urls",
+        lambda client, crawl, prefixes, cache_dir: iter(["https://jobs.gem.com/live", "https://jobs.gem.com/dead"]),
+    )
+
+    def interrupted(boards, client, workers, progress_every):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(discover.slugs, "check", interrupted)
+    out = tmp_path / "discovered.yaml"
+    rc = discover.main([
+        "--companies", str(_companies(tmp_path)), "--platforms", "gem", "--check",
+        "--data-dir", str(tmp_path), "-o", str(out),
+    ])
+    assert rc == 130 and "slug: live" in out.read_text() and "slug: dead" in out.read_text()
+
+
+def test_main_interrupted_while_surveying_exits_quietly(monkeypatch, tmp_path):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(discover, "survey_hosts", interrupted)
+    hosts = tmp_path / "hosts.txt"
+    hosts.write_text("careers.acme.com\n")
+    rc = discover.main(["--no-crawl", "--hosts", str(hosts), "--data-dir", str(tmp_path)])
+    assert rc == 130 and not (tmp_path / "discovered.yaml").exists()
 
 
 def test_an_unknown_platform_is_an_error(tmp_path, capsys):
