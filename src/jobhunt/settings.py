@@ -133,7 +133,8 @@ class SlugsSettings(_Section):
 
 
 class DiscoverSettings(_Section):
-    """`python -m jobhunt.discover`: how often a careers host that failed for now is tried again."""
+    """How often a careers host that failed for now is tried again: by `python -m jobhunt.discover`,
+    and (max_attempts) by scripts/survey_careers.py."""
 
     max_attempts: int = Field(3, ge=1)  # surveys of a host that stays unreachable
     # between two surveys of such a host; capped at 100 years so timedelta(hours=...) can't overflow
