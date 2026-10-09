@@ -339,6 +339,23 @@ def test_refresh_with_a_limit_surveys_the_least_recently_tried_hosts_first(tmp_p
 
 
 @respx.mock
+def test_refresh_with_a_limit_moves_past_a_cached_host_that_failed_for_now(tmp_path):
+    hosts = ["careers.acme.com", "careers.beta.com", "careers.gamma.com"]
+    pages = [_careers_site(host) for host in hosts]
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(hosts, client, cache, delay=0, now=NOW)
+        robots = respx.get("https://careers.acme.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+        before = robots.call_count
+        for day in (1, 2, 3):
+            discover.survey_hosts(hosts, client, cache, delay=0, refresh=True, limit=1, now=NOW + timedelta(days=day))
+    assert robots.call_count == before + 1  # tried on day 1 only
+    assert [p.call_count for p in pages] == [1, 2, 2]  # beta and gamma refreshed on days 2 and 3
+    entry = json.loads(cache.read_text())["careers.acme.com"]
+    assert entry["platforms"] == ["workday"] and "failures" not in entry  # still cached
+
+
+@respx.mock
 def test_hosts_whose_owners_forbid_collection_get_no_requests(tmp_path, caplog):
     _careers_site()
     hosts = ["careers.facebook.com", "metacareers.com", "jobs.instagram.com", "careers.google.com", "careers.acme.com"]
@@ -348,6 +365,18 @@ def test_hosts_whose_owners_forbid_collection_get_no_requests(tmp_path, caplog):
     assert [b.slug for b in boards] == ["acme/External"]
     assert {c.request.url.host for c in respx.calls} == {"careers.acme.com"}
     assert any("skipped 4 hosts whose owners forbid it" in r.getMessage() for r in caplog.records)
+
+
+@respx.mock
+def test_a_redirect_to_a_forbidden_host_gets_no_request(tmp_path):
+    respx.get("https://careers.acme.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://careers.acme.com/").mock(
+        return_value=httpx.Response(301, headers={"location": "https://www.metacareers.com/jobs"})
+    )
+    meta = respx.route(host="www.metacareers.com").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client:
+        assert discover.survey_hosts(["careers.acme.com"], client, tmp_path / "hosts.json", delay=0) == []
+    assert meta.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -382,6 +411,27 @@ def test_the_cache_is_saved_every_few_seconds_not_after_every_host(tmp_path, mon
         discover.survey_hosts(hosts, client, cache, delay=0, workers=4)
     assert len(writes) <= 2
     assert set(json.loads(cache.read_text())) == set(hosts)
+
+
+@respx.mock
+def test_the_cache_is_saved_while_surveying(tmp_path, monkeypatch):
+    monkeypatch.setattr(discover, "SAVE_EVERY", 0)
+    cache = tmp_path / "hosts.json"
+    _careers_site("careers.acme.com")
+    respx.get("https://careers.beta.com/robots.txt").mock(return_value=httpx.Response(404))
+    seen = []
+
+    def beta_page(request):  # the first host is on disk before the last one's survey ends
+        deadline = time.monotonic() + 5
+        while not cache.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        seen.append(set(json.loads(cache.read_text())) if cache.exists() else set())
+        return httpx.Response(200, text=WORKDAY_PAGE)
+
+    respx.get("https://careers.beta.com/").mock(side_effect=beta_page)
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.acme.com", "careers.beta.com"], client, cache, delay=0, workers=1)
+    assert seen == [{"careers.acme.com"}]
 
 
 @respx.mock

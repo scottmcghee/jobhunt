@@ -187,6 +187,13 @@ class _Polite(fingerprint.Polite):
             self.transient += 1
         return resp
 
+    def allowed(self, url: str) -> bool:
+        """A host under ``EXCLUDED_DOMAINS`` (one a site redirects to) gets no request at all,
+        not even for its robots.txt."""
+        if excluded(urlsplit(url).hostname or ""):
+            return False
+        return super().allowed(url)
+
 
 def _due(
     entry: dict | None, refresh: bool, now: datetime, rules: settings.DiscoverSettings
@@ -223,7 +230,7 @@ def _entry(
     if polite.transient and not site.boards:
         log.warning("%s: unreachable (%s)", progress, ", ".join(polite.errors) or "5xx or 429")
         if entry is not None and "failures" not in entry:  # refresh: keep its cached boards
-            return entry
+            return {**entry, "refresh_failed_at": tried_at}  # and when it was tried, for --limit
         return {
             "failed_at": tried_at,
             "failures": (entry or {}).get("failures", 0) + 1,
@@ -291,13 +298,13 @@ def survey_hosts(
         try:
             for done, future in enumerate(as_completed(futures), 1):
                 host = futures[future]
-                handled.add(future)
                 progress = f"[{done}/{len(todo)}] {host}"
                 if (entry := _entry(cache.get(host), *future.result(), progress)) is not None:
                     cache[host] = entry
-                    if time.monotonic() - saved >= SAVE_EVERY:
-                        _save(cache_path, cache)
-                        saved = time.monotonic()
+                handled.add(future)  # only once stored, so an interrupt before here still keeps it
+                if time.monotonic() - saved >= SAVE_EVERY:
+                    _save(cache_path, cache)
+                    saved = time.monotonic()
         except BaseException:  # Ctrl-C: stop the requests under way, keep the hosts done
             stop.set()
             transport = getattr(client, "_transport", None)
@@ -330,7 +337,7 @@ def _save(path: Path, cache: dict[str, dict]) -> None:
 def _last_tried(entry: dict | None) -> str:
     """When the host was last tried, as an ISO string; "" (first) if never."""
     entry = entry or {}
-    return str(entry.get("surveyed_at") or entry.get("failed_at") or "")
+    return max(str(entry.get(k) or "") for k in ("surveyed_at", "failed_at", "refresh_failed_at"))
 
 
 def _new(boards: Iterable[Company], known: Iterable[Company]) -> list[Company]:
