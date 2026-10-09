@@ -83,9 +83,12 @@ pass are recorded. A posting must pass three checks:
 - **Title:** it contains one of your target words (such as "director") and none of your excluded
   words. Boards can carry extra target words by tag, so in the template a board tagged `big-tech`
   also accepts "manager".
-- **Domain:** the title or description mentions one of your domain keywords.
-- **Location:** it is remote (if you allow that) or in a place you accept, and not in a place you
-  reject. You can keep a separate, stricter list for on-site and hybrid roles.
+- **Domain:** the title or description mentions one of your domain keywords. Optionally, the
+  title itself must also name one of your functions (such as "engineering"), except on boards
+  with a tag you exempt.
+- **Location:** it is remote (if you allow that) or in a place you accept, and doesn't name a
+  place you reject unless it also names one you accept. You can keep a separate, stricter list
+  for on-site and hybrid roles.
 
 Terms match whole words, ignoring case, and a trailing `*` matches any ending. Every rejection
 carries a reason, which `jobhunt -v fetch` prints. This stage is pure, fully unit-tested code with

@@ -58,12 +58,22 @@ class TitleRules(BaseModel):
 
 
 class DomainRules(BaseModel):
-    must_include_any: list[str] = Field(default_factory=list)
+    must_include_any: list[str] = Field(default_factory=list)  # in the title or the body
+    # When set, the title itself must also name one of these (a function, e.g. "engineering"),
+    # except on boards carrying one of title_exempt_tags.
+    title_must_include_any: list[str] = Field(default_factory=list)
+    title_exempt_tags: list[str] = Field(default_factory=list)
+
+    def title_rule_applies(self, tags: Iterable[str] = ()) -> bool:
+        exempt = {t.lower() for t in self.title_exempt_tags}
+        return bool(self.title_must_include_any) and not exempt & {t.lower() for t in tags}
 
 
 class LocationRules(BaseModel):
     allow_remote: bool = True
     accept_any: list[str] = Field(default_factory=list)
+    # A location naming one of these is rejected, unless it also matches accept_any
+    # ("Remote, Canada; Remote, United States").
     reject_any: list[str] = Field(default_factory=list)
     # When set, a role that is explicitly not remote (on-site or hybrid) must be in one of these
     # places; for such roles it replaces accept_any. Empty = off.

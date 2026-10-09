@@ -57,14 +57,31 @@ def check_title(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> str |
     return None
 
 
-def check_domain(job: Job, prefs: Preferences) -> str | None:
+def check_domain_title(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> str | None:
+    """``tags`` are the board's; one in ``title_exempt_tags`` skips the title rule."""
     rules = prefs.domain
+    if rules.title_rule_applies(tags) and not _any_in(rules.title_must_include_any, job.title):
+        return "no domain keyword in title"
+    return None
+
+
+def check_domain(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> str | None:
+    """``tags`` are the board's; one in ``title_exempt_tags`` skips the title rule."""
+    rules = prefs.domain
+    if reason := check_domain_title(job, prefs, tags):
+        return reason
     if not rules.must_include_any:
         return None
     text = f"{job.title}\n{job.body}"
     if not _any_in(rules.must_include_any, text):
         return "no domain keyword in title or body"
     return None
+
+
+def title_passes(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> bool:
+    """Whether the title alone passes: the checks that need no description."""
+    tags = list(tags)
+    return check_title(job, prefs, tags) is None and check_domain_title(job, prefs, tags) is None
 
 
 # Words that say a posting can be done remotely, for roles whose remote flag is unknown. The
@@ -100,7 +117,7 @@ def check_location(job: Job, prefs: Preferences) -> str | None:
     loc_text = f"{job.location} {job.title}".lower()
 
     hit = _any_in(rules.reject_any, loc_text)
-    if hit:
+    if hit and not _any_in(rules.accept_any, job.location):  # only the location can override
         return f"location matches rejected term '{hit}'"
 
     if rules.allow_remote and job.remote:
@@ -128,7 +145,7 @@ def evaluate(job: Job, prefs: Preferences, tags: Iterable[str] = ()) -> FilterRe
     tags = list(tags)
     checks = (
         lambda: check_title(job, prefs, tags),
-        lambda: check_domain(job, prefs),
+        lambda: check_domain(job, prefs, tags),
         lambda: check_location(job, prefs),
     )
     for check in checks:  # in order, stopping at the first failure
