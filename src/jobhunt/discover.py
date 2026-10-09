@@ -463,7 +463,11 @@ def main(argv: list[str] | None = None) -> int:
         log.error("interrupted: nothing written (careers hosts surveyed so far are cached)")
         return 130
     except commoncrawl.Busy as e:
-        log.error("Common Crawl is busy (%s). What was downloaded is cached; rerun later.", e)
+        log.error(
+            "Common Crawl is busy (%s). cluster.idx and the web graph files already read "
+            "stay cached; rerun later.",
+            e,
+        )
         return 1
 
 

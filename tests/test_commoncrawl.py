@@ -336,3 +336,24 @@ def test_index_blocks_and_the_cluster_index_retry_a_slow_down_too(tmp_path, _wai
         gem = list(cc.urls(client, CRAWL, ["com,gem,jobs)"], tmp_path))
     assert gem == ["https://jobs.gem.com/acme/1", "https://jobs.gem.com/Beta/2"]
     assert len(_waits) == 2
+
+
+@respx.mock
+def test_latest_crawls_retry_a_slow_down(_waits):
+    respx.get(cc.COLLINFO).mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=[{"id": "CC-MAIN-2026-39"}])]
+    )
+    with httpx.Client() as client:
+        assert cc.latest_crawls(client) == ["CC-MAIN-2026-39"]
+    assert _waits == list(cc.SLOW_DOWN_WAITS[:1])
+
+
+@respx.mock
+def test_the_web_graph_file_list_retries_a_slow_down(tmp_path, _waits):
+    _serve_graph()
+    paths = respx.routes[0]  # the list of vertices files
+    good = paths.return_value
+    paths.mock(side_effect=[httpx.Response(503), good])
+    with httpx.Client() as client:
+        hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert len(hosts) == 5 and _waits == list(cc.SLOW_DOWN_WAITS[:1])

@@ -24,7 +24,8 @@ file, so an interrupted read resumes where it stopped.
 
 data.commoncrawl.org is Amazon S3, which answers ``503 Slow Down`` when it's busy. Every request
 here waits that out (``SLOW_DOWN_WAITS``) and tries again; if S3 is still busy, ``Busy`` is
-raised, and what was already downloaded stays cached for the next run.
+raised. ``cluster.idx`` and the web graph files already read stay cached for the next run; index
+blocks are not cached, so a rerun fetches them again.
 """
 
 from __future__ import annotations
