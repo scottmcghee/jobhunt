@@ -15,8 +15,9 @@ It is polite: one request at a time, ``--delay`` seconds apart, and it honours e
 robots.txt, redirect by redirect (RFC 9309: a robots.txt that answers 5xx or can't be fetched
 disallows everything). Companies in EXCLUDED get no requests at all. Results are saved after every
 company, so an interrupted run picks up where it stopped; companies that were unreachable are
-tried again after the new ones (three attempts in all), and ``--only`` re-surveys the given
-tickers. Outputs, in OUT_DIR (default data/sp500):
+tried again after the new ones (three attempts in all; ``discover.max_attempts`` in
+settings.yaml), and ``--only`` re-surveys the given tickers. Outputs, in OUT_DIR (default
+data/sp500):
 
     survey.md                  platform counts, and one row per company
     companies.generated.yaml   boards not in companies.yaml yet; review, then paste
@@ -66,7 +67,6 @@ SPARQL = """SELECT ?cLabel ?site ?tick WHERE {
   ?c p:P361 ?st . ?st ps:P361 wd:Q242345 . FILTER NOT EXISTS { ?st pq:P582 ?end }
   OPTIONAL { ?c wdt:P856 ?site } OPTIONAL { ?c p:P414 ?ex . ?ex pq:P249 ?tick }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }"""
-MAX_ATTEMPTS = 3  # surveys of a company that stays unreachable
 # Companies this survey leaves alone, and why.
 EXCLUDED = {
     "META": "Meta's terms forbid automated collection",
@@ -298,16 +298,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        fetch = settings.load().fetch
+        tunables = settings.load()
     except settings.SettingsError as e:
         print(e, file=sys.stderr)
         return 2
+    fetch = tunables.fetch
+    max_attempts = tunables.discover.max_attempts  # surveys of a company that stays unreachable
     known = config.load_companies(args.companies)
     args.out.mkdir(parents=True, exist_ok=True)
     saved = args.out / "results.json"
     results = _load(saved)
     tried = {r.ticker: r for r in results}
-    retry = {t for t, r in tried.items() if r.status == "unreachable" and r.attempts < MAX_ATTEMPTS}
+    retry = {t for t, r in tried.items() if r.status == "unreachable" and r.attempts < max_attempts}
     headers = {"User-Agent": fetch.user_agent}
     # Through fetch's throttle: one request at a time, and 429s (Wikidata answers a burst of
     # batches with one) are retried after Retry-After or a backoff instead of ending the run.

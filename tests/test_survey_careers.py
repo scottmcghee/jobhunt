@@ -645,6 +645,22 @@ def test_an_unreachable_company_is_tried_three_times_in_all(tmp_path, monkeypatc
     assert [(r["ticker"], r["status"], r["attempts"]) for r in saved] == [("DED", "unreachable", 3)]
     assert "| DED | Dead | unreachable |  |" in (out / "survey.md").read_text()
 
+
+@respx.mock
+def test_the_number_of_tries_follows_the_discover_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_DISCOVER_MAX_ATTEMPTS", "1")
+    _main_setup(monkeypatch, [survey.Constituent("DED", "Dead", "X", "Dead")], {"DED": "https://dead.example"})
+    respx.route().mock(side_effect=httpx.ConnectError("NXDOMAIN"))
+    known = tmp_path / "companies.yaml"
+    known.write_text("companies: []\n")
+    out = tmp_path / "sp500"
+    attempts = []
+    for _ in range(2):
+        calls = len(respx.calls)
+        assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
+        attempts.append(len(respx.calls) > calls)
+    assert attempts == [True, False]
+
     calls = len(respx.calls)
     assert survey.main([str(out), "--companies", str(known), "--delay", "0", "--only", "DED"]) == 0
     assert len(respx.calls) > calls  # --only still re-surveys it

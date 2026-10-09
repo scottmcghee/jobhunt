@@ -89,7 +89,8 @@ slugs:
 discover:
   # `python -m jobhunt.discover`: a careers host that failed for now (no answer, 5xx or 429) is
   # surveyed again on a later run, at least retry_after_hours after its last try, max_attempts
-  # times in all; `--refresh` surveys every host again.
+  # times in all; `--refresh` surveys every host again. max_attempts also caps the S&P 500
+  # survey's tries of a company that stays unreachable (scripts/survey_careers.py).
   max_attempts: 3  # Env: JOBHUNT_DISCOVER_MAX_ATTEMPTS
   retry_after_hours: 24.0  # Env: JOBHUNT_DISCOVER_RETRY_AFTER_HOURS
 
