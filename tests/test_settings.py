@@ -29,7 +29,8 @@ def test_defaults_are_todays_values():
         "amazon": 2000, "apple": 400, "eightfold": 500, "oracle": 1000, "phenom": 500, "usajobs": 2000
     }
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
-    assert s.slugs.check_workers == 4
+    assert (s.slugs.check_workers, s.slugs.check_progress_every) == (4, 50)
+    assert (s.discover.max_attempts, s.discover.retry_after_hours) == (3, 24.0)
 
 
 def test_the_template_documents_every_setting_at_its_default():

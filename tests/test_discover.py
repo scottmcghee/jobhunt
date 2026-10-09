@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-from jobhunt import discover
+from jobhunt import discover, settings
 from jobhunt.schema import Company
 
 
@@ -136,10 +136,38 @@ def test_an_unreachable_host_is_given_up_after_three_tries_until_refresh(tmp_pat
     with httpx.Client() as client:
         for day in range(5):
             discover.survey_hosts(["careers.down.com"], client, cache, delay=0, now=NOW + timedelta(days=day))
-        assert robots.call_count == discover.MAX_ATTEMPTS == 3
+        assert robots.call_count == settings.DiscoverSettings().max_attempts == 3
         assert "1 given up after 3 tries" in caplog.records[-1].getMessage()
         discover.survey_hosts(["careers.down.com"], client, cache, delay=0, refresh=True, now=NOW + timedelta(days=5))
     assert robots.call_count == 4
+
+
+@respx.mock
+def test_retries_follow_the_discover_settings(tmp_path):
+    robots = respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+    cache = tmp_path / "hosts.json"
+    rules = settings.DiscoverSettings(max_attempts=2, retry_after_hours=1)
+    with httpx.Client() as client:
+        for hours in (0, 0.5, 1, 2, 3):
+            discover.survey_hosts(
+                ["careers.down.com"], client, cache, delay=0, now=NOW + timedelta(hours=hours), rules=rules
+            )
+    assert robots.call_count == 2  # at 0 h and 1 h: 0.5 h is too soon, and after 2 tries it's given up
+
+
+def test_main_passes_the_discover_settings_down(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBHUNT_DISCOVER_MAX_ATTEMPTS", "5")
+    seen = {}
+
+    def survey(hosts, client, cache, delay, refresh, rules):
+        seen["rules"] = rules
+        return []
+
+    monkeypatch.setattr(discover, "survey_hosts", survey)
+    hosts = tmp_path / "hosts.txt"
+    hosts.write_text("careers.acme.com\n")
+    assert discover.main(["--no-crawl", "--hosts", str(hosts), "--data-dir", str(tmp_path)]) == 0
+    assert seen["rules"].max_attempts == 5
 
 
 @respx.mock
@@ -339,7 +367,7 @@ def test_main_check_drops_boards_with_no_postings(monkeypatch, tmp_path):
         discover.commoncrawl, "urls",
         lambda client, crawl, prefixes, cache_dir: iter(["https://jobs.gem.com/live", "https://jobs.gem.com/dead"]),
     )
-    monkeypatch.setattr(discover.slugs, "check", lambda boards, client, workers: [b for b in boards if b.slug == "live"])
+    monkeypatch.setattr(discover.slugs, "check", lambda boards, client, workers, progress_every: [b for b in boards if b.slug == "live"])
     out = tmp_path / "discovered.yaml"
     rc = discover.main([
         "--companies", str(_companies(tmp_path)), "--platforms", "gem", "--check",
@@ -355,7 +383,7 @@ def test_main_interrupted_while_checking_leaves_the_unchecked_boards(monkeypatch
         lambda client, crawl, prefixes, cache_dir: iter(["https://jobs.gem.com/live", "https://jobs.gem.com/dead"]),
     )
 
-    def interrupted(boards, client, workers):
+    def interrupted(boards, client, workers, progress_every):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(discover.slugs, "check", interrupted)

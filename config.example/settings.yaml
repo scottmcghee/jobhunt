@@ -82,6 +82,16 @@ paths:
 slugs:
   # Threads for `python -m jobhunt.slugs --check`. Env: JOBHUNT_SLUGS_CHECK_WORKERS
   check_workers: 4
+  # Boards between --check's progress lines (slugs and discover).
+  # Env: JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY
+  check_progress_every: 50
+
+discover:
+  # `python -m jobhunt.discover`: a careers host that failed for now (no answer, 5xx or 429) is
+  # surveyed again on a later run, at least retry_after_hours after its last try, max_attempts
+  # times in all; `--refresh` surveys every host again.
+  max_attempts: 3  # Env: JOBHUNT_DISCOVER_MAX_ATTEMPTS
+  retry_after_hours: 24.0  # Env: JOBHUNT_DISCOVER_RETRY_AFTER_HOURS
 
 usajobs:
   # The federal jobs source (`ats: usajobs`) needs a free API key from developer.usajobs.gov and

@@ -19,8 +19,8 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
   robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are skipped: their robots.txt
   disallows everything. Results are cached per host in ``data/discovery/hosts.json``, so a rerun
   only visits new hosts. A host that failed for now (no answer, or 5xx or 429) is tried again on a
-  later run, a day or more after its last try, up to three tries in all; ``--refresh`` visits
-  every host again.
+  later run, a day or more after its last try, up to three tries in all (``discover`` in
+  settings.yaml changes both); ``--refresh`` visits every host again.
 
 ``--check`` fetches the first page of each new board and drops those with no open postings, as
 ``python -m jobhunt.slugs --check`` does; the unchecked list is written first, so an interrupted
@@ -70,8 +70,6 @@ _SURT_HOST = re.compile(r"([a-z0-9-]+(?:,[a-z0-9-]+)+)(?::\d+)?\)")
 _HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
 _PREFIXES = ("www.", "careers.", "jobs.", "career.", "job.")
 _SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu"}  # gamma.co.uk
-MAX_ATTEMPTS = 3  # surveys of a careers host that stays unreachable, like the S&P 500 survey's
-RETRY_AFTER = timedelta(days=1)  # between two surveys of a host that failed for now
 
 
 def prefixes(platforms: Iterable[str]) -> list[str]:
@@ -157,19 +155,22 @@ class _Polite(fingerprint.Polite):
         return resp
 
 
-def _due(entry: dict | None, refresh: bool, now: datetime) -> str:
+def _due(
+    entry: dict | None, refresh: bool, now: datetime, rules: settings.DiscoverSettings
+) -> str:
     """What to do with a host this run: ``survey``, ``cached``, ``waiting`` or ``given up``."""
     if entry is None or refresh:
         return "survey"
     if "failures" not in entry:
         return "cached"
-    if entry["failures"] >= MAX_ATTEMPTS:
+    if entry["failures"] >= rules.max_attempts:
         return "given up"
     try:
         last = datetime.fromisoformat(entry["failed_at"])
     except (KeyError, TypeError, ValueError):
         return "survey"
-    return "survey" if now - last >= RETRY_AFTER else "waiting"
+    wait = timedelta(hours=rules.retry_after_hours)
+    return "survey" if now - last >= wait else "waiting"
 
 
 def survey_hosts(
@@ -179,25 +180,28 @@ def survey_hosts(
     delay: float = 1.0,
     refresh: bool = False,
     now: datetime | None = None,
+    rules: settings.DiscoverSettings | None = None,
 ) -> list[Company]:
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
     The cache is saved after every host, so an interrupted run keeps what it found. A host that
     found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as
-    a failure: it's tried again a day or more later, ``MAX_ATTEMPTS`` times in all. With
-    ``refresh`` every host is surveyed again, and one that fails keeps its cached boards.
+    a failure: it's tried again ``rules.retry_after_hours`` or more later, ``rules.max_attempts``
+    times in all (``rules`` defaults to the settings' defaults). With ``refresh`` every host is
+    surveyed again, and one that fails keeps its cached boards.
     Each host is stamped with the time it was tried (``now``, if given, stands in for the clock).
     """
+    rules = rules or settings.DiscoverSettings()
     cache = _load_cache(cache_path)
     hosts = list(hosts)
     start = now or datetime.now(UTC)
-    plan = {host: _due(cache.get(host), refresh, start) for host in hosts}
+    plan = {host: _due(cache.get(host), refresh, start, rules) for host in hosts}
     counts = Counter(plan.values())
     log.info(
-        "%d careers hosts: %d to survey, %d cached, %d failed for now (tried again after a day), "
+        "%d careers hosts: %d to survey, %d cached, %d failed for now (tried again after %g h), "
         "%d given up after %d tries (--refresh tries them all)",
-        len(hosts), counts["survey"], counts["cached"], counts["waiting"], counts["given up"],
-        MAX_ATTEMPTS,
+        len(hosts), counts["survey"], counts["cached"], counts["waiting"], rules.retry_after_hours,
+        counts["given up"], rules.max_attempts,
     )
     boards: list[Company] = []
     surveyed = 0
@@ -337,13 +341,17 @@ def _discover(
                 log.info("skipped %d classic iCIMS hosts (robots.txt disallows them)", len(skipped))
             with _host_client(fetch) as host_client:
                 cache = args.data_dir / "discovery" / "hosts.json"
-                found += survey_hosts(hosts, host_client, cache, args.delay, args.refresh)
+                found += survey_hosts(
+                    hosts, host_client, cache, args.delay, args.refresh, rules=tunables.discover
+                )
         found = _new(found, known)
         if args.check:
             out.write_text(slugs.render(found))
             log.info("%d new boards -> %s (unchecked until the check finishes)", len(found), out)
             try:
-                checked = slugs.check(found, client, tunables.slugs.check_workers)
+                checked = slugs.check(
+                    found, client, tunables.slugs.check_workers, tunables.slugs.check_progress_every
+                )
             except KeyboardInterrupt:
                 log.error("interrupted: the unchecked boards are in %s", out)
                 return 130

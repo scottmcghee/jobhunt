@@ -39,7 +39,6 @@ log = logging.getLogger("jobhunt.slugs")
 
 DEFAULT_INDEX = Path("data/commoncrawl.txt")
 DEFAULT_OUT = Path("data/companies.generated.yaml")
-CHECK_PROGRESS_EVERY = 50  # boards between --check progress lines
 
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
 _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
@@ -299,18 +298,22 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
 
 
 def check(
-    companies: list[Company], client: httpx.Client, workers: int | None = None
+    companies: list[Company],
+    client: httpx.Client,
+    workers: int | None = None,
+    progress_every: int | None = None,
 ) -> list[Company]:
     """The boards that have open postings, in their original order.
 
     Logs a running count; an interrupt (Ctrl-C) cancels the checks not yet started.
     """
+    every = progress_every or settings.SlugsSettings().check_progress_every
     log.info("checking %d boards", len(companies))
     with ThreadPoolExecutor(workers or check_workers()) as pool:
         futures = [pool.submit(_has_jobs, c, client) for c in companies]
         try:
             for done, _ in enumerate(as_completed(futures), 1):
-                if done % CHECK_PROGRESS_EVERY == 0 or done == len(futures):
+                if done % every == 0 or done == len(futures):
                     log.info("checked %d of %d boards", done, len(futures))
         except BaseException:
             pool.shutdown(wait=False, cancel_futures=True)
@@ -341,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             log.error("%s", e)
             return 2
         with _client(s.fetch) as client:
-            checked = check(found, client, s.slugs.check_workers)
+            checked = check(found, client, s.slugs.check_workers, s.slugs.check_progress_every)
         log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
         found = checked
     args.out.write_text(render(found))

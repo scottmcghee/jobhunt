@@ -345,12 +345,11 @@ def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
 
 
 def test_check_reports_its_progress(monkeypatch, caplog):
-    monkeypatch.setattr(slugs, "CHECK_PROGRESS_EVERY", 2)
     monkeypatch.setattr(slugs, "_has_jobs", lambda company, client: company.slug != "dead")
     boards = [Company(name=s, ats="greenhouse", slug=s) for s in ("a", "dead", "c")]
     caplog.set_level("INFO", logger="jobhunt.slugs")
     with httpx.Client() as client:
-        kept = slugs.check(boards, client, workers=2)
+        kept = slugs.check(boards, client, workers=2, progress_every=2)
     assert [c.slug for c in kept] == ["a", "c"]  # in the original order
     assert "checking 3 boards" in caplog.text
     assert "checked 2 of 3 boards" in caplog.text and "checked 3 of 3 boards" in caplog.text
@@ -536,6 +535,7 @@ def test_main_check_with_a_bad_setting_is_a_friendly_error(tmp_path, monkeypatch
 
 def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
+    monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY", "7")
     monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
     seen = {}
 
@@ -543,15 +543,15 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
         seen["agent"] = fetch.user_agent
         return httpx.Client()
 
-    def check(found, client, workers):
-        seen["workers"] = workers
+    def check(found, client, workers, progress_every):
+        seen["workers"], seen["every"] = workers, progress_every
         return found
 
     monkeypatch.setattr(slugs, "_client", client)
     monkeypatch.setattr(slugs, "check", check)
     monkeypatch.setattr(slugs, "check_workers", lambda: pytest.fail("settings loaded again"))
     assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(tmp_path / "o"), "--check"]) == 0
-    assert seen == {"agent": "test-agent/1", "workers": 3}
+    assert seen == {"agent": "test-agent/1", "workers": 3, "every": 7}
 
 
 def test_check_pool_size_comes_from_the_argument_or_settings(monkeypatch):
