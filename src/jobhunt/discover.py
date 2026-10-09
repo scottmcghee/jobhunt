@@ -186,11 +186,12 @@ def survey_hosts(
     found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as
     a failure: it's tried again a day or more later, ``MAX_ATTEMPTS`` times in all. With
     ``refresh`` every host is surveyed again, and one that fails keeps its cached boards.
+    Each host is stamped with the time it was tried (``now``, if given, stands in for the clock).
     """
-    now = now or datetime.now(UTC)
     cache = _load_cache(cache_path)
     hosts = list(hosts)
-    plan = {host: _due(cache.get(host), refresh, now) for host in hosts}
+    start = now or datetime.now(UTC)
+    plan = {host: _due(cache.get(host), refresh, start) for host in hosts}
     counts = Counter(plan.values())
     log.info(
         "%d careers hosts: %d to survey, %d cached, %d failed for now (tried again after a day), "
@@ -208,18 +209,19 @@ def survey_hosts(
             polite = _Polite(client, delay)
             home = f"https://{host}/"
             site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
+            tried_at = (now or datetime.now(UTC)).isoformat()
             if polite.transient and not site.boards:
                 errors = ", ".join(polite.errors) or "5xx or 429"
                 log.warning("%s: unreachable (%s)", progress, errors)
                 if entry is None or "failures" in entry:  # else (refresh): keep its cached boards
                     entry = {
-                        "failed_at": now.isoformat(),
+                        "failed_at": tried_at,
                         "failures": (entry or {}).get("failures", 0) + 1,
                         "errors": polite.errors,
                     }
             else:
                 entry = {
-                    "surveyed_at": now.isoformat(),
+                    "surveyed_at": tried_at,
                     "platforms": site.platforms,
                     "pages": site.pages,
                     "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],

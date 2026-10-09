@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import as_completed
 
 import httpx
 import pytest
@@ -352,6 +354,26 @@ def test_check_reports_its_progress(monkeypatch, caplog):
     assert [c.slug for c in kept] == ["a", "c"]  # in the original order
     assert "checking 3 boards" in caplog.text
     assert "checked 2 of 3 boards" in caplog.text and "checked 3 of 3 boards" in caplog.text
+
+
+def test_an_interrupt_during_check_cancels_the_checks_not_yet_started(monkeypatch):
+    calls = []
+
+    def slow_check(company, client):
+        calls.append(company.slug)
+        time.sleep(0.2)
+        return True
+
+    def interrupted(futures):
+        yield next(iter(as_completed(futures)))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(slugs, "_has_jobs", slow_check)
+    monkeypatch.setattr(slugs, "as_completed", interrupted)
+    boards = [Company(name=str(i), ats="greenhouse", slug=str(i)) for i in range(10)]
+    with httpx.Client() as client, pytest.raises(KeyboardInterrupt):
+        slugs.check(boards, client, workers=1)
+    assert len(calls) < len(boards)
 
 
 @respx.mock

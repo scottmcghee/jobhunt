@@ -110,6 +110,25 @@ def test_an_unreachable_host_is_tried_again_after_a_day(tmp_path):
 
 
 @respx.mock
+def test_each_host_is_stamped_with_the_time_it_was_tried(tmp_path, monkeypatch):
+    respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+    _careers_site()
+    ticks = iter(NOW + timedelta(hours=h) for h in range(10))
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(ticks)
+
+    monkeypatch.setattr(discover, "datetime", Clock)
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.down.com", "careers.acme.com"], client, cache, delay=0)
+    entries = json.loads(cache.read_text())
+    assert entries["careers.down.com"]["failed_at"] < entries["careers.acme.com"]["surveyed_at"]
+
+
+@respx.mock
 def test_an_unreachable_host_is_given_up_after_three_tries_until_refresh(tmp_path, caplog):
     robots = respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
     cache = tmp_path / "hosts.json"
