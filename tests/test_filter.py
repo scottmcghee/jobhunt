@@ -149,10 +149,15 @@ def test_onsite_list_replaces_accept_any_for_onsite_roles(prefs):
 
 def test_reject_any_wins_over_onsite_rule(prefs):
     assert "india" in prefs.location.reject_any
-    job = _job("Director of Platform Engineering", "Seattle, WA / India", remote=False)
-    r = jfilter.evaluate(job, _onsite(prefs, "seattle"))
+    job = _job("Director of Platform Engineering", "Bengaluru, India", remote=False)
+    r = jfilter.evaluate(job, _onsite(prefs, "india"))
     assert not r.passed
     assert "rejected term" in r.reason
+
+
+def test_an_onsite_role_in_an_accepted_place_and_a_rejected_one_passes(prefs):
+    job = _job("Director of Platform Engineering", "Seattle, WA / India", remote=False)
+    assert jfilter.evaluate(job, _onsite(prefs, "seattle")).passed  # Seattle is one of its places
 
 
 def test_onsite_role_inside_onsite_region_passes(prefs):
@@ -313,3 +318,47 @@ def test_evaluate_and_apply_pass_the_tags_on(prefs):
     assert jfilter.evaluate(job, prefs, tags=["big-tech"]).passed
     passed, rejected = jfilter.apply([job], prefs, tags=["big-tech"])
     assert passed == [job] and rejected == []
+
+
+def _domain(prefs, *terms, exempt=()):
+    dom = prefs.domain.model_copy(
+        update={"title_must_include_any": list(terms), "title_exempt_tags": list(exempt)}
+    )
+    return prefs.model_copy(update={"domain": dom})
+
+
+def test_title_must_name_a_function_when_the_rule_is_set(prefs):
+    job = _job("Director of Operations", "Seattle, WA", body="We run on cloud infrastructure.")
+    assert jfilter.evaluate(job, _domain(prefs)).passed  # rule off: the body's domain words are enough
+    r = jfilter.evaluate(job, _domain(prefs, "engineering", "software"))
+    assert not r.passed and "title" in r.reason and "domain" in r.reason
+    ok = _job("Director of Software Engineering", "Seattle, WA", body="cloud infrastructure")
+    assert jfilter.evaluate(ok, _domain(prefs, "engineering", "software")).passed
+
+
+def test_boards_with_an_exempt_tag_skip_the_title_function_rule(prefs):
+    job = _job("Director of Operations", "Seattle, WA", body="cloud infrastructure")
+    strict = _domain(prefs, "engineering", exempt=["public-sector"])
+    assert not jfilter.evaluate(job, strict, tags=["big-tech"]).passed
+    assert jfilter.evaluate(job, strict, tags=["Public-Sector"]).passed  # tags match in any case
+
+
+def test_the_body_domain_rule_still_applies_with_the_title_rule(prefs):
+    job = _job("Director of Engineering", "Seattle, WA", body="Figma and brand.")
+    r = jfilter.evaluate(job, _domain(prefs, "engineering"))
+    assert not r.passed and "body" in r.reason
+
+
+def _reject(prefs, *terms):
+    loc = prefs.location.model_copy(update={"reject_any": list(terms)})
+    return prefs.model_copy(update={"location": loc})
+
+
+def test_a_rejected_place_is_kept_when_the_location_also_names_an_accepted_one(prefs):
+    p = _reject(prefs, "canada", "london")
+    both = _job("VP, Infrastructure", "Remote, Canada; Remote, United States", remote=True)
+    assert jfilter.evaluate(both, p).passed
+    only = _job("VP, Infrastructure", "Remote, Canada", remote=True)
+    r = jfilter.evaluate(only, p)
+    assert not r.passed and "canada" in r.reason
+    assert not jfilter.evaluate(_job("VP, Infrastructure", "London", remote=True), p).passed

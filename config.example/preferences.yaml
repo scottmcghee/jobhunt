@@ -415,6 +415,26 @@ domain:
     - site reliability
     - sre
     - technical operations
+  # Optional: the title itself must also name one of these functions. A description mentions
+  # "cloud" or "platform" in passing far more often than a title does, so this drops roles like
+  # "Director of Operations" whose description happens to mention a domain word. Boards with a
+  # tag in title_exempt_tags skip it (their titles may name the function differently). Leave
+  # empty to turn this off.
+  title_must_include_any:
+    - cloud
+    - data
+    - developer
+    - devops
+    - engineering
+    - infrastructure
+    - platform
+    - reliability
+    - software
+    - sre
+    - systems
+    - technical
+    - technology
+  title_exempt_tags: [public-sector]
 
 location:
   # A job passes if it is remote-eligible OR its location text matches one of these.
@@ -466,7 +486,8 @@ location:
     - "united states of america"
     - "us"
     - "usa"
-  # Remote roles whose text names one of these are rejected (foreign-only remote).
+  # Roles whose location or title names one of these are rejected (foreign-only remote), unless
+  # the location also matches accept_any: "Remote, Canada; Remote, United States" passes.
   reject_any:
     - "canada only"
     - "emea only"
