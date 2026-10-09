@@ -571,7 +571,9 @@ def test_max_rate_spaces_sends_while_the_global_cap_is_full():
             t.join(5)
     assert len(sends) == 4
     gaps = [b - a for a, b in zip(sends, sends[1:], strict=False)]
-    assert min(gaps) >= 0.09, gaps
+    # the limiter spaces starts 0.1 s apart, but a send is timed after the thread wakes, so
+    # scheduling delay can shrink a gap; the old bug sent them together, with gaps near 0
+    assert min(gaps) >= 0.05, gaps
 
 
 def test_a_long_rate_gap_is_waited_out_without_holding_a_global_slot():

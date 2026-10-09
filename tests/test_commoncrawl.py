@@ -52,6 +52,14 @@ def _shard_and_index() -> tuple[bytes, str]:
 SHARD, CLUSTER = _shard_and_index()
 
 
+@pytest.fixture(autouse=True)
+def _waits(monkeypatch):
+    """The waits after a 503 Slow Down, recorded instead of slept."""
+    waits: list[float] = []
+    monkeypatch.setattr(cc.time, "sleep", waits.append)
+    return waits
+
+
 def _serve_ranges(request: httpx.Request) -> httpx.Response:
     start, end = request.headers["range"].removeprefix("bytes=").split("-")
     return httpx.Response(206, content=SHARD[int(start) : int(end) + 1])
@@ -121,7 +129,7 @@ def test_the_cluster_index_is_downloaded_once_and_cached(tmp_path):
 @respx.mock
 def test_a_failed_download_leaves_no_partial_index(tmp_path):
     respx.get(f"{INDEXES}/cluster.idx").mock(return_value=httpx.Response(503))
-    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+    with httpx.Client() as client, pytest.raises(cc.Busy):
         cc.cluster_index(client, CRAWL, tmp_path)
     assert not list(tmp_path.rglob("cluster.idx*"))
 
@@ -228,13 +236,13 @@ def test_webgraph_hosts_are_cached_per_release_and_labels(tmp_path):
 @respx.mock
 def test_an_interrupted_webgraph_read_keeps_the_files_it_finished(tmp_path):
     routes = _serve_graph(fail_part=1)
-    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+    with httpx.Client() as client, pytest.raises(cc.Busy):
         cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
-    assert [r.call_count for r in routes] == [1, 1]
+    assert [r.call_count for r in routes] == [1, 1 + len(cc.SLOW_DOWN_WAITS)]
     routes[1].mock(return_value=httpx.Response(200, content=_gz_members(PARTS[1])))
     with httpx.Client() as client:
         hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
-    assert [r.call_count for r in routes] == [1, 2]  # only the file that failed is read again
+    assert routes[0].call_count == 1  # only the file that failed is read again
     assert len(hosts) == 5
 
 
@@ -281,3 +289,71 @@ def test_generic_or_listed_tld(host, kept):
 )
 def test_without_generic_tlds_only_the_listed_ones_pass(host, kept):
     assert cc.generic_or_listed_tld(host, ["us"], generic=False) is kept
+
+
+# ------------------------------------------------------------------ 503 Slow Down
+
+
+@respx.mock
+def test_a_slow_down_is_waited_out_and_retried(tmp_path, _waits):
+    routes = _serve_graph()
+    good = routes[1].return_value
+    routes[1].mock(side_effect=[httpx.Response(503, text="Slow Down"), httpx.Response(503), good])
+    with httpx.Client() as client:
+        hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert len(hosts) == 5 and _waits == list(cc.SLOW_DOWN_WAITS[:2])
+
+
+@respx.mock
+def test_a_slow_down_that_lasts_raises_busy_after_the_waits(_waits):
+    respx.get(cc.GRAPHINFO).mock(return_value=httpx.Response(503))
+    with httpx.Client() as client, pytest.raises(cc.Busy, match="503"):
+        cc.latest_graph(client)
+    assert _waits == list(cc.SLOW_DOWN_WAITS)
+
+
+@respx.mock
+def test_other_errors_are_not_retried(tmp_path, _waits):
+    route = respx.get(f"{INDEXES}/cluster.idx").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        cc.cluster_index(client, CRAWL, tmp_path)
+    assert route.call_count == 1 and _waits == []
+
+
+@respx.mock
+def test_index_blocks_and_the_cluster_index_retry_a_slow_down_too(tmp_path, _waits):
+    respx.get(f"{INDEXES}/cluster.idx").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, text=CLUSTER)]
+    )
+    calls = []
+
+    def blocks(request):
+        calls.append(request)
+        return httpx.Response(503) if len(calls) == 1 else _serve_ranges(request)
+
+    respx.get(f"{INDEXES}/cdx-00073.gz").mock(side_effect=blocks)
+    with httpx.Client() as client:
+        gem = list(cc.urls(client, CRAWL, ["com,gem,jobs)"], tmp_path))
+    assert gem == ["https://jobs.gem.com/acme/1", "https://jobs.gem.com/Beta/2"]
+    assert len(_waits) == 2
+
+
+@respx.mock
+def test_latest_crawls_retry_a_slow_down(_waits):
+    respx.get(cc.COLLINFO).mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=[{"id": "CC-MAIN-2026-39"}])]
+    )
+    with httpx.Client() as client:
+        assert cc.latest_crawls(client) == ["CC-MAIN-2026-39"]
+    assert _waits == list(cc.SLOW_DOWN_WAITS[:1])
+
+
+@respx.mock
+def test_the_web_graph_file_list_retries_a_slow_down(tmp_path, _waits):
+    _serve_graph()
+    paths = respx.routes[0]  # the list of vertices files
+    good = paths.return_value
+    paths.mock(side_effect=[httpx.Response(503), good])
+    with httpx.Client() as client:
+        hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert len(hosts) == 5 and _waits == list(cc.SLOW_DOWN_WAITS[:1])

@@ -21,19 +21,27 @@ saw (about 250 million), as ``<id>\t<reversed host>`` lines in some 50 gzip file
 sorted by reversed host (``com.acme.careers``). ``webgraph_hosts`` streams them once per release
 and keeps the hosts whose first label is wanted (``careers``, ``jobs``), caching what it keeps per
 file, so an interrupted read resumes where it stopped.
+
+data.commoncrawl.org is Amazon S3, which answers ``503 Slow Down`` when it's busy. Every request
+here waits that out (``SLOW_DOWN_WAITS``) and tries again; if S3 is still busy, ``Busy`` is
+raised. ``cluster.idx`` and the web graph files already read stay cached for the next run; index
+blocks are not cached, so a rerun fetches them again.
 """
 
 from __future__ import annotations
 
 import bisect
+import functools
 import gzip
 import hashlib
 import json
 import logging
+import time
 import zlib
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import httpx
 
@@ -47,6 +55,40 @@ GRAPH_FILES = "https://data.commoncrawl.org/{path}"
 GRAPH_VERTICES = "projects/hyperlinkgraph/{release}/host/{release}-host-vertices.paths.gz"
 DATA = "https://data.commoncrawl.org/cc-index/collections/{crawl}/indexes/{file}"
 RATE_CAP = 1.0  # requests a second
+SLOW_DOWN_WAITS = (10, 20, 40, 80, 160)  # seconds before each retry after a 503: about 5 min
+
+
+class Busy(Exception):
+    """Common Crawl kept answering 503 Slow Down."""
+
+
+T = TypeVar("T")
+
+
+def _slow_down_retries(call: Callable[..., T]) -> Callable[..., T]:
+    """Retry ``call`` after a 503, waiting ``SLOW_DOWN_WAITS`` in turn; then raise ``Busy``."""
+
+    @functools.wraps(call)
+    def retrying(*args, **kwargs) -> T:
+        for wait in (*SLOW_DOWN_WAITS, None):
+            try:
+                return call(*args, **kwargs)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 503:
+                    raise
+                if wait is None:
+                    raise Busy(
+                        f"{e.request.url.host} answered 503 {e.response.reason_phrase} "
+                        f"{len(SLOW_DOWN_WAITS) + 1} times"
+                    ) from None
+                log.warning(
+                    "commoncrawl: %s answered 503 %s; trying again in %d s",
+                    e.request.url.host, e.response.reason_phrase, wait,
+                )
+                time.sleep(wait)
+        raise AssertionError("unreachable")
+
+    return retrying
 
 
 @dataclass(frozen=True)
@@ -66,6 +108,7 @@ def surt_prefix(host: str, subdomains: bool = False) -> str:
     return labels + ("," if subdomains else ")")
 
 
+@_slow_down_retries
 def latest_crawls(client: httpx.Client, n: int = 1) -> list[str]:
     """The ids of the ``n`` most recent crawls, newest first (``CC-MAIN-2026-39``)."""
     resp = client.get(COLLINFO, extensions={RATE: RATE_CAP})
@@ -73,6 +116,7 @@ def latest_crawls(client: httpx.Client, n: int = 1) -> list[str]:
     return [c["id"] for c in resp.json()[:n] if isinstance(c, dict) and c.get("id")]
 
 
+@_slow_down_retries
 def cluster_index(client: httpx.Client, crawl: str, cache_dir: Path) -> Path:
     """The crawl's cluster.idx, downloaded on first use; a failed download leaves no file."""
     path = cache_dir / crawl / "cluster.idx"
@@ -151,6 +195,7 @@ def select_blocks(lines: Iterable[str], prefixes: Iterable[str]) -> list[Block]:
     return picked
 
 
+@_slow_down_retries
 def _block_lines(client: httpx.Client, crawl: str, block: Block) -> list[str]:
     resp = client.get(
         DATA.format(crawl=crawl, file=block.file),
@@ -184,6 +229,7 @@ def urls(
 # ------------------------------------------------------------------ web graph host list
 
 
+@_slow_down_retries
 def latest_graph(client: httpx.Client) -> str:
     """The id of the most recent web graph release (``cc-main-2026-jul-aug-sep``)."""
     resp = client.get(GRAPHINFO, extensions={RATE: RATE_CAP})
@@ -211,6 +257,7 @@ def _gunzip_lines(chunks: Iterable[bytes]) -> Iterator[bytes]:
     yield from (line for line in rest.split(b"\n") if line)
 
 
+@_slow_down_retries
 def _vertex_paths(client: httpx.Client, release: str) -> list[str]:
     url = GRAPH_FILES.format(path=GRAPH_VERTICES.format(release=release))
     resp = client.get(url, extensions={RATE: RATE_CAP})
@@ -218,6 +265,7 @@ def _vertex_paths(client: httpx.Client, release: str) -> list[str]:
     return [line.decode().strip() for line in _gunzip_lines([resp.content]) if line.strip()]
 
 
+@_slow_down_retries
 def _wanted_hosts(client: httpx.Client, path: str, labels: frozenset[str]) -> list[str]:
     hosts = []
     url = GRAPH_FILES.format(path=path)
