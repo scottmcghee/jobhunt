@@ -261,7 +261,9 @@ def webgraph_hosts(
                 "web graph %s: file %d of %d, %d hosts", release, n + 1, len(paths), len(found)
             )
         hosts += part.read_text().split()
-    done.write_text("".join(f"{h}\n" for h in hosts))
+    partial = done.with_suffix(".part")  # written whole, then renamed: hosts.txt means done
+    partial.write_text("".join(f"{h}\n" for h in hosts))
+    partial.replace(done)
     for n in range(len(paths)):
         (folder / f"part-{n:05d}.txt").unlink(missing_ok=True)
     return hosts

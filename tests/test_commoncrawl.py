@@ -238,6 +238,26 @@ def test_an_interrupted_webgraph_read_keeps_the_files_it_finished(tmp_path):
     assert len(hosts) == 5
 
 
+@respx.mock
+def test_an_interrupted_write_of_the_host_list_is_not_trusted(tmp_path, monkeypatch):
+    _serve_graph()
+    write_text = cc.Path.write_text
+
+    def cut_off(path, text, *args, **kwargs):
+        if path.stem == "hosts":  # the finished list: half of it, then Ctrl-C
+            write_text(path, text[: len(text) // 2])
+            raise KeyboardInterrupt
+        return write_text(path, text, *args, **kwargs)
+
+    monkeypatch.setattr(cc.Path, "write_text", cut_off)
+    with httpx.Client() as client, pytest.raises(KeyboardInterrupt):
+        cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    monkeypatch.setattr(cc.Path, "write_text", write_text)
+    with httpx.Client() as client:
+        hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert len(hosts) == 5
+
+
 @pytest.mark.parametrize(
     ("host", "kept"),
     [

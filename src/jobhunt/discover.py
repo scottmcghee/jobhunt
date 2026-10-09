@@ -20,12 +20,14 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
   generic or in ``discover.webgraph_country_tlds``), gets the S&P 500 survey's fingerprinting
   (``fingerprint.survey_site``): its page is read for the platform it runs and the board it points
   at, politely and within robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are
-  skipped: their robots.txt disallows everything. Results are cached per host in
-  ``data/discovery/hosts.json``, so a rerun only visits new hosts. A host that failed for now (no
-  answer, or 5xx or 429) is tried again on a later run, a day or more after its last try, up to
-  three tries in all (``discover`` in settings.yaml changes both); ``--refresh`` visits every host
-  again. ``discover.survey_workers`` hosts are surveyed at once, each one request at a time;
-  ``--limit N`` surveys at most N this run and leaves the rest for the next.
+  skipped: their robots.txt disallows everything. So are hosts under ``EXCLUDED_DOMAINS`` (Meta's,
+  whose terms forbid automated collection, and Google's), without a request. Results are cached
+  per host in ``data/discovery/hosts.json``, so a rerun only visits new hosts. A host that failed
+  for now (no answer, or 5xx or 429) is tried again on a later run, a day or more after its last
+  try, up to three tries in all (``discover`` in settings.yaml changes both); ``--refresh`` visits
+  every host again. ``discover.survey_workers`` hosts are surveyed at once, each one request at a
+  time; ``--limit N`` surveys at most N this run, least recently tried first, and leaves the rest
+  for the next.
 
 ``--check`` fetches the first page of each new board and drops those with no open postings, as
 ``python -m jobhunt.slugs --check`` does; the unchecked list is written first, so an interrupted
@@ -40,6 +42,8 @@ import itertools
 import json
 import logging
 import re
+import threading
+import time
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -76,6 +80,16 @@ _SURT_HOST = re.compile(r"([a-z0-9-]+(?:,[a-z0-9-]+)+)(?::\d+)?\)")
 _HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
 _PREFIXES = ("www.", "careers.", "jobs.", "career.", "job.")
 _SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu"}  # gamma.co.uk
+# Careers hosts never surveyed: a registrable domain (and its subdomains) -> why. A policy, not a
+# tunable (CLAUDE.md's off-limits list).
+_META = "Meta's terms forbid automated collection without written permission"
+_GOOGLE = "Google's robots.txt disallows its job pages"
+EXCLUDED_DOMAINS = {
+    "facebook.com": _META, "meta.com": _META, "metacareers.com": _META,
+    "instagram.com": _META, "whatsapp.com": _META, "oculus.com": _META,
+    "google.com": _GOOGLE, "youtube.com": _GOOGLE,
+}
+SAVE_EVERY = 5.0  # seconds between saves of the hosts cache while surveying
 
 
 def prefixes(platforms: Iterable[str]) -> list[str]:
@@ -125,6 +139,15 @@ def read_hosts(lines: Iterable[str]) -> tuple[list[str], list[str]]:
     return list(hosts), list(skipped)
 
 
+def excluded(host: str) -> str | None:
+    """Why the host must not be surveyed, if it is or is under one of ``EXCLUDED_DOMAINS``."""
+    labels = host.lower().rstrip(".").split(".")
+    for n in range(len(labels) - 1):
+        if reason := EXCLUDED_DOMAINS.get(".".join(labels[n:])):
+            return reason
+    return None
+
+
 def name_from_host(host: str) -> str:
     """A placeholder company name: ``careers.acme.com`` -> ``acme``."""
     labels = host.lower().split(".")
@@ -146,15 +169,19 @@ def _load_cache(path: Path) -> dict[str, dict]:
 
 class _Polite(fingerprint.Polite):
     """``fingerprint.Polite`` that also counts failures that mean "try later": a request that got
-    no response, or an answer of 5xx or 429."""
+    no response, or an answer of 5xx or 429. Its wait between requests ends early once ``stop``
+    is set, and raises ``throttle.Stopped``."""
 
-    def __init__(self, client: httpx.Client, delay: float):
-        super().__init__(client, delay)
+    def __init__(self, client: httpx.Client, delay: float, stop: threading.Event):
+        super().__init__(client, 0)  # the wait is ours, so a stop cuts it short
+        self.pause, self.stop = delay, stop
         self.transient = 0
 
     def _fetch(
         self, url: str, follow_redirects: bool, json: dict | None = None
     ) -> httpx.Response | None:
+        if self.stop.wait(self.pause):
+            raise throttle.Stopped
         resp = super()._fetch(url, follow_redirects, json)
         if resp is None or resp.status_code >= 500 or resp.status_code == 429:
             self.transient += 1
@@ -180,10 +207,10 @@ def _due(
 
 
 def _survey_one(
-    client: httpx.Client, host: str, delay: float, now: datetime | None
+    client: httpx.Client, host: str, delay: float, now: datetime | None, stop: threading.Event
 ) -> tuple[fingerprint.Site, _Polite, str]:
     """Survey one careers host: its requests go one at a time, ``delay`` apart."""
-    polite = _Polite(client, delay)
+    polite = _Polite(client, delay, stop)
     home = f"https://{host}/"
     site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
     return site, polite, (now or datetime.now(UTC)).isoformat()
@@ -224,11 +251,14 @@ def survey_hosts(
 ) -> list[Company]:
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
-    The cache is saved after every host, so an interrupted run keeps what it found. A host that
+    The cache is saved every ``SAVE_EVERY`` seconds, at the end, and on an interrupt (which stops
+    the requests under way first), so an interrupted run keeps what it found. A host that
     found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as
     a failure: it's tried again ``rules.retry_after_hours`` or more later, ``rules.max_attempts``
     times in all (``rules`` defaults to the settings' defaults). With ``refresh`` every host is
-    surveyed again, and one that fails keeps its cached boards.
+    surveyed again, and one that fails keeps its cached boards. Hosts due a survey go least
+    recently tried first, so a ``limit`` works through them all over several runs. Hosts under
+    ``EXCLUDED_DOMAINS`` are skipped without a request.
     Each host is stamped with the time it was tried (``now``, if given, stands in for the clock).
 
     ``workers`` hosts are surveyed at once, each with its own requests one at a time. ``limit``
@@ -237,9 +267,13 @@ def survey_hosts(
     rules = rules or settings.DiscoverSettings()
     cache = _load_cache(cache_path)
     hosts = list(hosts)
+    if forbidden := [host for host in hosts if excluded(host)]:
+        log.info("skipped %d hosts whose owners forbid it (EXCLUDED_DOMAINS)", len(forbidden))
+        hosts = [host for host in hosts if not excluded(host)]
     start = now or datetime.now(UTC)
     plan = {host: _due(cache.get(host), refresh, start, rules) for host in hosts}
     todo = [host for host in hosts if plan[host] == "survey"]
+    todo.sort(key=lambda host: _last_tried(cache.get(host)))  # stable: input order breaks ties
     later = todo[limit:] if limit is not None else []
     todo = todo[: len(todo) - len(later)]
     counts = Counter(plan.values())
@@ -249,17 +283,34 @@ def survey_hosts(
         len(hosts), len(todo), counts["cached"], counts["waiting"], rules.retry_after_hours,
         counts["given up"], rules.max_attempts, len(later),
     )
+    stop = threading.Event()
+    handled: set = set()
+    saved = time.monotonic()
     with ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(_survey_one, client, host, delay, now): host for host in todo}
+        futures = {pool.submit(_survey_one, client, host, delay, now, stop): host for host in todo}
         try:
             for done, future in enumerate(as_completed(futures), 1):
                 host = futures[future]
+                handled.add(future)
                 progress = f"[{done}/{len(todo)}] {host}"
                 if (entry := _entry(cache.get(host), *future.result(), progress)) is not None:
                     cache[host] = entry
-                    storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
-        except BaseException:  # Ctrl-C: don't start the hosts still queued
-            pool.shutdown(wait=False, cancel_futures=True)
+                    if time.monotonic() - saved >= SAVE_EVERY:
+                        _save(cache_path, cache)
+                        saved = time.monotonic()
+        except BaseException:  # Ctrl-C: stop the requests under way, keep the hosts done
+            stop.set()
+            transport = getattr(client, "_transport", None)
+            if isinstance(transport, throttle.ThrottledTransport):
+                transport.stop()
+            pool.shutdown(wait=True, cancel_futures=True)
+            for future, host in futures.items():
+                if future in handled or future.cancelled() or future.exception() is not None:
+                    continue  # a host stopped midway is neither surveyed nor a failure
+                progress = f"[interrupted] {host}"
+                if (entry := _entry(cache.get(host), *future.result(), progress)) is not None:
+                    cache[host] = entry
+            _save(cache_path, cache)
             raise
     boards: list[Company] = []
     for host in hosts:
@@ -268,8 +319,18 @@ def survey_hosts(
                 boards.append(Company.model_validate(raw))
             except ValueError:  # a cached board this version no longer accepts
                 continue
-    storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
+    _save(cache_path, cache)
     return boards
+
+
+def _save(path: Path, cache: dict[str, dict]) -> None:
+    storage._write_atomic(path, json.dumps(cache, indent=1, sort_keys=True))
+
+
+def _last_tried(entry: dict | None) -> str:
+    """When the host was last tried, as an ISO string; "" (first) if never."""
+    entry = entry or {}
+    return str(entry.get("surveyed_at") or entry.get("failed_at") or "")
 
 
 def _new(boards: Iterable[Company], known: Iterable[Company]) -> list[Company]:
@@ -306,6 +367,7 @@ def _host_client(fetch: settings.FetchSettings, workers: int = 1) -> httpx.Clien
         max_retry_after=fetch.max_retry_after,
         transient_retries=0,
         connect_retries=0,
+        max_rate=fetch.max_rate,  # platforms many careers hosts redirect to, like Workable
     )
     return httpx.Client(
         transport=transport,

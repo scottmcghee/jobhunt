@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -322,6 +324,90 @@ def test_limit_surveys_at_most_n_hosts_and_leaves_the_rest_for_later(tmp_path, c
         assert "1 left for a later run" in caplog.records[0].getMessage()
         discover.survey_hosts(["careers.acme.com", "careers.beta.com"], client, cache, delay=0, limit=1)
     assert (first.call_count, second.call_count) == (1, 1)  # the next run picks up the rest
+
+
+@respx.mock
+def test_refresh_with_a_limit_surveys_the_least_recently_tried_hosts_first(tmp_path):
+    hosts = ["careers.acme.com", "careers.beta.com", "careers.gamma.com"]
+    pages = [_careers_site(host) for host in hosts]
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(hosts, client, cache, delay=0, now=NOW)
+        for day in (1, 2, 3):
+            discover.survey_hosts(hosts, client, cache, delay=0, refresh=True, limit=1, now=NOW + timedelta(days=day))
+            assert [p.call_count for p in pages] == [1 + (i < day) for i in range(3)]
+
+
+@respx.mock
+def test_hosts_whose_owners_forbid_collection_get_no_requests(tmp_path, caplog):
+    _careers_site()
+    hosts = ["careers.facebook.com", "metacareers.com", "jobs.instagram.com", "careers.google.com", "careers.acme.com"]
+    caplog.set_level("INFO", logger="jobhunt.discover")
+    with httpx.Client() as client:
+        boards = discover.survey_hosts(hosts, client, tmp_path / "hosts.json", delay=0)
+    assert [b.slug for b in boards] == ["acme/External"]
+    assert {c.request.url.host for c in respx.calls} == {"careers.acme.com"}
+    assert any("skipped 4 hosts whose owners forbid it" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("host", "excluded"),
+    [("facebook.com", True), ("careers.meta.com", True), ("a.b.youtube.com", True),
+     ("careers.notfacebook.com", False), ("meta.com.acme.io", False), ("careers.acme.com", False)],
+)
+def test_excluded_matches_the_domain_or_any_subdomain(host, excluded):
+    assert (discover.excluded(host) is not None) is excluded
+
+
+def test_the_host_client_carries_the_configured_rate_caps():
+    fetch = settings.FetchSettings(max_rate={"workable": 0.5})
+    with discover._host_client(fetch, workers=4) as client:
+        transport = client._transport
+        group = discover.throttle.request_group(httpx.URL("https://apply.workable.com/acme/"))
+        assert transport.limiter(group).rate == 0.5
+    with discover._host_client(settings.FetchSettings(), workers=4) as client:
+        assert client._transport.limiter(group).rate == settings.FetchSettings().max_rate["workable"]
+
+
+@respx.mock
+def test_the_cache_is_saved_every_few_seconds_not_after_every_host(tmp_path, monkeypatch):
+    hosts = [f"careers.co{n}.com" for n in range(20)]
+    for host in hosts:
+        _careers_site(host)
+    writes = []
+    write = discover.storage._write_atomic
+    monkeypatch.setattr(discover.storage, "_write_atomic", lambda path, text: (writes.append(path), write(path, text)))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(hosts, client, cache, delay=0, workers=4)
+    assert len(writes) <= 2
+    assert set(json.loads(cache.read_text())) == set(hosts)
+
+
+@respx.mock
+def test_an_interrupted_survey_stops_its_requests_and_keeps_what_it_found(tmp_path, monkeypatch):
+    _careers_site("careers.done.com")
+    _careers_site("careers.slow.com")
+    finished = threading.Event()
+    survey_one = discover._survey_one
+
+    def survey(client, host, delay, now, stop):
+        if host == "careers.boom.com":  # Ctrl-C, once the first host is done
+            finished.wait(5)
+            raise KeyboardInterrupt
+        result = survey_one(client, host, 0 if host == "careers.done.com" else 30, now, stop)
+        finished.set()
+        return result
+
+    monkeypatch.setattr(discover, "_survey_one", survey)
+    cache = tmp_path / "hosts.json"
+    hosts = ["careers.done.com", "careers.boom.com", "careers.slow.com"]
+    started = time.monotonic()
+    with discover._host_client(settings.FetchSettings(), workers=3) as client, pytest.raises(KeyboardInterrupt):
+        discover.survey_hosts(hosts, client, cache, delay=0, workers=3)
+    assert time.monotonic() - started < 5  # the slow host's wait was cut short
+    assert client._transport._stop.is_set()
+    assert set(json.loads(cache.read_text())) == {"careers.done.com"}  # the stopped host isn't a failure
 
 
 def test_main_webgraph_surveys_its_hosts_with_generic_or_listed_tlds(monkeypatch, tmp_path):
