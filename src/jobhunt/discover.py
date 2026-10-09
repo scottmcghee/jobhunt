@@ -18,10 +18,13 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
   page is read for the platform it runs and the board it points at, politely and within
   robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are skipped: their robots.txt
   disallows everything. Results are cached per host in ``data/discovery/hosts.json``, so a rerun
-  only visits new hosts (``--refresh`` visits them all again).
+  only visits new hosts. A host that failed for now (no answer, or 5xx or 429) is tried again on a
+  later run, a day or more after its last try, up to three tries in all; ``--refresh`` visits
+  every host again.
 
 ``--check`` fetches the first page of each new board and drops those with no open postings, as
-``python -m jobhunt.slugs --check`` does. A board found on a careers host is named after the host
+``python -m jobhunt.slugs --check`` does; the unchecked list is written first, so an interrupted
+check leaves it in place. A board found on a careers host is named after the host
 (``careers.acme.com`` -> ``acme``); fix the name when you paste it.
 """
 
@@ -32,8 +35,9 @@ import itertools
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -66,6 +70,8 @@ _SURT_HOST = re.compile(r"([a-z0-9-]+(?:,[a-z0-9-]+)+)(?::\d+)?\)")
 _HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
 _PREFIXES = ("www.", "careers.", "jobs.", "career.", "job.")
 _SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu"}  # gamma.co.uk
+MAX_ATTEMPTS = 3  # surveys of a careers host that stays unreachable, like the S&P 500 survey's
+RETRY_AFTER = timedelta(days=1)  # between two surveys of a host that failed for now
 
 
 def prefixes(platforms: Iterable[str]) -> list[str]:
@@ -151,42 +157,77 @@ class _Polite(fingerprint.Polite):
         return resp
 
 
+def _due(entry: dict | None, refresh: bool, now: datetime) -> str:
+    """What to do with a host this run: ``survey``, ``cached``, ``waiting`` or ``given up``."""
+    if entry is None or refresh:
+        return "survey"
+    if "failures" not in entry:
+        return "cached"
+    if entry["failures"] >= MAX_ATTEMPTS:
+        return "given up"
+    try:
+        last = datetime.fromisoformat(entry["failed_at"])
+    except (KeyError, TypeError, ValueError):
+        return "survey"
+    return "survey" if now - last >= RETRY_AFTER else "waiting"
+
+
 def survey_hosts(
     hosts: Iterable[str],
     client: httpx.Client,
     cache_path: Path,
     delay: float = 1.0,
     refresh: bool = False,
+    now: datetime | None = None,
 ) -> list[Company]:
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
     The cache is saved after every host, so an interrupted run keeps what it found. A host that
-    found no boards and had a request fail or answer 5xx or 429 (robots.txt included) isn't cached,
-    so the next run tries it again; with ``refresh``, its cached boards are kept for this run.
+    found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as
+    a failure: it's tried again a day or more later, ``MAX_ATTEMPTS`` times in all. With
+    ``refresh`` every host is surveyed again, and one that fails keeps its cached boards.
     """
+    now = now or datetime.now(UTC)
     cache = _load_cache(cache_path)
+    hosts = list(hosts)
+    plan = {host: _due(cache.get(host), refresh, now) for host in hosts}
+    counts = Counter(plan.values())
+    log.info(
+        "%d careers hosts: %d to survey, %d cached, %d failed for now (tried again after a day), "
+        "%d given up after %d tries (--refresh tries them all)",
+        len(hosts), counts["survey"], counts["cached"], counts["waiting"], counts["given up"],
+        MAX_ATTEMPTS,
+    )
     boards: list[Company] = []
+    surveyed = 0
     for host in hosts:
         entry = cache.get(host)
-        if entry is None or refresh:
+        if plan[host] == "survey":
+            surveyed += 1
+            progress = f"[{surveyed}/{counts['survey']}] {host}"
             polite = _Polite(client, delay)
             home = f"https://{host}/"
             site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
             if polite.transient and not site.boards:
-                log.warning("%s: unreachable (%s)", host, ", ".join(polite.errors) or "5xx or 429")
-                if entry is None:
-                    continue
+                errors = ", ".join(polite.errors) or "5xx or 429"
+                log.warning("%s: unreachable (%s)", progress, errors)
+                if entry is None or "failures" in entry:  # else (refresh): keep its cached boards
+                    entry = {
+                        "failed_at": now.isoformat(),
+                        "failures": (entry or {}).get("failures", 0) + 1,
+                        "errors": polite.errors,
+                    }
             else:
                 entry = {
-                    "surveyed_at": datetime.now(UTC).isoformat(),
+                    "surveyed_at": now.isoformat(),
                     "platforms": site.platforms,
                     "pages": site.pages,
                     "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],
                 }
-                cache[host] = entry
-                storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
-                log.info("%s: %s", host, ", ".join(entry["platforms"]) or "no platform found")
-        for raw in entry.get("boards") or []:
+                log.info("%s: %s", progress, ", ".join(entry["platforms"]) or "no platform found")
+            cache[host] = entry
+            storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
+        for raw in (entry or {}).get("boards") or []:
             try:
                 boards.append(Company.model_validate(raw))
             except ValueError:  # a cached board this version no longer accepts
@@ -268,9 +309,21 @@ def main(argv: list[str] | None = None) -> int:
     except settings.SettingsError as e:
         log.error("%s", e)
         return 2
-    fetch = tunables.fetch
     known = config.load_companies(args.companies)
+    out = args.out or args.data_dir / "discovered.yaml"
+    try:
+        return _discover(args, tunables, known, out)
+    except KeyboardInterrupt:
+        log.error("interrupted: nothing written (careers hosts surveyed so far are cached)")
+        return 130
+
+
+def _discover(
+    args: argparse.Namespace, tunables: settings.Settings, known: list[Company], out: Path
+) -> int:
+    fetch = tunables.fetch
     found: list[Company] = []
+    out.parent.mkdir(parents=True, exist_ok=True)
     with slugs._client(fetch) as client:
         if not args.no_crawl:
             cache_dir = args.data_dir / "commoncrawl"
@@ -285,11 +338,15 @@ def main(argv: list[str] | None = None) -> int:
                 found += survey_hosts(hosts, host_client, cache, args.delay, args.refresh)
         found = _new(found, known)
         if args.check:
-            checked = slugs.check(found, client, tunables.slugs.check_workers)
+            out.write_text(slugs.render(found))
+            log.info("%d new boards -> %s (unchecked until the check finishes)", len(found), out)
+            try:
+                checked = slugs.check(found, client, tunables.slugs.check_workers)
+            except KeyboardInterrupt:
+                log.error("interrupted: the unchecked boards are in %s", out)
+                return 130
             log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
             found = checked
-    out = args.out or args.data_dir / "discovered.yaml"
-    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(slugs.render(found))
     log.info("%d new boards -> %s", len(found), out)
     return 0
@@ -298,4 +355,5 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.ERROR, format="%(message)s")
     log.setLevel(logging.INFO)
+    slugs.log.setLevel(logging.INFO)  # --check's progress and the boards it drops
     raise SystemExit(main())

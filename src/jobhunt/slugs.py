@@ -24,7 +24,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -39,6 +39,7 @@ log = logging.getLogger("jobhunt.slugs")
 
 DEFAULT_INDEX = Path("data/commoncrawl.txt")
 DEFAULT_OUT = Path("data/companies.generated.yaml")
+CHECK_PROGRESS_EVERY = 50  # boards between --check progress lines
 
 # boards.greenhouse.io, job-boards.greenhouse.io, and regional variants (job-boards.eu., .anz.)
 _GREENHOUSE_BOARD = re.compile(r"(job-)?boards(\.[a-z]+)?\.greenhouse\.io")
@@ -300,10 +301,21 @@ def _has_jobs(company: Company, client: httpx.Client) -> bool:
 def check(
     companies: list[Company], client: httpx.Client, workers: int | None = None
 ) -> list[Company]:
-    """The boards that have open postings, in their original order."""
+    """The boards that have open postings, in their original order.
+
+    Logs a running count; an interrupt (Ctrl-C) cancels the checks not yet started.
+    """
+    log.info("checking %d boards", len(companies))
     with ThreadPoolExecutor(workers or check_workers()) as pool:
-        keep = list(pool.map(lambda c: _has_jobs(c, client), companies))
-    return [c for c, k in zip(companies, keep, strict=True) if k]
+        futures = [pool.submit(_has_jobs, c, client) for c in companies]
+        try:
+            for done, _ in enumerate(as_completed(futures), 1):
+                if done % CHECK_PROGRESS_EVERY == 0 or done == len(futures):
+                    log.info("checked %d of %d boards", done, len(futures))
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    return [c for c, f in zip(companies, futures, strict=True) if f.result()]
 
 
 def main(argv: list[str] | None = None) -> int:

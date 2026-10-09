@@ -250,9 +250,11 @@ crawl finds every board a crawl saw (5,749 new ones in a test run). Careers
 sites on companies' own domains (`careers.acme.com`) say nothing in their URLs, so each host in a
 `--hosts` file (plain hosts, URLs, or lines grepped from Common Crawl's `cluster.idx`) is read the
 way the S&P 500 survey reads a site: which platform it runs, and the board it points at. Hosts are
-cached in `data/discovery/hosts.json`, so a rerun visits only new ones. It writes
-`data/discovered.yaml`; boards from careers hosts are named after the host, so fix names as you
-paste.
+cached in `data/discovery/hosts.json`, so a rerun visits only new ones; a host that didn't
+answer is tried again on a later run, a day or more on, three tries in all (`--refresh` visits
+every host again). It writes `data/discovered.yaml`; boards from careers hosts are named after the
+host, so fix names as you paste. With `--check`, the unchecked list is written first, so stopping
+the check with Ctrl-C still leaves it.
 
 **The slugs harvester** finds board URLs in any text file, such as lines grepped from
 [Common Crawl](https://index.commoncrawl.org/) index files, saved HTML, or a plain list of URLs:

@@ -342,6 +342,18 @@ def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
     assert "Empty: no open postings" in caplog.text
 
 
+def test_check_reports_its_progress(monkeypatch, caplog):
+    monkeypatch.setattr(slugs, "CHECK_PROGRESS_EVERY", 2)
+    monkeypatch.setattr(slugs, "_has_jobs", lambda company, client: company.slug != "dead")
+    boards = [Company(name=s, ats="greenhouse", slug=s) for s in ("a", "dead", "c")]
+    caplog.set_level("INFO", logger="jobhunt.slugs")
+    with httpx.Client() as client:
+        kept = slugs.check(boards, client, workers=2)
+    assert [c.slug for c in kept] == ["a", "c"]  # in the original order
+    assert "checking 3 boards" in caplog.text
+    assert "checked 2 of 3 boards" in caplog.text and "checked 3 of 3 boards" in caplog.text
+
+
 @respx.mock
 def test_check_drops_a_board_it_cannot_read_and_carries_on(caplog):
     # an Eightfold careers page with no domain raises ValueError: unfetchable as configured
