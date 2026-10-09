@@ -146,8 +146,11 @@ class DiscoverSettings(_Section):
             "careers", "jobs", "career", "job", "talent", "recruiting", "hiring"
         ]
     )
-    # ... under a generic top-level domain, or one of these two-letter country codes
-    webgraph_country_tlds: list[str] = Field(default_factory=lambda: ["us", "io", "co", "ai"])
+    # ... under a generic top-level domain (when webgraph_generic_tlds: anything but a two-letter
+    # country code, plus io, co and ai), or one of these
+    webgraph_generic_tlds: bool = True
+    webgraph_country_tlds: list[str] = Field(default_factory=lambda: ["us"])
+    save_every_seconds: float = Field(5.0, ge=0)  # between saves of the hosts cache while surveying
 
     @field_validator("webgraph_labels", "webgraph_country_tlds", mode="before")
     @classmethod

@@ -263,11 +263,21 @@ def test_an_interrupted_write_of_the_host_list_is_not_trusted(tmp_path, monkeypa
     [
         ("careers.acme.com", True),
         ("jobs.acme.technology", True),  # generic, however long
-        ("careers.acme.io", True),  # a country code on the list
+        ("careers.acme.io", True),  # a country code used generically
+        ("careers.acme.ai", True),
+        ("careers.acme.co", True),
+        ("careers.wa.state.us", True),  # a country code on the list
         ("careers.acme.ca", False),  # a country code not on it
         ("careers.acme.co.uk", False),
-        ("careers.wa.state.us", True),
     ],
 )
 def test_generic_or_listed_tld(host, kept):
-    assert cc.generic_or_listed_tld(host, ["us", "io", "co", "ai"]) is kept
+    assert cc.generic_or_listed_tld(host, ["us"]) is kept
+
+
+@pytest.mark.parametrize(
+    ("host", "kept"),
+    [("careers.acme.com", False), ("careers.acme.io", False), ("careers.wa.state.us", True)],
+)
+def test_without_generic_tlds_only_the_listed_ones_pass(host, kept):
+    assert cc.generic_or_listed_tld(host, ["us"], generic=False) is kept

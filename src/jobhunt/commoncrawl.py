@@ -269,8 +269,14 @@ def webgraph_hosts(
     return hosts
 
 
-def generic_or_listed_tld(host: str, country_tlds: Iterable[str]) -> bool:
-    """Whether the host's top-level domain is generic (anything but a two-letter country code)
-    or one of ``country_tlds``."""
+# Two-letter country codes that are used as generic domains in practice
+GENERIC_COUNTRY_CODES = frozenset({"ai", "co", "io"})
+
+
+def generic_or_listed_tld(host: str, country_tlds: Iterable[str], generic: bool = True) -> bool:
+    """Whether the host's top-level domain is one of ``country_tlds``, or (with ``generic``)
+    generic: anything but a two-letter country code, or one of ``GENERIC_COUNTRY_CODES``."""
     tld = host.lower().rstrip(".").rpartition(".")[2]
-    return len(tld) != 2 or tld in {t.lower().lstrip(".") for t in country_tlds}
+    if tld in {t.lower().lstrip(".") for t in country_tlds}:
+        return True
+    return generic and (len(tld) != 2 or tld in GENERIC_COUNTRY_CODES)

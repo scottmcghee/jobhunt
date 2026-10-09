@@ -17,17 +17,17 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
   each host in ``--hosts`` files (plain hosts, URLs, or lines grepped from a Common Crawl
   ``cluster.idx``), and with ``--webgraph`` each careers host in Common Crawl's latest web graph
   (``commoncrawl.webgraph_hosts``: first label in ``discover.webgraph_labels``, top-level domain
-  generic or in ``discover.webgraph_country_tlds``), gets the S&P 500 survey's fingerprinting
-  (``fingerprint.survey_site``): its page is read for the platform it runs and the board it points
-  at, politely and within robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are
-  skipped: their robots.txt disallows everything. So are hosts under ``EXCLUDED_DOMAINS`` (Meta's,
-  whose terms forbid automated collection, and Google's), without a request. Results are cached
-  per host in ``data/discovery/hosts.json``, so a rerun only visits new hosts. A host that failed
-  for now (no answer, or 5xx or 429) is tried again on a later run, a day or more after its last
-  try, up to three tries in all (``discover`` in settings.yaml changes both); ``--refresh`` visits
-  every host again. ``discover.survey_workers`` hosts are surveyed at once, each one request at a
-  time; ``--limit N`` surveys at most N this run, least recently tried first, and leaves the rest
-  for the next.
+  generic or in ``discover.webgraph_country_tlds``; see settings.yaml), gets the S&P 500 survey's
+  fingerprinting (``fingerprint.survey_site``): its page is read for the platform it runs and the
+  board it points at, politely and within robots.txt. Classic iCIMS portals
+  (``careers-<company>.icims.com``) are skipped: their robots.txt disallows everything. So are hosts
+  under ``EXCLUDED_DOMAINS`` (Meta's, whose terms forbid automated collection, and Google's),
+  without a request. Results are cached per host in ``data/discovery/hosts.json``, so a rerun only
+  visits new hosts. A host that failed for now (no answer, or 5xx or 429) is tried again on a later
+  run, a day or more after its last try, up to three tries in all (``discover`` in settings.yaml
+  changes both); ``--refresh`` visits every host again. ``discover.survey_workers`` hosts are
+  surveyed at once, each one request at a time; ``--limit N`` surveys at most N this run, least
+  recently tried first, and leaves the rest for the next.
 
 ``--check`` fetches the first page of each new board and drops those with no open postings, as
 ``python -m jobhunt.slugs --check`` does; the unchecked list is written first, so an interrupted
@@ -91,7 +91,6 @@ EXCLUDED_DOMAINS = {
     "threads.net": _META, "threads.com": _META,
     "google.com": _GOOGLE, "youtube.com": _GOOGLE,
 }
-SAVE_EVERY = 5.0  # seconds between saves of the hosts cache while surveying
 
 
 def prefixes(platforms: Iterable[str]) -> list[str]:
@@ -276,15 +275,15 @@ def survey_hosts(
 ) -> list[Company]:
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
-    The cache is saved every ``SAVE_EVERY`` seconds, at the end, and on an interrupt (which stops
-    the requests under way first), so an interrupted run keeps what it found. A host that
-    found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as
-    a failure: it's tried again ``rules.retry_after_hours`` or more later, ``rules.max_attempts``
+    The cache is saved every ``rules.save_every_seconds``, at the end, and on an interrupt (which
+    stops the requests under way first), so an interrupted run keeps what it found. A host that
+    found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as a
+    failure: it's tried again ``rules.retry_after_hours`` or more later, ``rules.max_attempts``
     times in all (``rules`` defaults to the settings' defaults). With ``refresh`` every host is
-    surveyed again, and one that fails keeps its cached boards. Hosts due a survey go least
-    recently tried first, so a ``limit`` works through them all over several runs. Hosts under
-    ``EXCLUDED_DOMAINS`` are skipped without a request.
-    Each host is stamped with the time it was tried (``now``, if given, stands in for the clock).
+    surveyed again, and one that fails keeps its cached boards. Hosts due a survey go least recently
+    tried first, so a ``limit`` works through them all over several runs. Hosts under
+    ``EXCLUDED_DOMAINS`` are skipped without a request. Each host is stamped with the time it was
+    tried (``now``, if given, stands in for the clock).
 
     ``workers`` hosts are surveyed at once, each with its own requests one at a time. ``limit``
     surveys at most that many hosts this run; the rest are left for a later one.
@@ -321,7 +320,7 @@ def survey_hosts(
                 if (entry := _entry(before.get(host), *future.result(), progress)) is not None:
                     cache[host] = entry
                 handled.add(future)  # only once stored, so an interrupt before here still keeps it
-                if time.monotonic() - saved >= SAVE_EVERY:
+                if time.monotonic() - saved >= rules.save_every_seconds:
                     _save(cache_path, cache)
                     saved = time.monotonic()
         except BaseException:  # Ctrl-C: stop the requests under way, keep the hosts done
@@ -376,8 +375,13 @@ def _webgraph_hosts(
     """Careers hosts from the latest web graph, under a generic or listed top-level domain."""
     release = commoncrawl.latest_graph(client)
     found = commoncrawl.webgraph_hosts(client, release, rules.webgraph_labels, cache_dir)
-    hosts = [h for h in found if commoncrawl.generic_or_listed_tld(h, rules.webgraph_country_tlds)]
-    log.info("web graph %s: %d careers hosts (%d under other country codes left out)",
+    hosts = [
+        h for h in found
+        if commoncrawl.generic_or_listed_tld(
+            h, rules.webgraph_country_tlds, rules.webgraph_generic_tlds
+        )
+    ]
+    log.info("web graph %s: %d careers hosts (%d under other top-level domains left out)",
              release, len(hosts), len(found) - len(hosts))
     return hosts
 
