@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -379,9 +381,25 @@ def test_a_redirect_to_a_forbidden_host_gets_no_request(tmp_path):
     assert meta.call_count == 0
 
 
+@respx.mock
+def test_a_robots_txt_redirect_to_a_forbidden_host_gets_no_request(tmp_path):
+    respx.get("https://careers.acme.com/robots.txt").mock(
+        return_value=httpx.Response(301, headers={"location": "https://www.metacareers.com/robots.txt"})
+    )
+    page = respx.get("https://careers.acme.com/").mock(return_value=httpx.Response(200, text=WORKDAY_PAGE))
+    meta = respx.route(host="www.metacareers.com").mock(return_value=httpx.Response(404))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        assert discover.survey_hosts(["careers.acme.com"], client, cache, delay=0) == []
+    assert meta.call_count == 0
+    assert page.call_count == 0  # no robots.txt answer that allows anything
+    entry = json.loads(cache.read_text())["careers.acme.com"]
+    assert entry["platforms"] == [] and "failures" not in entry  # disallowed, not a failure
+
+
 @pytest.mark.parametrize(
     ("host", "excluded"),
-    [("facebook.com", True), ("careers.meta.com", True), ("a.b.youtube.com", True),
+    [("facebook.com", True), ("careers.meta.com", True), ("a.b.youtube.com", True), ("www.threads.net", True),
      ("careers.notfacebook.com", False), ("meta.com.acme.io", False), ("careers.acme.com", False)],
 )
 def test_excluded_matches_the_domain_or_any_subdomain(host, excluded):
@@ -600,3 +618,28 @@ def test_an_unknown_platform_is_an_error(tmp_path, capsys):
 def test_crawls_must_be_at_least_one(tmp_path, crawls):
     with pytest.raises(SystemExit):
         discover.main(["--no-crawl", "--crawls", crawls, "--data-dir", str(tmp_path)])
+
+
+@respx.mock
+def test_an_interrupt_just_after_a_host_is_stored_counts_its_failure_once(tmp_path):
+    respx.get("https://careers.down.com/robots.txt").mock(side_effect=httpx.ConnectError("nope"))
+    cache = tmp_path / "hosts.json"
+    lines, start = inspect.getsourcelines(discover.survey_hosts)
+    target = start + next(n for n, line in enumerate(lines) if "handled.add(future)" in line)
+
+    def trace(frame, event, arg):  # Ctrl-C between storing the host and marking it handled
+        if frame.f_code is discover.survey_hosts.__code__:
+            def local(frame, event, arg):
+                if event == "line" and frame.f_lineno == target:
+                    raise KeyboardInterrupt
+                return local
+            return local
+        return None
+
+    with httpx.Client() as client, pytest.raises(KeyboardInterrupt):
+        sys.settrace(trace)
+        try:
+            discover.survey_hosts(["careers.down.com"], client, cache, delay=0, now=NOW)
+        finally:
+            sys.settrace(None)
+    assert json.loads(cache.read_text())["careers.down.com"]["failures"] == 1

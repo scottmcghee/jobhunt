@@ -49,7 +49,7 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -87,6 +87,8 @@ _GOOGLE = "Google's robots.txt disallows its job pages"
 EXCLUDED_DOMAINS = {
     "facebook.com": _META, "meta.com": _META, "metacareers.com": _META,
     "instagram.com": _META, "whatsapp.com": _META, "oculus.com": _META,
+    "fb.com": _META, "workplace.com": _META, "messenger.com": _META,
+    "threads.net": _META, "threads.com": _META,
     "google.com": _GOOGLE, "youtube.com": _GOOGLE,
 }
 SAVE_EVERY = 5.0  # seconds between saves of the hosts cache while surveying
@@ -180,12 +182,28 @@ class _Polite(fingerprint.Polite):
     def _fetch(
         self, url: str, follow_redirects: bool, json: dict | None = None
     ) -> httpx.Response | None:
-        if self.stop.wait(self.pause):
-            raise throttle.Stopped
-        resp = super()._fetch(url, follow_redirects, json)
-        if resp is None or resp.status_code >= 500 or resp.status_code == 429:
-            self.transient += 1
-        return resp
+        """Redirects are followed by hand, so a hop to a host under ``EXCLUDED_DOMAINS`` (a
+        robots.txt redirect, say) is never sent: it gets no answer, which is not a failure."""
+        for _ in range(fingerprint.MAX_REDIRECTS + 1):
+            if excluded(urlsplit(url).hostname or ""):
+                self.skipped.append(url)
+                return None
+            if self.stop.wait(self.pause):
+                raise throttle.Stopped
+            resp = super()._fetch(url, False, json)
+            if resp is None or resp.status_code >= 500 or resp.status_code == 429:
+                self.transient += 1
+            if not follow_redirects or resp is None or not resp.is_redirect:
+                return resp
+            if "location" not in resp.headers:
+                return resp
+            try:
+                url = urljoin(url, resp.headers["location"])
+            except ValueError:  # a malformed Location: it is the answer
+                return resp
+        self.errors.append(f"{url}: too many redirects")
+        self.transient += 1  # as when httpx followed them and gave up
+        return None
 
     def allowed(self, url: str) -> bool:
         """A host under ``EXCLUDED_DOMAINS`` (one a site redirects to) gets no request at all,
@@ -292,6 +310,7 @@ def survey_hosts(
     )
     stop = threading.Event()
     handled: set = set()
+    before = dict(cache)  # entries as they were, so an interrupt can't count a host twice
     saved = time.monotonic()
     with ThreadPoolExecutor(workers) as pool:
         futures = {pool.submit(_survey_one, client, host, delay, now, stop): host for host in todo}
@@ -299,7 +318,7 @@ def survey_hosts(
             for done, future in enumerate(as_completed(futures), 1):
                 host = futures[future]
                 progress = f"[{done}/{len(todo)}] {host}"
-                if (entry := _entry(cache.get(host), *future.result(), progress)) is not None:
+                if (entry := _entry(before.get(host), *future.result(), progress)) is not None:
                     cache[host] = entry
                 handled.add(future)  # only once stored, so an interrupt before here still keeps it
                 if time.monotonic() - saved >= SAVE_EVERY:
@@ -315,7 +334,7 @@ def survey_hosts(
                 if future in handled or future.cancelled() or future.exception() is not None:
                     continue  # a host stopped midway is neither surveyed nor a failure
                 progress = f"[interrupted] {host}"
-                if (entry := _entry(cache.get(host), *future.result(), progress)) is not None:
+                if (entry := _entry(before.get(host), *future.result(), progress)) is not None:
                     cache[host] = entry
             _save(cache_path, cache)
             raise
