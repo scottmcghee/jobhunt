@@ -259,7 +259,8 @@ board it points at. The hosts come from a `--hosts` file (plain hosts or URLs), 
 [web graph](https://commoncrawl.org/web-graphs), a list of every host its crawls saw. One pass
 over about 1.3 GB, cached per release, keeps the hosts whose first label is one of
 `discover.webgraph_labels` in `settings.yaml` (careers, jobs, ...) and whose top-level domain is
-generic or one of `discover.webgraph_country_tlds`. That's tens of thousands of hosts, so
+generic (anything but a country code, plus .io, .co and .ai) or one of
+`discover.webgraph_country_tlds`. That's tens of thousands of hosts, so
 `discover.survey_workers` hosts are surveyed at once (each still one request at a time), and
 `--limit N` stops after N hosts so you can work through them over several runs.
 

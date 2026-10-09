@@ -95,11 +95,20 @@ discover:
   retry_after_hours: 24.0  # Env: JOBHUNT_DISCOVER_RETRY_AFTER_HOURS
   # Careers hosts surveyed at once; each host still gets one request at a time, --delay apart.
   survey_workers: 8  # Env: JOBHUNT_DISCOVER_SURVEY_WORKERS
-  # --webgraph keeps hosts whose first label is one of these (careers.acme.com) and whose
-  # top-level domain is generic (anything but a two-letter country code) or one of
-  # webgraph_country_tlds. In the environment, a list is comma-separated or JSON.
+  # Seconds between saves of data/discovery/hosts.json while surveying (it's also saved at the
+  # end and on Ctrl-C). Env: JOBHUNT_DISCOVER_SAVE_EVERY_SECONDS
+  save_every_seconds: 5.0
+  # --webgraph keeps a host when all of these hold:
+  # - it's a subdomain (careers.acme.com, not careers.com) whose first label is in webgraph_labels;
+  # - its top-level domain is in webgraph_country_tlds, or webgraph_generic_tlds is on and the
+  #   domain is generic: anything but a two-letter country code, plus io, co and ai, which are
+  #   country codes used generically (commoncrawl.GENERIC_COUNTRY_CODES);
+  # - its owner doesn't forbid automated collection (Meta's and Google's domains are never
+  #   surveyed: discover.EXCLUDED_DOMAINS, from CLAUDE.md's off-limits list).
+  # In the environment, a list is comma-separated or JSON.
   webgraph_labels: [careers, jobs, career, job, talent, recruiting, hiring]  # Env: JOBHUNT_DISCOVER_WEBGRAPH_LABELS
-  webgraph_country_tlds: [us, io, co, ai]  # Env: JOBHUNT_DISCOVER_WEBGRAPH_COUNTRY_TLDS
+  webgraph_generic_tlds: true  # false: only webgraph_country_tlds. Env: JOBHUNT_DISCOVER_WEBGRAPH_GENERIC_TLDS
+  webgraph_country_tlds: [us]  # Env: JOBHUNT_DISCOVER_WEBGRAPH_COUNTRY_TLDS
 
 usajobs:
   # The federal jobs source (`ats: usajobs`) needs a free API key from developer.usajobs.gov and

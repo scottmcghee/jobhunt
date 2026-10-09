@@ -33,7 +33,8 @@ def test_defaults_are_todays_values():
     assert (s.discover.max_attempts, s.discover.retry_after_hours) == (3, 24.0)
     assert s.discover.survey_workers == 8
     assert s.discover.webgraph_labels == ["careers", "jobs", "career", "job", "talent", "recruiting", "hiring"]
-    assert s.discover.webgraph_country_tlds == ["us", "io", "co", "ai"]
+    assert (s.discover.webgraph_generic_tlds, s.discover.webgraph_country_tlds) == (True, ["us"])
+    assert s.discover.save_every_seconds == 5.0
 
 
 def test_the_template_documents_every_setting_at_its_default():

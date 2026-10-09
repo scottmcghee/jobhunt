@@ -433,7 +433,6 @@ def test_the_cache_is_saved_every_few_seconds_not_after_every_host(tmp_path, mon
 
 @respx.mock
 def test_the_cache_is_saved_while_surveying(tmp_path, monkeypatch):
-    monkeypatch.setattr(discover, "SAVE_EVERY", 0)
     cache = tmp_path / "hosts.json"
     _careers_site("careers.acme.com")
     respx.get("https://careers.beta.com/robots.txt").mock(return_value=httpx.Response(404))
@@ -448,7 +447,10 @@ def test_the_cache_is_saved_while_surveying(tmp_path, monkeypatch):
 
     respx.get("https://careers.beta.com/").mock(side_effect=beta_page)
     with httpx.Client() as client:
-        discover.survey_hosts(["careers.acme.com", "careers.beta.com"], client, cache, delay=0, workers=1)
+        discover.survey_hosts(
+            ["careers.acme.com", "careers.beta.com"], client, cache, delay=0, workers=1,
+            rules=settings.DiscoverSettings(save_every_seconds=0),
+        )
     assert seen == [{"careers.acme.com"}]
 
 
@@ -479,12 +481,13 @@ def test_an_interrupted_survey_stops_its_requests_and_keeps_what_it_found(tmp_pa
 
 
 def test_main_webgraph_surveys_its_hosts_with_generic_or_listed_tlds(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBHUNT_DISCOVER_WEBGRAPH_COUNTRY_TLDS", "us")
     monkeypatch.setattr(discover.commoncrawl, "latest_graph", lambda client: "cc-main-2026-jul-aug-sep")
     seen = {}
 
     def hosts(client, release, labels, cache_dir):
         seen["release"], seen["labels"] = release, labels
-        return ["careers.acme.com", "careers.acme.ca", "jobs.beta.io"]
+        return ["careers.acme.com", "careers.acme.ca", "jobs.beta.io", "careers.wa.state.us"]
 
     def survey(hosts, client, cache, delay, refresh, rules, workers, limit):
         seen.update(hosts=hosts, workers=workers, limit=limit)
@@ -495,8 +498,27 @@ def test_main_webgraph_surveys_its_hosts_with_generic_or_listed_tlds(monkeypatch
     rc = discover.main(["--no-crawl", "--webgraph", "--limit", "50", "--data-dir", str(tmp_path)])
     assert rc == 0
     assert seen["release"] == "cc-main-2026-jul-aug-sep" and "careers" in seen["labels"]
-    assert seen["hosts"] == ["careers.acme.com", "jobs.beta.io"]  # .ca is a country code not listed
+    # .ca is a country code not listed; .io is generic in practice; .us is listed
+    assert seen["hosts"] == ["careers.acme.com", "jobs.beta.io", "careers.wa.state.us"]
     assert (seen["workers"], seen["limit"]) == (8, 50)
+
+
+def test_main_webgraph_with_generic_tlds_off_keeps_only_listed_ones(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBHUNT_DISCOVER_WEBGRAPH_GENERIC_TLDS", "false")
+    monkeypatch.setattr(discover.commoncrawl, "latest_graph", lambda client: "cc-main-2026-jul-aug-sep")
+    monkeypatch.setattr(
+        discover.commoncrawl, "webgraph_hosts",
+        lambda client, release, labels, cache_dir: ["careers.acme.com", "careers.wa.state.us"],
+    )
+    seen = {}
+
+    def survey(hosts, client, cache, delay, refresh, rules, workers, limit):
+        seen["hosts"] = hosts
+        return []
+
+    monkeypatch.setattr(discover, "survey_hosts", survey)
+    assert discover.main(["--no-crawl", "--webgraph", "--data-dir", str(tmp_path)]) == 0
+    assert seen["hosts"] == ["careers.wa.state.us"]
 
 
 # ------------------------------------------------------------------ Common Crawl
