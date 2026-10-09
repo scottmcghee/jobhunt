@@ -645,6 +645,10 @@ def test_an_unreachable_company_is_tried_three_times_in_all(tmp_path, monkeypatc
     assert [(r["ticker"], r["status"], r["attempts"]) for r in saved] == [("DED", "unreachable", 3)]
     assert "| DED | Dead | unreachable |  |" in (out / "survey.md").read_text()
 
+    calls = len(respx.calls)
+    assert survey.main([str(out), "--companies", str(known), "--delay", "0", "--only", "DED"]) == 0
+    assert len(respx.calls) > calls  # --only still re-surveys it
+
 
 @respx.mock
 def test_the_number_of_tries_follows_the_discover_setting(tmp_path, monkeypatch):
@@ -660,10 +664,6 @@ def test_the_number_of_tries_follows_the_discover_setting(tmp_path, monkeypatch)
         assert survey.main([str(out), "--companies", str(known), "--delay", "0"]) == 0
         attempts.append(len(respx.calls) > calls)
     assert attempts == [True, False]
-
-    calls = len(respx.calls)
-    assert survey.main([str(out), "--companies", str(known), "--delay", "0", "--only", "DED"]) == 0
-    assert len(respx.calls) > calls  # --only still re-surveys it
 
 
 @respx.mock
