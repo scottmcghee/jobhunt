@@ -521,6 +521,16 @@ def test_main_webgraph_with_generic_tlds_off_keeps_only_listed_ones(monkeypatch,
     assert seen["hosts"] == ["careers.wa.state.us"]
 
 
+def test_main_reports_a_busy_common_crawl_without_a_traceback(monkeypatch, tmp_path, caplog):
+    def busy(client):
+        raise discover.commoncrawl.Busy("data.commoncrawl.org answered 503 Slow Down")
+
+    monkeypatch.setattr(discover.commoncrawl, "latest_graph", busy)
+    caplog.set_level("ERROR", logger="jobhunt.discover")
+    assert discover.main(["--no-crawl", "--webgraph", "--data-dir", str(tmp_path)]) == 1
+    assert "503 Slow Down" in caplog.text and "rerun" in caplog.text
+
+
 # ------------------------------------------------------------------ Common Crawl
 
 

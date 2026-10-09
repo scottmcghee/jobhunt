@@ -462,6 +462,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         log.error("interrupted: nothing written (careers hosts surveyed so far are cached)")
         return 130
+    except commoncrawl.Busy as e:
+        log.error("Common Crawl is busy (%s). What was downloaded is cached; rerun later.", e)
+        return 1
 
 
 def _discover(
