@@ -133,12 +133,34 @@ class SlugsSettings(_Section):
 
 
 class DiscoverSettings(_Section):
-    """How often a careers host that failed for now is tried again: by `python -m jobhunt.discover`,
-    and (max_attempts) by scripts/survey_careers.py."""
+    """`python -m jobhunt.discover`: how careers hosts are found and surveyed. max_attempts also
+    caps scripts/survey_careers.py's tries of a company that stays unreachable."""
 
     max_attempts: int = Field(3, ge=1)  # surveys of a host that stays unreachable
     # between two surveys of such a host; capped at 100 years so timedelta(hours=...) can't overflow
     retry_after_hours: float = Field(24.0, ge=0, le=24 * 365 * 100)
+    survey_workers: int = Field(8, ge=1)  # careers hosts surveyed at once (each one at a time)
+    # --webgraph: hosts whose first label is one of these ...
+    webgraph_labels: list[str] = Field(
+        default_factory=lambda: [
+            "careers", "jobs", "career", "job", "talent", "recruiting", "hiring"
+        ]
+    )
+    # ... under a generic top-level domain, or one of these two-letter country codes
+    webgraph_country_tlds: list[str] = Field(default_factory=lambda: ["us", "io", "co", "ai"])
+
+    @field_validator("webgraph_labels", "webgraph_country_tlds", mode="before")
+    @classmethod
+    def _list_from_env(cls, value: Any) -> Any:
+        """An environment variable holds the list as JSON or comma-separated: 'careers, jobs'."""
+        if isinstance(value, str):
+            if value.lstrip().startswith("["):
+                try:
+                    return json.loads(value)
+                except ValueError:
+                    raise ValueError('expected JSON like ["careers", "jobs"]') from None
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
 
 class UsajobsSettings(_Section):

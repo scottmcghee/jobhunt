@@ -1,7 +1,8 @@
 """Find new job boards: from Common Crawl's URLs on known platforms, and from careers hosts.
 
     python -m jobhunt.discover [--platforms P ...] [--crawls N] [--no-crawl]
-                               [--hosts FILE ...] [--refresh] [--check] [-o OUT]
+                               [--hosts FILE ...] [--webgraph] [--limit N] [--refresh]
+                               [--check] [-o OUT]
 
 Two routes, one output (``data/discovered.yaml``, entries to review and paste into
 ``config/companies.yaml``; boards already there are left out):
@@ -12,15 +13,19 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
   100 MB of index (cached after the first run) plus some tens of MB of index blocks per crawl.
   ``slugs.board_from_url`` turns them into boards (new Workday datacenters included).
   Oracle is opt-in (``--platforms oracle``): its prefix is all of oraclecloud.com.
-- **Careers hosts.** A company's own careers site (``careers.acme.com``) says nothing in its URL,
-  so each host in ``--hosts`` files (plain hosts, URLs, or lines grepped from a Common Crawl
-  ``cluster.idx``) gets the S&P 500 survey's fingerprinting (``fingerprint.survey_site``): its
-  page is read for the platform it runs and the board it points at, politely and within
-  robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are skipped: their robots.txt
-  disallows everything. Results are cached per host in ``data/discovery/hosts.json``, so a rerun
-  only visits new hosts. A host that failed for now (no answer, or 5xx or 429) is tried again on a
-  later run, a day or more after its last try, up to three tries in all (``discover`` in
-  settings.yaml changes both); ``--refresh`` visits every host again.
+- **Careers hosts.** A company's own careers site (``careers.acme.com``) says nothing in its URL, so
+  each host in ``--hosts`` files (plain hosts, URLs, or lines grepped from a Common Crawl
+  ``cluster.idx``), and with ``--webgraph`` each careers host in Common Crawl's latest web graph
+  (``commoncrawl.webgraph_hosts``: first label in ``discover.webgraph_labels``, top-level domain
+  generic or in ``discover.webgraph_country_tlds``), gets the S&P 500 survey's fingerprinting
+  (``fingerprint.survey_site``): its page is read for the platform it runs and the board it points
+  at, politely and within robots.txt. Classic iCIMS portals (``careers-<company>.icims.com``) are
+  skipped: their robots.txt disallows everything. Results are cached per host in
+  ``data/discovery/hosts.json``, so a rerun only visits new hosts. A host that failed for now (no
+  answer, or 5xx or 429) is tried again on a later run, a day or more after its last try, up to
+  three tries in all (``discover`` in settings.yaml changes both); ``--refresh`` visits every host
+  again. ``discover.survey_workers`` hosts are surveyed at once, each one request at a time;
+  ``--limit N`` surveys at most N this run and leaves the rest for the next.
 
 ``--check`` fetches the first page of each new board and drops those with no open postings, as
 ``python -m jobhunt.slugs --check`` does; the unchecked list is written first, so an interrupted
@@ -37,6 +42,7 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -173,6 +179,38 @@ def _due(
     return "survey" if now - last >= wait else "waiting"
 
 
+def _survey_one(
+    client: httpx.Client, host: str, delay: float, now: datetime | None
+) -> tuple[fingerprint.Site, _Polite, str]:
+    """Survey one careers host: its requests go one at a time, ``delay`` apart."""
+    polite = _Polite(client, delay)
+    home = f"https://{host}/"
+    site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
+    return site, polite, (now or datetime.now(UTC)).isoformat()
+
+
+def _entry(
+    entry: dict | None, site: fingerprint.Site, polite: _Polite, tried_at: str, progress: str
+) -> dict | None:
+    """The host's new cache entry after a survey (``entry`` is its old one)."""
+    if polite.transient and not site.boards:
+        log.warning("%s: unreachable (%s)", progress, ", ".join(polite.errors) or "5xx or 429")
+        if entry is not None and "failures" not in entry:  # refresh: keep its cached boards
+            return entry
+        return {
+            "failed_at": tried_at,
+            "failures": (entry or {}).get("failures", 0) + 1,
+            "errors": polite.errors,
+        }
+    log.info("%s: %s", progress, ", ".join(site.platforms) or "no platform found")
+    return {
+        "surveyed_at": tried_at,
+        "platforms": site.platforms,
+        "pages": site.pages,
+        "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],
+    }
+
+
 def survey_hosts(
     hosts: Iterable[str],
     client: httpx.Client,
@@ -181,6 +219,8 @@ def survey_hosts(
     refresh: bool = False,
     now: datetime | None = None,
     rules: settings.DiscoverSettings | None = None,
+    workers: int = 1,
+    limit: int | None = None,
 ) -> list[Company]:
     """The boards each careers host's site points at; hosts surveyed before come from the cache.
 
@@ -190,50 +230,40 @@ def survey_hosts(
     times in all (``rules`` defaults to the settings' defaults). With ``refresh`` every host is
     surveyed again, and one that fails keeps its cached boards.
     Each host is stamped with the time it was tried (``now``, if given, stands in for the clock).
+
+    ``workers`` hosts are surveyed at once, each with its own requests one at a time. ``limit``
+    surveys at most that many hosts this run; the rest are left for a later one.
     """
     rules = rules or settings.DiscoverSettings()
     cache = _load_cache(cache_path)
     hosts = list(hosts)
     start = now or datetime.now(UTC)
     plan = {host: _due(cache.get(host), refresh, start, rules) for host in hosts}
+    todo = [host for host in hosts if plan[host] == "survey"]
+    later = todo[limit:] if limit is not None else []
+    todo = todo[: len(todo) - len(later)]
     counts = Counter(plan.values())
     log.info(
         "%d careers hosts: %d to survey, %d cached, %d failed for now (tried again after %g h), "
-        "%d given up after %d tries (--refresh tries them all)",
-        len(hosts), counts["survey"], counts["cached"], counts["waiting"], rules.retry_after_hours,
-        counts["given up"], rules.max_attempts,
+        "%d given up after %d tries (--refresh tries them all), %d left for a later run",
+        len(hosts), len(todo), counts["cached"], counts["waiting"], rules.retry_after_hours,
+        counts["given up"], rules.max_attempts, len(later),
     )
+    with ThreadPoolExecutor(workers) as pool:
+        futures = {pool.submit(_survey_one, client, host, delay, now): host for host in todo}
+        try:
+            for done, future in enumerate(as_completed(futures), 1):
+                host = futures[future]
+                progress = f"[{done}/{len(todo)}] {host}"
+                if (entry := _entry(cache.get(host), *future.result(), progress)) is not None:
+                    cache[host] = entry
+                    storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
+        except BaseException:  # Ctrl-C: don't start the hosts still queued
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
     boards: list[Company] = []
-    surveyed = 0
     for host in hosts:
-        entry = cache.get(host)
-        if plan[host] == "survey":
-            surveyed += 1
-            progress = f"[{surveyed}/{counts['survey']}] {host}"
-            polite = _Polite(client, delay)
-            home = f"https://{host}/"
-            site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
-            tried_at = (now or datetime.now(UTC)).isoformat()
-            if polite.transient and not site.boards:
-                errors = ", ".join(polite.errors) or "5xx or 429"
-                log.warning("%s: unreachable (%s)", progress, errors)
-                if entry is None or "failures" in entry:  # else (refresh): keep its cached boards
-                    entry = {
-                        "failed_at": tried_at,
-                        "failures": (entry or {}).get("failures", 0) + 1,
-                        "errors": polite.errors,
-                    }
-            else:
-                entry = {
-                    "surveyed_at": tried_at,
-                    "platforms": site.platforms,
-                    "pages": site.pages,
-                    "boards": [b.model_dump(exclude_defaults=True) for b in site.boards],
-                }
-                log.info("%s: %s", progress, ", ".join(entry["platforms"]) or "no platform found")
-            cache[host] = entry
-            storage._write_atomic(cache_path, json.dumps(cache, indent=1, sort_keys=True))
-        for raw in (entry or {}).get("boards") or []:
+        for raw in (cache.get(host) or {}).get("boards") or []:
             try:
                 boards.append(Company.model_validate(raw))
             except ValueError:  # a cached board this version no longer accepts
@@ -253,12 +283,25 @@ def _new(boards: Iterable[Company], known: Iterable[Company]) -> list[Company]:
     return sorted(found, key=lambda c: (c.ats, c.slug.lower()))
 
 
-def _host_client(fetch: settings.FetchSettings) -> httpx.Client:
-    """One request at a time, like the survey; no retries (a guessed host often doesn't exist)."""
+def _webgraph_hosts(
+    client: httpx.Client, rules: settings.DiscoverSettings, cache_dir: Path
+) -> list[str]:
+    """Careers hosts from the latest web graph, under a generic or listed top-level domain."""
+    release = commoncrawl.latest_graph(client)
+    found = commoncrawl.webgraph_hosts(client, release, rules.webgraph_labels, cache_dir)
+    hosts = [h for h in found if commoncrawl.generic_or_listed_tld(h, rules.webgraph_country_tlds)]
+    log.info("web graph %s: %d careers hosts (%d under other country codes left out)",
+             release, len(hosts), len(found) - len(hosts))
+    return hosts
+
+
+def _host_client(fetch: settings.FetchSettings, workers: int = 1) -> httpx.Client:
+    """One request at a time per host, ``workers`` hosts at once; no retries (a guessed host
+    often doesn't exist)."""
     transport = throttle.ThrottledTransport(
         start=1,
         ceiling=1,
-        max_in_flight=1,
+        max_in_flight=workers,
         max_retries=fetch.max_retries,
         max_retry_after=fetch.max_retry_after,
         transient_retries=0,
@@ -294,6 +337,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-crawl", action="store_true", help="skip Common Crawl")
     parser.add_argument("--hosts", nargs="+", type=Path, default=[], metavar="FILE",
                         help="files of careers hosts, URLs or cluster.idx lines to fingerprint")
+    parser.add_argument("--webgraph", action="store_true",
+                        help="careers hosts from Common Crawl's latest web graph "
+                             "(discover.webgraph_labels and webgraph_country_tlds in settings)")
+    parser.add_argument("--limit", type=_at_least_one, metavar="N",
+                        help="survey at most N careers hosts this run; the rest wait for the next")
     parser.add_argument("--refresh", action="store_true", help="survey cached hosts again")
     parser.add_argument("--delay", type=float, default=1.0,
                         help="seconds between requests to careers sites (default 1)")
@@ -304,8 +352,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--out", type=Path, help="default: <data-dir>/discovered.yaml")
     args = parser.parse_args(argv)
 
-    if args.no_crawl and not args.hosts:
-        log.error("nothing to do: --no-crawl and no --hosts")
+    if args.no_crawl and not args.hosts and not args.webgraph:
+        log.error("nothing to do: --no-crawl and no --hosts or --webgraph")
         return 2
     if missing := [p for p in args.hosts if not p.is_file()]:
         log.error("no such hosts file: %s", ", ".join(map(str, missing)))
@@ -334,15 +382,21 @@ def _discover(
         if not args.no_crawl:
             cache_dir = args.data_dir / "commoncrawl"
             found += crawl_boards(client, args.platforms, args.crawls, cache_dir, known)
-        if args.hosts:
-            lines = itertools.chain.from_iterable(p.read_text().splitlines() for p in args.hosts)
+        lines: list[str] = []
+        for path in args.hosts:
+            lines += path.read_text().splitlines()
+        if args.webgraph:
+            lines += _webgraph_hosts(client, tunables.discover, args.data_dir / "commoncrawl")
+        if lines:
             hosts, skipped = read_hosts(lines)
             if skipped:
                 log.info("skipped %d classic iCIMS hosts (robots.txt disallows them)", len(skipped))
-            with _host_client(fetch) as host_client:
+            workers = tunables.discover.survey_workers
+            with _host_client(fetch, workers) as host_client:
                 cache = args.data_dir / "discovery" / "hosts.json"
                 found += survey_hosts(
-                    hosts, host_client, cache, args.delay, args.refresh, rules=tunables.discover
+                    hosts, host_client, cache, args.delay, args.refresh,
+                    rules=tunables.discover, workers=workers, limit=args.limit,
                 )
         found = _new(found, known)
         if args.check:

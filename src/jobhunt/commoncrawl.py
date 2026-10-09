@@ -15,14 +15,22 @@ blocks, so finding every URL under ``jobs.gem.com`` costs a few hundred KB, not 
 but its documentation directs people to download its published files from data.commoncrawl.org;
 the owner decided (October 2026) this personal, non-commercial use of a public dataset is that.
 Requests go one at a time, at most one a second.
+
+The web graph is another of Common Crawl's datasets: each quarter it lists every host its crawls
+saw (about 250 million), as ``<id>\t<reversed host>`` lines in some 50 gzip files (about 1.3 GB),
+sorted by reversed host (``com.acme.careers``). ``webgraph_hosts`` streams them once per release
+and keeps the hosts whose first label is wanted (``careers``, ``jobs``), caching what it keeps per
+file, so an interrupted read resumes where it stopped.
 """
 
 from __future__ import annotations
 
 import bisect
 import gzip
+import hashlib
 import json
 import logging
+import zlib
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +41,10 @@ from jobhunt.sources._rate import RATE
 
 log = logging.getLogger(__name__)
 
-COLLINFO = "https://index.commoncrawl.org/collinfo.json"  # robots.txt allows this one path
+COLLINFO = "https://index.commoncrawl.org/collinfo.json"  # robots.txt allows this path
+GRAPHINFO = "https://index.commoncrawl.org/graphinfo.json"  # and this one
+GRAPH_FILES = "https://data.commoncrawl.org/{path}"
+GRAPH_VERTICES = "projects/hyperlinkgraph/{release}/host/{release}-host-vertices.paths.gz"
 DATA = "https://data.commoncrawl.org/cc-index/collections/{crawl}/indexes/{file}"
 RATE_CAP = 1.0  # requests a second
 
@@ -168,3 +179,96 @@ def urls(
                 continue
             if isinstance(url, str):
                 yield url
+
+
+# ------------------------------------------------------------------ web graph host list
+
+
+def latest_graph(client: httpx.Client) -> str:
+    """The id of the most recent web graph release (``cc-main-2026-jul-aug-sep``)."""
+    resp = client.get(GRAPHINFO, extensions={RATE: RATE_CAP})
+    resp.raise_for_status()
+    releases = [g["id"] for g in resp.json() if isinstance(g, dict) and g.get("id")]
+    if not releases:
+        raise ValueError(f"{GRAPHINFO}: no releases listed")
+    return releases[0]
+
+
+def _gunzip_lines(chunks: Iterable[bytes]) -> Iterator[bytes]:
+    """Lines of a gzip stream, which may be several members back to back."""
+    unzip = zlib.decompressobj(zlib.MAX_WBITS | 16)
+    rest = b""
+    for chunk in chunks:
+        while chunk:
+            rest += unzip.decompress(chunk)
+            chunk = b""
+            if unzip.eof:  # a member ended; whatever follows starts the next
+                chunk = unzip.unused_data
+                unzip = zlib.decompressobj(zlib.MAX_WBITS | 16)
+        *lines, rest = rest.split(b"\n")
+        yield from lines
+    rest += unzip.flush()
+    yield from (line for line in rest.split(b"\n") if line)
+
+
+def _vertex_paths(client: httpx.Client, release: str) -> list[str]:
+    url = GRAPH_FILES.format(path=GRAPH_VERTICES.format(release=release))
+    resp = client.get(url, extensions={RATE: RATE_CAP})
+    resp.raise_for_status()
+    return [line.decode().strip() for line in _gunzip_lines([resp.content]) if line.strip()]
+
+
+def _wanted_hosts(client: httpx.Client, path: str, labels: frozenset[str]) -> list[str]:
+    hosts = []
+    url = GRAPH_FILES.format(path=path)
+    with client.stream("GET", url, extensions={RATE: RATE_CAP}) as resp:
+        resp.raise_for_status()
+        for line in _gunzip_lines(resp.iter_bytes()):
+            reversed_host = line.partition(b"\t")[2].decode("utf-8", errors="replace").strip()
+            parts = reversed_host.split(".")
+            if len(parts) >= 3 and parts[-1] in labels:  # a subdomain, not the bare domain
+                hosts.append(".".join(reversed(parts)))
+    return hosts
+
+
+def webgraph_hosts(
+    client: httpx.Client, release: str, labels: Sequence[str], cache_dir: Path
+) -> list[str]:
+    """Every host in the release's web graph whose first label is one of ``labels``.
+
+    Each vertices file's hosts are cached in ``cache_dir/webgraph/<release>/<labels key>/``, so a
+    rerun with the same labels makes no requests and an interrupted one fetches only the files
+    it hadn't finished.
+    """
+    wanted = frozenset(label.lower() for label in labels)
+    key = hashlib.sha1(",".join(sorted(wanted)).encode()).hexdigest()[:10]
+    folder = cache_dir / "webgraph" / release / key
+    done = folder / "hosts.txt"
+    if done.exists():
+        return done.read_text().split()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "labels.txt").write_text("\n".join(sorted(wanted)) + "\n")
+    hosts: list[str] = []
+    paths = _vertex_paths(client, release)
+    for n, path in enumerate(paths):
+        part = folder / f"part-{n:05d}.txt"
+        if not part.exists():
+            found = _wanted_hosts(client, path, wanted)
+            partial = part.with_suffix(".part")
+            partial.write_text("".join(f"{h}\n" for h in found))
+            partial.replace(part)
+            log.info(
+                "web graph %s: file %d of %d, %d hosts", release, n + 1, len(paths), len(found)
+            )
+        hosts += part.read_text().split()
+    done.write_text("".join(f"{h}\n" for h in hosts))
+    for n in range(len(paths)):
+        (folder / f"part-{n:05d}.txt").unlink(missing_ok=True)
+    return hosts
+
+
+def generic_or_listed_tld(host: str, country_tlds: Iterable[str]) -> bool:
+    """Whether the host's top-level domain is generic (anything but a two-letter country code)
+    or one of ``country_tlds``."""
+    tld = host.lower().rstrip(".").rpartition(".")[2]
+    return len(tld) != 2 or tld in {t.lower().lstrip(".") for t in country_tlds}

@@ -31,6 +31,9 @@ def test_defaults_are_todays_values():
     assert (s.paths.data_dir, s.paths.output_dir) == (None, None)  # None: the repo's data/ and output/
     assert (s.slugs.check_workers, s.slugs.check_progress_every) == (4, 50)
     assert (s.discover.max_attempts, s.discover.retry_after_hours) == (3, 24.0)
+    assert s.discover.survey_workers == 8
+    assert s.discover.webgraph_labels == ["careers", "jobs", "career", "job", "talent", "recruiting", "hiring"]
+    assert s.discover.webgraph_country_tlds == ["us", "io", "co", "ai"]
 
 
 def test_the_template_documents_every_setting_at_its_default():
@@ -245,3 +248,9 @@ def test_the_usajobs_key_and_email_never_show_in_a_repr(tmp_path):
     s = settings.Settings.model_validate({"usajobs": {"api_key": "s3cret", "email": "me@example.com"}})
     assert "s3cret" not in repr(s) and "me@example.com" not in repr(s)
     assert "s3cret" not in str(s)
+
+
+@pytest.mark.parametrize("value", ["careers, jobs", '["careers", "jobs"]'])
+def test_webgraph_lists_from_the_environment_as_commas_or_json(tmp_path, value):
+    s = settings.load(tmp_path / "none.yaml", environ={"JOBHUNT_DISCOVER_WEBGRAPH_LABELS": value})
+    assert s.discover.webgraph_labels == ["careers", "jobs"]

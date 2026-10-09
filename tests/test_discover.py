@@ -159,7 +159,7 @@ def test_main_passes_the_discover_settings_down(monkeypatch, tmp_path):
     monkeypatch.setenv("JOBHUNT_DISCOVER_MAX_ATTEMPTS", "5")
     seen = {}
 
-    def survey(hosts, client, cache, delay, refresh, rules):
+    def survey(hosts, client, cache, delay, refresh, rules, workers, limit):
         seen["rules"] = rules
         return []
 
@@ -294,6 +294,55 @@ def test_a_host_that_redirects_forever_is_cached(tmp_path):
         discover.survey_hosts(["careers.loop.com"], client, cache, delay=0)
     assert json.loads(cache.read_text())["careers.loop.com"]["platforms"] == []
     assert page.call_count == calls  # a permanent failure: not tried again
+
+
+@respx.mock
+def test_several_hosts_surveyed_at_once_give_their_boards_in_host_order(tmp_path):
+    hosts = ["careers.acme.com", "careers.beta.com", "careers.gamma.com"]
+    for host in hosts:
+        name = host.split(".")[1]
+        _careers_site(host, page=WORKDAY_PAGE.replace("acme", name))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        boards = discover.survey_hosts(hosts, client, cache, delay=0, workers=3)
+    assert [b.slug for b in boards] == ["acme/External", "beta/External", "gamma/External"]
+    assert set(json.loads(cache.read_text())) == set(hosts)
+
+
+@respx.mock
+def test_limit_surveys_at_most_n_hosts_and_leaves_the_rest_for_later(tmp_path, caplog):
+    first = _careers_site("careers.acme.com")
+    second = _careers_site("careers.beta.com")
+    cache = tmp_path / "hosts.json"
+    caplog.set_level("INFO", logger="jobhunt.discover")
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.acme.com", "careers.beta.com"], client, cache, delay=0, limit=1)
+        assert (first.call_count, second.call_count) == (1, 0)
+        assert list(json.loads(cache.read_text())) == ["careers.acme.com"]
+        assert "1 left for a later run" in caplog.records[0].getMessage()
+        discover.survey_hosts(["careers.acme.com", "careers.beta.com"], client, cache, delay=0, limit=1)
+    assert (first.call_count, second.call_count) == (1, 1)  # the next run picks up the rest
+
+
+def test_main_webgraph_surveys_its_hosts_with_generic_or_listed_tlds(monkeypatch, tmp_path):
+    monkeypatch.setattr(discover.commoncrawl, "latest_graph", lambda client: "cc-main-2026-jul-aug-sep")
+    seen = {}
+
+    def hosts(client, release, labels, cache_dir):
+        seen["release"], seen["labels"] = release, labels
+        return ["careers.acme.com", "careers.acme.ca", "jobs.beta.io"]
+
+    def survey(hosts, client, cache, delay, refresh, rules, workers, limit):
+        seen.update(hosts=hosts, workers=workers, limit=limit)
+        return []
+
+    monkeypatch.setattr(discover.commoncrawl, "webgraph_hosts", hosts)
+    monkeypatch.setattr(discover, "survey_hosts", survey)
+    rc = discover.main(["--no-crawl", "--webgraph", "--limit", "50", "--data-dir", str(tmp_path)])
+    assert rc == 0
+    assert seen["release"] == "cc-main-2026-jul-aug-sep" and "careers" in seen["labels"]
+    assert seen["hosts"] == ["careers.acme.com", "jobs.beta.io"]  # .ca is a country code not listed
+    assert (seen["workers"], seen["limit"]) == (8, 50)
 
 
 # ------------------------------------------------------------------ Common Crawl

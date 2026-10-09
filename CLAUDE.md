@@ -54,7 +54,8 @@ src/jobhunt/
   evaluate.py         # pure: a sample of jobs to label; labels vs. model scores -> agreement metrics
   cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications
                       #  | label | eval`
-  commoncrawl.py      # Common Crawl's URL index read by byte range: every URL a crawl saw under some hosts
+  commoncrawl.py      # Common Crawl's URL index read by byte range: every URL a crawl saw under some hosts;
+                      # and its web graph's host list: every careers.* / jobs.* host it saw
   discover.py         # `python -m jobhunt.discover`: new boards from Common Crawl and careers hosts
   fingerprint.py      # which hiring platform a careers site runs, and its board (survey and discovery)
   slugs.py            # `python -m jobhunt.slugs`: board URLs in any text -> companies.yaml entries;

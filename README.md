@@ -242,6 +242,7 @@ each leaves out boards you already have.
 ```bash
 python -m jobhunt.discover                                  # every known platform, latest crawl
 python -m jobhunt.discover --hosts careers_hosts.txt        # and these companies' careers sites
+python -m jobhunt.discover --no-crawl --webgraph --limit 2000  # careers sites from the web graph
 python -m jobhunt.discover --platforms gem rippling --check # just these; drop boards with no jobs
 ```
 
@@ -249,16 +250,25 @@ On platforms whose board URLs follow a pattern (Workday, Greenhouse, Lever, Ashb
 SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Rippling; Oracle with `--platforms oracle`),
 it reads [Common Crawl](https://commoncrawl.org/)'s URL index: each platform's URLs sit together,
 so about 100 MB of index (cached after the first run) plus some tens of MB of index blocks per
-crawl finds every board a crawl saw (5,749 new ones in a test run). Careers
-sites on companies' own domains (`careers.acme.com`) say nothing in their URLs, so each host in a
-`--hosts` file (plain hosts, URLs, or lines grepped from Common Crawl's `cluster.idx`) is read the
-way the S&P 500 survey reads a site: which platform it runs, and the board it points at. Hosts are
-cached in `data/discovery/hosts.json`, so a rerun visits only new ones; a host that didn't
-answer is tried again on a later run, a day or more on, three tries in all (`discover` in
-settings.yaml changes both; `--refresh` visits
-every host again). It writes `data/discovered.yaml`; boards from careers hosts are named after the
-host, so fix names as you paste. With `--check`, the unchecked list is written first, so stopping
-the check with Ctrl-C still leaves it.
+crawl finds every board a crawl saw.
+
+Careers sites on companies' own domains (`careers.acme.com`) say nothing in their URLs, so each
+careers host is read the way the S&P 500 survey reads a site: which platform it runs, and the
+board it points at. The hosts come from a `--hosts` file (plain hosts or URLs), from
+`--webgraph`, or both. `--webgraph` reads Common Crawl's quarterly
+[web graph](https://commoncrawl.org/web-graphs), a list of every host its crawls saw. One pass
+over about 1.3 GB, cached per release, keeps the hosts whose first label is one of
+`discover.webgraph_labels` in `settings.yaml` (careers, jobs, ...) and whose top-level domain is
+generic or one of `discover.webgraph_country_tlds`. That's tens of thousands of hosts, so
+`discover.survey_workers` hosts are surveyed at once (each still one request at a time), and
+`--limit N` stops after N hosts so you can work through them over several runs.
+
+Hosts are cached in `data/discovery/hosts.json`, so a rerun visits only new ones; a host that
+didn't answer is tried again on a later run, a day or more on, three tries in all (`discover` in
+`settings.yaml` changes both; `--refresh` visits every host again). Discovery writes
+`data/discovered.yaml`; boards from careers hosts are named after the host, so fix names as you
+paste. With `--check`, the unchecked list is written first, so stopping the check with Ctrl-C
+still leaves it.
 
 **The slugs harvester** finds board URLs in any text file, such as lines grepped from
 [Common Crawl](https://index.commoncrawl.org/) index files, saved HTML, or a plain list of URLs:

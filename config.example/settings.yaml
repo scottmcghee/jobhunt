@@ -93,6 +93,13 @@ discover:
   # survey's tries of a company that stays unreachable (scripts/survey_careers.py).
   max_attempts: 3  # Env: JOBHUNT_DISCOVER_MAX_ATTEMPTS
   retry_after_hours: 24.0  # Env: JOBHUNT_DISCOVER_RETRY_AFTER_HOURS
+  # Careers hosts surveyed at once; each host still gets one request at a time, --delay apart.
+  survey_workers: 8  # Env: JOBHUNT_DISCOVER_SURVEY_WORKERS
+  # --webgraph keeps hosts whose first label is one of these (careers.acme.com) and whose
+  # top-level domain is generic (anything but a two-letter country code) or one of
+  # webgraph_country_tlds. In the environment, a list is comma-separated or JSON.
+  webgraph_labels: [careers, jobs, career, job, talent, recruiting, hiring]  # Env: JOBHUNT_DISCOVER_WEBGRAPH_LABELS
+  webgraph_country_tlds: [us, io, co, ai]  # Env: JOBHUNT_DISCOVER_WEBGRAPH_COUNTRY_TLDS
 
 usajobs:
   # The federal jobs source (`ats: usajobs`) needs a free API key from developer.usajobs.gov and

@@ -168,3 +168,86 @@ def test_latest_crawls_come_from_collinfo():
 def test_a_malformed_index_line_is_skipped():
     blocks = cc.read_blocks(["not an index line", *CLUSTER.splitlines()])
     assert len(blocks) == 3
+
+
+# ------------------------------------------------------------------ web graph host list
+
+RELEASE = "cc-main-2026-jul-aug-sep"
+GRAPH = f"https://data.commoncrawl.org/projects/hyperlinkgraph/{RELEASE}/host"
+PARTS = [
+    # id, reversed host: sorted by reversed host, as Common Crawl publishes them
+    ["0\tai.acme.careers", "1\tca.maple.jobs", "2\tcom.acme.www", "3\tcom.beta.careers"],
+    ["4\tcom.gamma.jobs", "5\tcom.gamma.jobs.eu", "6\torg.delta.talent", "7\tus.state.wa.careers"],
+]
+
+
+def _gz_members(lines: list[str]) -> bytes:
+    """Two gzip members back to back, as a file written in pieces may be."""
+    half = len(lines) // 2
+    return b"".join(gzip.compress(("\n".join(p) + "\n").encode()) for p in (lines[:half], lines[half:]))
+
+
+def _serve_graph(fail_part: int | None = None):
+    paths = [f"projects/hyperlinkgraph/{RELEASE}/host/vertices/part-0000{i}.txt.gz" for i in range(len(PARTS))]
+    respx.get(f"{GRAPH}/{RELEASE}-host-vertices.paths.gz").mock(
+        return_value=httpx.Response(200, content=gzip.compress(("\n".join(paths) + "\n").encode()))
+    )
+    routes = []
+    for i, lines in enumerate(PARTS):
+        response = httpx.Response(503) if i == fail_part else httpx.Response(200, content=_gz_members(lines))
+        routes.append(respx.get(f"https://data.commoncrawl.org/{paths[i]}").mock(return_value=response))
+    return routes
+
+
+@respx.mock
+def test_latest_graph_comes_from_graphinfo():
+    respx.get(cc.GRAPHINFO).mock(return_value=httpx.Response(200, json=[{"id": RELEASE}, {"id": "cc-main-2026-may-jun-jul"}]))
+    with httpx.Client() as client:
+        assert cc.latest_graph(client) == RELEASE
+
+
+@respx.mock
+def test_webgraph_hosts_keeps_hosts_whose_first_label_is_wanted(tmp_path):
+    _serve_graph()
+    with httpx.Client() as client:
+        hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert hosts == ["careers.acme.ai", "jobs.maple.ca", "careers.beta.com", "jobs.gamma.com", "careers.wa.state.us"]
+
+
+@respx.mock
+def test_webgraph_hosts_are_cached_per_release_and_labels(tmp_path):
+    routes = _serve_graph()
+    with httpx.Client() as client:
+        first = cc.webgraph_hosts(client, RELEASE, ["careers"], tmp_path)
+        again = cc.webgraph_hosts(client, RELEASE, ["careers"], tmp_path)
+        assert again == first and sum(r.call_count for r in routes) == 2
+        other = cc.webgraph_hosts(client, RELEASE, ["talent"], tmp_path)  # other labels: read again
+    assert other == ["talent.delta.org"] and sum(r.call_count for r in routes) == 4
+
+
+@respx.mock
+def test_an_interrupted_webgraph_read_keeps_the_files_it_finished(tmp_path):
+    routes = _serve_graph(fail_part=1)
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert [r.call_count for r in routes] == [1, 1]
+    routes[1].mock(return_value=httpx.Response(200, content=_gz_members(PARTS[1])))
+    with httpx.Client() as client:
+        hosts = cc.webgraph_hosts(client, RELEASE, ["careers", "jobs"], tmp_path)
+    assert [r.call_count for r in routes] == [1, 2]  # only the file that failed is read again
+    assert len(hosts) == 5
+
+
+@pytest.mark.parametrize(
+    ("host", "kept"),
+    [
+        ("careers.acme.com", True),
+        ("jobs.acme.technology", True),  # generic, however long
+        ("careers.acme.io", True),  # a country code on the list
+        ("careers.acme.ca", False),  # a country code not on it
+        ("careers.acme.co.uk", False),
+        ("careers.wa.state.us", True),
+    ],
+)
+def test_generic_or_listed_tld(host, kept):
+    assert cc.generic_or_listed_tld(host, ["us", "io", "co", "ai"]) is kept
