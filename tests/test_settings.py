@@ -199,6 +199,13 @@ def test_a_nan_max_rate_in_the_file_is_rejected(tmp_path):
         settings.load(p, environ={})
 
 
+@pytest.mark.parametrize("value", ["inf", "nan", "-1", "1e12"])
+def test_a_bad_retry_after_hours_names_the_variable(tmp_path, value):
+    # inf and huge values would pass "ge=0", then overflow timedelta(hours=...) in discover
+    with pytest.raises(settings.SettingsError, match="JOBHUNT_DISCOVER_RETRY_AFTER_HOURS"):
+        settings.load(tmp_path / "nope.yaml", environ={"JOBHUNT_DISCOVER_RETRY_AFTER_HOURS": value})
+
+
 def test_max_per_term_from_the_file_and_json_in_the_environment(tmp_path):
     p = tmp_path / "settings.yaml"
     p.write_text("fetch:\n  max_per_term:\n    amazon: 9900\n")

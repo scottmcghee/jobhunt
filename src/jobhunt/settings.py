@@ -136,7 +136,8 @@ class DiscoverSettings(_Section):
     """`python -m jobhunt.discover`: how often a careers host that failed for now is tried again."""
 
     max_attempts: int = Field(3, ge=1)  # surveys of a host that stays unreachable
-    retry_after_hours: float = Field(24.0, ge=0)  # between two surveys of such a host
+    # between two surveys of such a host; capped at 100 years so timedelta(hours=...) can't overflow
+    retry_after_hours: float = Field(24.0, ge=0, le=24 * 365 * 100)
 
 
 class UsajobsSettings(_Section):
