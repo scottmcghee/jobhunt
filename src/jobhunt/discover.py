@@ -25,9 +25,10 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
   without a request. Results are cached per host in ``data/discovery/hosts.json``, so a rerun only
   visits new hosts. A host that failed for now (no answer, or 5xx or 429) is tried again on a later
   run, a day or more after its last try, up to three tries in all (``discover`` in settings.yaml
-  changes both); ``--refresh`` visits every host again. ``discover.survey_workers`` hosts are
-  surveyed at once, each one request at a time; ``--limit N`` surveys at most N this run, least
-  recently tried first, and leaves the rest for the next.
+  changes both), except one with no DNS record, which is settled after one try; ``--refresh``
+  visits every host again. ``discover.survey_workers`` hosts are surveyed at once, each one
+  request at a time; ``--limit N`` surveys at most N this run, least recently tried first, and
+  leaves the rest for the next.
 
 ``--check`` fetches the first page of each new board and drops those with no open postings, as
 ``python -m jobhunt.slugs --check`` does; the unchecked list is written first, so an interrupted
