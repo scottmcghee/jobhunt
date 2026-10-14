@@ -8,6 +8,7 @@
 - scores.jsonl : every ScoredJob, appended once per job.
 - applications.jsonl : applied/outcome events, appended (see applications.py).
 - labels.jsonl : the candidate's own scores for a sample of jobs; evals.jsonl : eval runs.
+- dismissed.jsonl : closed/passed/restore marks, appended; the latest per job wins.
 - output/      : one Markdown letter per generated job.
 """
 
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from jobhunt.applications import Event
 from jobhunt.evaluate import Label
-from jobhunt.schema import Job, Letter, ScoredJob
+from jobhunt.schema import Dismissal, Job, Letter, ScoredJob
 
 log = logging.getLogger(__name__)
 
@@ -158,6 +159,15 @@ def load_scores(data_dir: Path) -> list[ScoredJob]:
 
 def load_application_events(data_dir: Path) -> list[Event]:
     return [Event.model_validate(r) for r in read_jsonl(data_dir / "applications.jsonl")]
+
+
+def load_dismissed(data_dir: Path) -> dict[str, Dismissal]:
+    """Jobs marked closed or passed, by key: each job's latest mark, unless it was a restore."""
+    latest = {
+        mark.job_key: mark
+        for mark in (Dismissal.model_validate(r) for r in read_jsonl(data_dir / "dismissed.jsonl"))
+    }
+    return {key: mark for key, mark in latest.items() if mark.kind != "restore"}
 
 
 def load_labels(data_dir: Path) -> dict[str, Label]:

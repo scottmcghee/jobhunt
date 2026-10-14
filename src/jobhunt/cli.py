@@ -8,7 +8,8 @@ cover letters for the top scorers from the pre-written modules in config/kit/.
     jobhunt fetch   [--company NAME] [--dry-run] [--resume] [--workers N] [--per-host N]
                                                      pull postings, filter, record new ones
     jobhunt score   [--limit N] [--rescore]          score unscored jobs with Claude
-    jobhunt list    [--min-score N] [--hide-applied] show scored jobs and their keys
+    jobhunt list    [--min-score N] [--hide-applied] [--show-dismissed]
+                                                     show scored jobs and their keys
     jobhunt letter  [--min-score N] [--job KEY] [--force]
                                                      letters for high scorers that have none yet
     jobhunt run     [--workers N] [--per-host N]     fetch -> score -> letter
@@ -16,6 +17,9 @@ cover letters for the top scorers from the pre-written modules in config/kit/.
                                                      record an application to a found job
     jobhunt outcome KEY STATUS [--date D]            record what came of it
     jobhunt applications                             each application, and response rates
+    jobhunt closed  KEY [KEY ...]                    the posting is gone: hide it from list
+    jobhunt pass    KEY [KEY ...] [--note TEXT]      you won't apply: hide it from list
+    jobhunt restore KEY [KEY ...]                    undo closed or pass
     jobhunt label   [--sample N]                     score a sample of jobs yourself
     jobhunt eval    [--rescore]                      how well the scorer agrees with you
 
@@ -45,7 +49,7 @@ from jobhunt import filter as jfilter
 from jobhunt.generate import generate_letter
 from jobhunt.llm import Completer, backend_name, make_completer, model_name
 from jobhunt.runner import BoardRunner
-from jobhunt.schema import Company, Job, ScoredJob
+from jobhunt.schema import Company, Dismissal, Job, ScoredJob
 from jobhunt.score import SYSTEM as SCORE_SYSTEM
 from jobhunt.score import build_user_prompt, score_job
 from jobhunt.sources import fetch_company, rate_group
@@ -447,7 +451,10 @@ def _model_label(llm_settings: settings.LLMSettings) -> str:
 def cmd_score(args: argparse.Namespace, data_dir: Path, complete: Completer | None = None) -> int:
     jobs = storage.load_jobs(data_dir)
     scored_keys = {s.job.key for s in storage.load_scores(data_dir)}
-    todo = [j for j in jobs if args.rescore or j.key not in scored_keys]
+    dismissed = storage.load_dismissed(data_dir)
+    todo = [
+        j for j in jobs if (args.rescore or j.key not in scored_keys) and j.key not in dismissed
+    ]
     if args.limit:
         todo = todo[: args.limit]
     if not todo:
@@ -482,8 +489,11 @@ def cmd_letter(
     scored = storage.load_scores(data_dir)
     # Keep the latest score per job if rescored.
     latest = {s.job.key: s for s in scored}
-    targets = [s for s in latest.values() if s.score.score >= threshold]
-    if args.job:
+    dismissed = storage.load_dismissed(data_dir)
+    targets = [
+        s for s in latest.values() if s.score.score >= threshold and s.job.key not in dismissed
+    ]
+    if args.job:  # named: written even if closed or passed
         targets = [s for s in latest.values() if s.job.key == args.job]
     if not targets:
         print(f"no jobs at or above {threshold}/10.")
@@ -527,10 +537,37 @@ def cmd_list(args: argparse.Namespace, data_dir: Path) -> int:
     if args.hide_applied:
         applied = {a.job_key for a in apps.fold(storage.load_application_events(data_dir))}
         rows = [s for s in rows if s.job.key not in applied]
+    dismissed = storage.load_dismissed(data_dir)
+    hidden = 0
+    if not args.show_dismissed:
+        hidden = sum(s.job.key in dismissed for s in rows)
+        rows = [s for s in rows if s.job.key not in dismissed]
     for s in rows:
+        mark = f"[{dismissed[s.job.key].kind}] " if s.job.key in dismissed else ""
         print(f"{s.score.score:>2}/10  {s.job.company:<14} {s.job.title[:55]:<55} {s.job.key}")
-        print(f"        {s.job.url}")
-    print(f"\n{len(rows)} scored job(s).")
+        print(f"        {mark}{s.job.url}")
+    note = f" ({hidden} closed or passed hidden; --show-dismissed shows them)" if hidden else ""
+    print(f"\n{len(rows)} scored job(s).{note}")
+    return 0
+
+
+def cmd_dismiss(args: argparse.Namespace, data_dir: Path) -> int:
+    """`closed`, `pass` and `restore`: append a mark for each key (all checked first)."""
+    kind = {"closed": "closed", "pass": "passed", "restore": "restore"}[args.cmd]
+    known = {j.key: j for j in storage.load_jobs(data_dir)}
+    if unknown := [k for k in args.keys if k not in known]:
+        hint = "`jobhunt list --show-dismissed` shows keys"
+        print(f"not a job jobhunt has found: {', '.join(unknown)} ({hint})", file=sys.stderr)
+        return 2
+    dismissed = storage.load_dismissed(data_dir)
+    if kind == "restore" and (unmarked := [k for k in args.keys if k not in dismissed]):
+        print(f"not marked closed or passed: {', '.join(unmarked)}", file=sys.stderr)
+        return 2
+    for key in dict.fromkeys(args.keys):
+        mark = Dismissal(job_key=key, kind=kind, date=_today(), note=getattr(args, "note", ""))
+        storage.append_jsonl(data_dir / "dismissed.jsonl", mark.model_dump())
+        job = known[key]
+        print(f"{kind}: {job.company}: {job.title}")
     return 0
 
 
@@ -872,6 +909,18 @@ def build_parser() -> argparse.ArgumentParser:
     li = sub.add_parser("list", help="show scored jobs and their keys")
     li.add_argument("--min-score", type=int, metavar="N", help="hide jobs scoring below N")
     li.add_argument("--hide-applied", action="store_true", help="hide jobs already applied to")
+    show_help = "also show jobs marked closed or passed"
+    li.add_argument("--show-dismissed", action="store_true", help=show_help)
+
+    for name, help_text in [
+        ("closed", "mark jobs whose postings are gone; list hides them"),
+        ("pass", "mark jobs you won't apply to; list hides them"),
+        ("restore", "undo closed or pass"),
+    ]:
+        dm = sub.add_parser(name, help=help_text)
+        dm.add_argument("keys", nargs="+", metavar="KEY", help="job keys, as `jobhunt list` shows")
+        if name == "pass":
+            dm.add_argument("--note", default="", help="why, for your own reference")
 
     date_help = "the day it happened, YYYY-MM-DD (default: today, UTC)"
     ad = sub.add_parser("applied", help="record an application to a job jobhunt found")
@@ -959,6 +1008,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_eval(args, args.data_dir)
         if args.cmd == "list":
             return cmd_list(args, args.data_dir)
+        if args.cmd in ("closed", "pass", "restore"):
+            return cmd_dismiss(args, args.data_dir)
         if args.cmd == "run":
             return cmd_run(args, args.data_dir, args.output_dir)
     except config.ConfigMissing as e:

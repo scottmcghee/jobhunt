@@ -119,3 +119,14 @@ class Letter(BaseModel):
     text: str
     model: str
     generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class Dismissal(BaseModel):
+    """A job marked so `jobhunt list` hides it: its posting has ``closed``, or the candidate has
+    ``passed`` on it. ``restore`` undoes either; the latest mark for a job wins."""
+
+    job_key: str
+    kind: Literal["closed", "passed", "restore"]
+    date: str  # YYYY-MM-DD, UTC
+    note: str = ""
+    recorded_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
