@@ -20,7 +20,7 @@ import pytest
 import respx
 
 from jobhunt import cli, storage, throttle
-from jobhunt.schema import Company, Score, ScoredJob
+from jobhunt.schema import Company, Job, Score, ScoredJob
 from tests.conftest import CONFIG_DIR, make_completer
 
 
@@ -1975,3 +1975,275 @@ def test_restore_checks_every_key_before_marking_any(tmp_path, scored_job, capsy
     assert _applications(tmp_path, "restore", key, second.job.key) == 2
     assert second.job.key in capsys.readouterr().err
     assert [(e["job_key"], e["kind"]) for e in _dismissed(tmp_path)] == [(key, "closed")]
+
+
+# --------------------------------------------------------------------------- closed by fetch
+
+
+def _one_board(tmp_path, ats="greenhouse", slug="live"):
+    p = tmp_path / "companies.yaml"
+    p.write_text(f"companies:\n  - name: Live\n    ats: {ats}\n    slug: {slug}\n")
+    return p
+
+
+def _listing(fixture_json, *drop):
+    page = fixture_json("greenhouse_jobs.json")
+    page["jobs"] = [j for j in page["jobs"] if j["id"] not in drop]
+    return httpx.Response(200, json=page)
+
+
+def _marks(tmp_path):
+    return storage.load_dismissed(tmp_path / "data")
+
+
+KEY = "greenhouse:live:1001"  # the fixture posting that passes the filter
+
+
+@respx.mock
+def test_a_job_gone_from_its_board_two_fetches_in_a_row_is_closed(tmp_path, fixture_json, capsys):
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=_listing(fixture_json, 1001))
+    assert _fetch(tmp_path, companies) == 0
+    assert KEY not in _marks(tmp_path)  # one miss could be a listing that shifted while paged
+    assert _fetch(tmp_path, companies) == 0
+    mark = _marks(tmp_path)[KEY]
+    assert (mark.kind, mark.by) == ("closed", "fetch")
+    assert "1 job(s) closed" in capsys.readouterr().out
+
+
+@respx.mock
+def test_a_job_seen_again_resets_its_count(tmp_path, fixture_json):
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    for drop in ((1001,), (), (1001,)):
+        route.mock(return_value=_listing(fixture_json, *drop))
+        assert _fetch(tmp_path, companies) == 0
+    assert KEY not in _marks(tmp_path)
+
+
+@respx.mock
+def test_a_job_closed_by_fetch_that_reappears_is_restored(tmp_path, fixture_json, capsys):
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=_listing(fixture_json, 1001))
+    for _ in range(2):
+        assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=_listing(fixture_json))
+    capsys.readouterr()
+    assert _fetch(tmp_path, companies) == 0
+    assert KEY not in _marks(tmp_path) and "1 restored" in capsys.readouterr().out
+
+
+@respx.mock
+def test_your_own_marks_are_left_alone(tmp_path, fixture_json):
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    assert cli.main(["--data-dir", str(tmp_path / "data"), "pass", KEY]) == 0
+    assert _fetch(tmp_path, companies) == 0  # still listed: not restored
+    assert _marks(tmp_path)[KEY].kind == "passed"
+    assert cli.main(["--data-dir", str(tmp_path / "data"), "restore", KEY]) == 0
+    assert cli.main(["--data-dir", str(tmp_path / "data"), "closed", KEY]) == 0
+    route.mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0  # listed again, but you closed it: left closed
+    assert (_marks(tmp_path)[KEY].kind, _marks(tmp_path)[KEY].by) == ("closed", "you")
+
+
+@respx.mock
+def test_a_failed_fetch_or_a_dry_run_counts_no_miss(tmp_path, fixture_json):
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=httpx.Response(500))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=_listing(fixture_json, 1001))
+    assert _fetch(tmp_path, companies, "--dry-run") == 0
+    assert _fetch(tmp_path, companies) == 0
+    assert KEY not in _marks(tmp_path)  # only one real miss so far
+    assert storage.MissLedger(tmp_path / "data" / "job_misses.json").counts == {KEY: 1}
+
+
+@respx.mock
+def test_close_after_misses_comes_from_settings(tmp_path, fixture_json, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_FETCH_CLOSE_AFTER_MISSES", "1")
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=_listing(fixture_json, 1001))
+    assert _fetch(tmp_path, companies) == 0
+    assert _marks(tmp_path)[KEY].by == "fetch"
+
+
+def test_search_sources_and_truncated_listings_are_not_complete(fixture_json):
+    from jobhunt.sources import _partial, listing_is_complete
+
+    site = Company(name="X", ats="icims_careers", slug="careers.example.com")
+    job = Job(source="icims_careers", company="X", company_slug="careers.example.com", external_id="1",
+              title="t", url="https://careers.example.com/jobs/1")
+    amazon = Company(name="Amazon", ats="amazon", slug="amazon")
+    assert not listing_is_complete(amazon, [job])
+    board = Company(name="Live", ats="greenhouse", slug="live")
+    assert not listing_is_complete(board, [])  # an empty answer may be a glitch
+    assert listing_is_complete(site, [job] * 5)
+    _partial.note(site.key, "stopped at the page guard")  # what the source notes when it stops short
+    assert not listing_is_complete(site, [job] * 5)
+    assert listing_is_complete(site, [job] * 5)  # the note was this fetch's alone
+
+
+@respx.mock
+def test_a_pruned_boards_jobs_are_closed(tmp_path, fixture_json, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_FETCH_PRUNE_AFTER_404S", "1")
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=httpx.Response(404))
+    assert _fetch(tmp_path, companies) == 0
+    mark = _marks(tmp_path)[KEY]
+    assert (mark.kind, mark.by) == ("closed", "fetch") and "removed" in mark.note
+
+
+def test_list_tags_jobs_closed_by_fetch(tmp_path, scored_job, capsys):
+    data = tmp_path / "data"
+    storage.append_jsonl(data / "jobs.jsonl", scored_job.job.model_dump())
+    storage.append_jsonl(data / "scores.jsonl", scored_job.model_dump())
+    from jobhunt.schema import Dismissal
+    mark = Dismissal(job_key=scored_job.job.key, kind="closed", date="2026-10-14", by="fetch")
+    storage.append_jsonl(data / "dismissed.jsonl", mark.model_dump())
+    assert cli.main(["--data-dir", str(data), "list", "--show-dismissed"]) == 0
+    assert "[closed by fetch]" in capsys.readouterr().out
+
+
+def _record_job(tmp_path, **kw):
+    job = Job(company="Acme", title="Director of Platform Engineering", url="https://x/1", **kw)
+    storage.append_jsonl(tmp_path / "data" / "jobs.jsonl", job.model_dump())
+    return job.key
+
+
+@respx.mock
+def test_a_workday_listing_at_its_cap_closes_nothing(tmp_path):
+    companies = _one_board(tmp_path, "workday", "acme/ext\n    datacenter: wd5")
+    key = _record_job(tmp_path, source="workday", company_slug="acme/ext", external_id="R9999")
+
+    def page(request):
+        offset = json.loads(request.content)["offset"]
+        posts = [{"title": "Cashier", "externalPath": f"/job/x/Cashier_R{offset + i}"} for i in range(20)]
+        return httpx.Response(200, json={"total": 2000 if offset == 0 else 0, "jobPostings": posts})
+
+    respx.post("https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/ext/jobs").mock(side_effect=page)
+    for _ in range(2):
+        assert _fetch(tmp_path, companies) == 0
+    assert key not in _marks(tmp_path)  # Workday reports at most 2,000: R9999 may be past them
+
+
+@respx.mock
+def test_a_successfactors_sitemap_robots_txt_rules_out_closes_nothing(tmp_path, monkeypatch):
+    companies = _one_board(tmp_path, "successfactors", "jobs.acme.com")
+    key = _record_job(tmp_path, source="successfactors", company_slug="jobs.acme.com", external_id="123")
+    respx.get("https://jobs.acme.com/robots.txt").mock(return_value=httpx.Response(503))
+    for _ in range(2):
+        assert _fetch(tmp_path, companies) == 0
+    assert key not in _marks(tmp_path)
+
+
+@respx.mock
+def test_a_radancy_sitemap_that_fails_closes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_FETCH_TRANSIENT_RETRIES", "0")
+    monkeypatch.setattr(throttle.ThrottledTransport, "_backoff", lambda self, attempt: None)
+    companies = _one_board(tmp_path, "radancy", "jobs.acme.com")
+    key = _record_job(tmp_path, source="radancy", company_slug="jobs.acme.com", external_id="222")
+    ns = "http://www.sitemaps.org/schemas/sitemap/0.9"
+    respx.get("https://jobs.acme.com/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://jobs.acme.com/sitemap.xml").mock(return_value=httpx.Response(200, text=(
+        f'<sitemapindex xmlns="{ns}"><sitemap><loc>https://jobs.acme.com/s1.xml</loc></sitemap>'
+        f'<sitemap><loc>https://jobs.acme.com/s2.xml</loc></sitemap></sitemapindex>')))
+    respx.get("https://jobs.acme.com/s1.xml").mock(return_value=httpx.Response(200, text=(
+        f'<urlset xmlns="{ns}"><url><loc>https://jobs.acme.com/job/seattle/cashier/1/111</loc></url></urlset>')))
+    respx.get("https://jobs.acme.com/s2.xml").mock(return_value=httpx.Response(500))  # holds job 222
+    for _ in range(2):
+        assert _fetch(tmp_path, companies) == 0
+    assert key not in _marks(tmp_path)
+
+
+@respx.mock
+def test_a_job_you_restored_after_fetch_closed_it_stays_open(tmp_path, fixture_json):
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=_listing(fixture_json, 1001))
+    for _ in range(2):
+        assert _fetch(tmp_path, companies) == 0
+    assert _marks(tmp_path)[KEY].by == "fetch"
+    assert cli.main(["--data-dir", str(tmp_path / "data"), "restore", KEY]) == 0
+    for _ in range(2):
+        assert _fetch(tmp_path, companies) == 0
+    assert KEY not in _marks(tmp_path)  # your restore is your own mark: fetch leaves it alone
+    assert KEY not in storage.MissLedger(tmp_path / "data" / "job_misses.json").counts
+
+
+@respx.mock
+def test_an_empty_listing_closes_nothing(tmp_path, fixture_json, monkeypatch):
+    monkeypatch.setenv("JOBHUNT_FETCH_CLOSE_AFTER_MISSES", "1")
+    companies = _one_board(tmp_path)
+    route = respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, companies) == 0
+    route.mock(return_value=httpx.Response(200, json={"jobs": []}))  # a glitch, or a board emptied
+    assert _fetch(tmp_path, companies) == 0
+    assert KEY not in _marks(tmp_path)
+
+
+@respx.mock
+def test_job_misses_are_saved_only_when_they_change(tmp_path, fixture_json, monkeypatch):
+    companies = _two_company_config(tmp_path)
+    respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    dead = respx.get(GH.format("dead")).mock(return_value=_listing(fixture_json))
+    saves = []
+    real = storage.MissLedger.save
+    monkeypatch.setattr(storage.MissLedger, "save", lambda self: (saves.append(self.path.name), real(self)))
+    assert _fetch(tmp_path, companies) == 0  # no board has recorded jobs yet
+    assert _fetch(tmp_path, companies) == 0  # every recorded job listed again: nothing changed
+    assert "job_misses.json" not in saves
+    dead.mock(return_value=_listing(fixture_json, 1001))
+    assert _fetch(tmp_path, companies) == 0
+    assert saves.count("job_misses.json") == 1  # one board's count changed
+
+
+@respx.mock
+def test_a_board_listed_twice_counts_one_miss_per_fetch(tmp_path, fixture_json):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n  - name: Live\n    ats: greenhouse\n    slug: live\n"
+        "  - name: Live again\n    ats: greenhouse\n    slug: live\n"
+    )
+    key = _record_job(tmp_path, source="greenhouse", company_slug="live", external_id="999999")
+    respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, p) == 0  # one fetch: one miss, however many entries name the board
+    assert key not in _marks(tmp_path)
+    assert storage.MissLedger(tmp_path / "data" / "job_misses.json").counts[key] == 1
+
+
+@respx.mock
+def test_a_workday_board_at_its_cap_listed_twice_is_fetched_once_and_closes_nothing(tmp_path, capsys):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n  - name: Acme\n    ats: workday\n    slug: acme/ext\n    datacenter: wd5\n"
+        "  - name: Acme again\n    ats: workday\n    slug: acme/ext\n    datacenter: wd5\n"
+    )
+    key = _record_job(tmp_path, source="workday", company_slug="acme/ext", external_id="R9999")
+    offsets = []
+
+    def page(request):
+        offsets.append(offset := json.loads(request.content)["offset"])
+        posts = [{"title": "Cashier", "externalPath": f"/job/x/Cashier_R{offset + i}"} for i in range(20)]
+        return httpx.Response(200, json={"total": 2000 if offset == 0 else 0, "jobPostings": posts})
+
+    respx.post("https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/ext/jobs").mock(side_effect=page)
+    for _ in range(2):
+        offsets.clear()
+        assert _fetch(tmp_path, p, "--per-host", "4") == 0
+        assert offsets and len(offsets) == len(set(offsets))  # each page requested once, not twice
+    assert key not in _marks(tmp_path)  # the second entry can't hide the first's cut-short listing
+    assert "skipped 1 duplicate board entry(ies)" in capsys.readouterr().err

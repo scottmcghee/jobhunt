@@ -123,10 +123,12 @@ class Letter(BaseModel):
 
 class Dismissal(BaseModel):
     """A job marked so `jobhunt list` hides it: its posting has ``closed``, or the candidate has
-    ``passed`` on it. ``restore`` undoes either; the latest mark for a job wins."""
+    ``passed`` on it. ``restore`` undoes either; the latest mark for a job wins. ``by`` is who
+    marked it: ``you``, or ``fetch`` when the posting left its board (fetch undoes only its own)."""
 
     job_key: str
     kind: Literal["closed", "passed", "restore"]
     date: str  # YYYY-MM-DD, UTC
     note: str = ""
+    by: Literal["you", "fetch"] = "you"
     recorded_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

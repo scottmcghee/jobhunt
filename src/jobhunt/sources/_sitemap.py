@@ -31,6 +31,7 @@ from xml.etree import ElementTree
 import httpx
 
 from jobhunt.schema import Company, Job
+from jobhunt.sources import _partial
 from jobhunt.sources._html import to_text
 
 log = logging.getLogger(__name__)
@@ -114,6 +115,7 @@ def sitemap_urls(company: Company, client: httpx.Client, rules: RobotFileParser)
     A sitemap that fails is skipped with a warning, unless no starting one (each robots.txt
     names, or /sitemap.xml) answers: then the first one's error is raised, so a 404 means the
     board is gone (an HTTPStatusError), and an answer that isn't a sitemap is a ValueError.
+    A skipped sitemap (failed, or past the limit) notes the listing as partial (``_partial``).
     """
     host = company.slug.lower()
     named = [u for u in rules.site_maps() or [] if on_host(u, host)]
@@ -138,6 +140,7 @@ def sitemap_urls(company: Company, client: httpx.Client, rules: RobotFileParser)
                     raise
                 failed.append(e)
             log.warning("%s %s: skipped sitemap %s (%s)", company.ats, company.slug, url, e)
+            _partial.note(company.key, f"skipped sitemap {url}")
             continue
         answered = answered or url in starts
         locs = [(loc.text or "").strip() for loc in root.iter(f"{ns}loc")]
@@ -152,6 +155,7 @@ def sitemap_urls(company: Company, client: httpx.Client, rules: RobotFileParser)
             "%s %s: read %d sitemaps; skipped %d more", company.ats, company.slug, len(seen),
             len(queue),
         )
+        _partial.note(company.key, f"skipped {len(queue)} sitemaps past the limit")
     return urls
 
 

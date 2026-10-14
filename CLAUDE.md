@@ -41,7 +41,7 @@ src/jobhunt/
   config.py           # load and validate companies.yaml, preferences.yaml, profile and Kit
   settings.py         # tunables: defaults < config/settings.yaml < JOBHUNT_<SECTION>_<KEY> env < CLI flags
   sources/            # one module per source; __init__.py dispatches (fetch_company) and assigns rate groups
-                      # _html.py, _postings.py, _rate.py, _search.py, _sitemap.py are shared helpers
+                      # _html.py, _partial.py, _postings.py, _rate.py, _search.py, _sitemap.py are shared helpers
   filter.py           # pure: list[Job] x Preferences -> list[Job]
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
@@ -104,6 +104,8 @@ Every source is a module under `sources/`, an `ATSName` in `schema.py`, and an e
 Endpoints, slug formats, gone-board signals and rate caps for each source are in [docs/sources.md](docs/sources.md).
 
 **Dead boards are pruned.** `jobhunt fetch` counts consecutive fetches that find a board gone (`cli._board_gone`: a 404, or a source's own signal) in `data/misses.json`. A successful fetch resets the count; after `fetch.prune_after_404s` in a row (default 3) the entry is removed from `config/companies.yaml`. `--dry-run` changes neither.
+
+**Closed jobs are marked.** After a board's full listing (`sources.listing_is_complete`: not a search source's, not one its source noted as cut short with `sources/_partial.py`, and not an empty one, which may be a glitch, so an emptied board's jobs close only when it's pruned), `fetch` counts each recorded job it left out in `data/job_misses.json`; after `fetch.close_after_misses` in a row (default 2) the job gets a `closed` mark `by="fetch"` in `data/dismissed.jsonl`, undone if it reappears. Marks by the user, a restore included, are never changed. A pruned board's jobs are closed too.
 
 **Companies with no supported ATS** (e.g., Apple) are case-by-case and may need crawling HTML rather than calling an API.
 

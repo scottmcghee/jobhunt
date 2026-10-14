@@ -21,6 +21,7 @@ from concurrent.futures import Executor
 import httpx
 
 from jobhunt.schema import Company, Job
+from jobhunt.sources import _partial
 from jobhunt.sources._html import to_text
 from jobhunt.sources._postings import with_ids
 
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 
 PAGE_SIZE = 20  # the API rejects anything larger
 MAX_POSTINGS = 5000  # runaway guard; Workday itself reports at most 2,000
+REPORTED_CAP = 2000  # the most Workday reports: a site reporting this many may have more
 
 
 def _site_url(company: Company) -> str:
@@ -86,18 +88,22 @@ def _list(
     postings, total = _page(company, client, 0)
     if not postings:  # an empty page ends the listing, whatever the total says
         return postings
+    if total >= REPORTED_CAP:
+        _partial.note(company.key, f"Workday reports at most {REPORTED_CAP} postings")
     offsets = range(PAGE_SIZE, min(total, MAX_POSTINGS), PAGE_SIZE)
     if max_pages is not None:
         offsets = offsets[: max_pages - 1]
     if pool is not None:  # every offset is known now, so the rest can go at once
         for page in pool.map(lambda offset: _page(company, client, offset)[0], offsets):
             if not page:  # as in the serial loop; leaving map() cancels the pages not yet started
+                _partial.note(company.key, "an empty page before the reported total")
                 break
             postings += page
         return postings
     for offset in offsets:
         page, _ = _page(company, client, offset)
         if not page:
+            _partial.note(company.key, "an empty page before the reported total")
             break
         postings += page
     return postings

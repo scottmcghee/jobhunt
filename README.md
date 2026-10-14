@@ -164,6 +164,15 @@ jobhunt restore greenhouse:acme:4012399                  # changed your mind
 them; `letter --job KEY` still writes one if you ask. Each command takes several keys at once.
 The marks are appended to `data/dismissed.jsonl`; the latest mark for a job wins.
 
+`fetch` closes jobs for you, too. When a board's full listing leaves out a job you have recorded
+two fetches in a row (`fetch.close_after_misses` in `settings.yaml`), the job is marked closed,
+shown as `[closed by fetch]`; if it comes back, the mark is undone. A board removed for being
+gone closes its jobs the same way. Your own marks are never changed. Sites searched one term at
+a time (Amazon, Apple, Eightfold, Oracle, Phenom, USAJOBS) aren't checked, since a job a search
+didn't return may still be open; mark those with `jobhunt closed`. Nor is a listing cut short
+(a capped or partly read board), or an empty one, which may be a glitch: a board whose postings
+all go closes its jobs only when it's removed, or by hand.
+
 ### 6. Check the scorer
 
 How far can you trust the scores? Score a sample of jobs yourself, then compare:

@@ -35,7 +35,7 @@ from xml.etree import ElementTree
 import httpx
 
 from jobhunt.schema import Company, Job
-from jobhunt.sources import _sitemap
+from jobhunt.sources import _partial, _sitemap
 from jobhunt.sources._html import to_text
 
 log = logging.getLogger(__name__)
@@ -147,6 +147,7 @@ def fetch(
     rules = _sitemap.robots(client, company.slug.lower())
     if not rules.can_fetch(_sitemap.agent(client), _url(company, "/sitemap.xml")):
         log.warning("successfactors %s: robots.txt disallows /sitemap.xml", company.slug)
+        _partial.note(company.key, "robots.txt disallows /sitemap.xml")
         return []
     resp = _sitemap.get_on_host(client, _url(company, "/sitemap.xml"), company.slug.lower(), rules)
     root = _sitemap.parse_xml(resp.content, "the sitemap")
