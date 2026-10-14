@@ -51,7 +51,7 @@ fetch:
   transient_retries: 2
   # Most requests sent per second for a rate group; groups not listed have no cap, except iCIMS
   # Career Sites (0.2/s, from their robots.txt crawl delay; an entry for the host overrides it). Keys are the
-  # group names `fetch -v` prints in its stats (workable, lever, bamboohr, "workday:wd5"), and are
+  # group names `jobhunt -v fetch` prints in its stats (workable, lever, bamboohr, "workday:wd5"), and are
   # case-sensitive; *.eightfold.ai boards share "eightfold", an Eightfold board on its own host
   # has that host, and an Oracle board its tenant host (e.g. eeho.fa.us2.oraclecloud.com). Workable's Cloudflare bans an IP for a
   # minute or so after a burst of about 50 requests in 10 s. Setting the map (here or in

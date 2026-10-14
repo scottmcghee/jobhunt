@@ -60,7 +60,7 @@ class FetchSettings(_Section):
     # is marked closed (jobhunt list hides it; it's restored if it comes back)
     close_after_misses: int = Field(2, ge=1)
     transient_retries: int = Field(2, ge=0)  # retries on 500/502/504, connection errors, timeouts
-    # Most requests sent per second, per rate group: the group names `fetch -v` stats print
+    # Most requests sent per second, per rate group: the names `jobhunt -v fetch` stats print
     # ("workable", "lever", "workday:wd5"); *.eightfold.ai boards share "eightfold", an Eightfold
     # board on its own host has that host, and an Oracle board its tenant host
     # (eeho.fa.us2.oraclecloud.com); case-sensitive. Setting the map replaces it whole, so keep
