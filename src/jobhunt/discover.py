@@ -42,6 +42,7 @@ import itertools
 import json
 import logging
 import re
+import socket
 import threading
 import time
 from collections import Counter
@@ -177,6 +178,7 @@ class _Polite(fingerprint.Polite):
         super().__init__(client, 0)  # the wait is ours, so a stop cuts it short
         self.pause, self.stop = delay, stop
         self.transient = 0
+        self.no_dns = False  # set after the survey: the host has no DNS record
 
     def _fetch(
         self, url: str, follow_redirects: bool, json: dict | None = None
@@ -230,6 +232,17 @@ def _due(
     return "survey" if now - last >= wait else "waiting"
 
 
+def _no_dns_record(host: str) -> bool:
+    """Whether DNS says the host doesn't exist (not a lookup that failed for now)."""
+    try:
+        socket.getaddrinfo(host, 443)
+    except socket.gaierror as e:
+        return e.errno in {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
+    except OSError:
+        return False
+    return False
+
+
 def _survey_one(
     client: httpx.Client, host: str, delay: float, now: datetime | None, stop: threading.Event
 ) -> tuple[fingerprint.Site, _Polite, str]:
@@ -237,6 +250,8 @@ def _survey_one(
     polite = _Polite(client, delay, stop)
     home = f"https://{host}/"
     site = fingerprint.survey_site(polite, home, name_from_host(host), urls=[home])
+    if polite.transient and not site.boards and any("ConnectError" in e for e in polite.errors):
+        polite.no_dns = _no_dns_record(host)  # a host that's gone isn't worth retrying
     return site, polite, (now or datetime.now(UTC)).isoformat()
 
 
@@ -248,6 +263,11 @@ def _entry(
         log.warning("%s: unreachable (%s)", progress, ", ".join(polite.errors) or "5xx or 429")
         if entry is not None and "failures" not in entry:  # refresh: keep its cached boards
             return {**entry, "refresh_failed_at": tried_at}  # and when it was tried, for --limit
+        if polite.no_dns:  # gone: settled, not retried (--refresh tries it again)
+            log.info("%s: no DNS record; not tried again", progress)
+            return {
+                "surveyed_at": tried_at, "platforms": [], "pages": [], "boards": [], "no_dns": True
+            }
         return {
             "failed_at": tried_at,
             "failures": (entry or {}).get("failures", 0) + 1,
@@ -279,7 +299,8 @@ def survey_hosts(
     stops the requests under way first), so an interrupted run keeps what it found. A host that
     found no boards and had a request fail or answer 5xx or 429 (robots.txt included) is cached as a
     failure: it's tried again ``rules.retry_after_hours`` or more later, ``rules.max_attempts``
-    times in all (``rules`` defaults to the settings' defaults). With ``refresh`` every host is
+    times in all (``rules`` defaults to the settings' defaults), unless DNS says the host doesn't
+    exist: then it's settled after one try. With ``refresh`` every host is
     surveyed again, and one that fails keeps its cached boards. Hosts due a survey go least recently
     tried first, so a ``limit`` works through them all over several runs. Hosts under
     ``EXCLUDED_DOMAINS`` are skipped without a request. Each host is stamped with the time it was
