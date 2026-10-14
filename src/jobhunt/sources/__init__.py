@@ -1,4 +1,9 @@
-"""ATS source adapters. Each exposes ``fetch(company, client) -> list[Job]``."""
+"""ATS source adapters. Each exposes ``fetch(company, client) -> list[Job]``.
+
+A source whose successful fetch leaves postings out (a cap, an empty page before the reported
+total, a sitemap skipped or ruled out by robots.txt) says so with ``_partial.note``, so
+``listing_is_complete`` doesn't take the postings it missed as closed.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,7 @@ import httpx
 
 from jobhunt.schema import ATSName, Company, Job
 from jobhunt.sources import (
+    _partial,
     amazon,
     apple,
     ashby,
@@ -73,13 +79,16 @@ SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
 
 def listing_is_complete(company: Company, jobs: Sequence[Job]) -> bool:
     """Whether a successful fetch of the board listed every posting it has, so a recorded job it
-    left out has closed. Not for search sources (a job a search didn't return may still be open),
-    nor for an iCIMS Career Sites listing cut off at its page guard."""
-    if company.ats in SEARCH_FETCHERS:
-        return False
-    if company.ats == "icims_careers":
-        return len(jobs) < icims_careers.PAGE_SIZE * icims_careers.MAX_PAGES
-    return True
+    left out has closed. Call it once per fetch: it consumes the board's note.
+
+    Not for search sources (a job a search didn't return may still be open), nor for a fetch the
+    source noted as partial (``_partial.note``: a cap, an empty page before the reported total, a
+    sitemap skipped or ruled out by robots.txt), nor for an empty listing, which may be a glitch
+    (SmartRecruiters answers an unknown board with no postings): an emptied board's jobs close
+    only when the board is pruned, or by hand.
+    """
+    partial = _partial.take(company.key)
+    return company.ats not in SEARCH_FETCHERS and partial is None and bool(jobs)
 
 
 def fetch_company(
@@ -115,6 +124,7 @@ def fetch_company(
     (BambooHR, Oracle, Apple, Phenom, Radancy, Paradox, Rippling and SuccessFactors only
     descriptions).
     """
+    _partial.take(company.key)  # a note from an earlier fetch that failed isn't this one's
     if company.ats == "usajobs":  # the one source with credentials (key, email); no one else's
         return usajobs.fetch(
             company, client, search, max_pages, wants_body, pool, max_per_term, auth=usajobs_auth

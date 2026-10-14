@@ -77,6 +77,18 @@ The counts live in `data/misses.json`.
 platforms answer an unknown board with an empty result instead of an error. Those boards are
 never removed; `fetch` logs a warning for an empty board instead.
 
+### Closed jobs
+
+After a board's full listing, `fetch` counts each recorded job the listing left out, and closes
+it after `fetch.close_after_misses` fetches in a row. A listing counts as full only if the source
+says nothing was left out: search sources never do, and a source notes a listing it cut short
+(`sources/_partial.py`): Workday reporting its 2,000 cap, SmartRecruiters or iCIMS Career Sites
+past their page guards, a Workday or SmartRecruiters page that comes back empty before the
+reported total, a SuccessFactors sitemap robots.txt rules out, and a Radancy, Paradox or
+SuccessFactors sitemap skipped (failed, or past `MAX_SITEMAPS`). An empty listing isn't trusted
+either, since some platforms answer a glitch or an unknown board with no postings: a board that
+empties closes its jobs only when it's pruned, or by hand.
+
 ## At a glance
 
 | `ats` | Slug | Descriptions | Unknown board | Rate group |
@@ -244,7 +256,7 @@ whose robots.txt disallows everything. A site's pages load scripts from `jibecdn
 - **Rate group:** one per datacenter (`workday:wd5`), since a datacenter's tenants share
   infrastructure.
 - **Limits:** Workday reports a total of at most 2,000 postings, so a bigger site is read only
-  that far.
+  that far, and a listing that reports 2,000 closes no jobs.
 
 ## Rippling
 

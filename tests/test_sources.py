@@ -14,6 +14,7 @@ from jobhunt import throttle
 from jobhunt.filter import check_location, check_title
 from jobhunt.schema import Company, Job
 from jobhunt.sources import (
+    _partial,
     _sitemap,
     amazon,
     apple,
@@ -25,6 +26,7 @@ from jobhunt.sources import (
     greenhouse,
     icims_careers,
     lever,
+    listing_is_complete,
     oracle,
     paradox,
     phenom,
@@ -2973,3 +2975,159 @@ def test_usajobs_a_term_that_hits_the_cap_is_truncated_and_logged(usajobs_compan
 
 def test_usajobs_rate_group(usajobs_company):
     assert rate_group(usajobs_company) == "usajobs" == request_group(httpx.URL(UJ))
+
+
+# ------------------------------------------------------------------ complete listings
+
+
+def _wd_pages(total, reported=None):
+    """Workday listing pages for ``total`` postings, the first reporting ``reported`` (or total)."""
+    def page(request):
+        offset = json.loads(request.content)["offset"]
+        n = max(0, min(20, total - offset))
+        postings = [{"title": "Cashier", "externalPath": f"/job/X/Cashier_R{offset + i}"} for i in range(n)]
+        first = total if reported is None else reported
+        return httpx.Response(200, json={"total": first if offset == 0 else 0, "jobPostings": postings})
+
+    return page
+
+
+@respx.mock
+def test_a_listing_read_to_its_total_is_complete(workday_company, smartrecruiters_company):
+    respx.post(WD + "/jobs").mock(side_effect=_wd_pages(45))
+    respx.get(SR).mock(side_effect=_pages_with_gaps("smartrecruiters", 250, set()))
+    with httpx.Client() as client:
+        for company in (workday_company, smartrecruiters_company):
+            assert listing_is_complete(company, fetch_company(company, client, lambda job: False))
+
+
+@respx.mock
+def test_workday_at_its_reported_cap_is_not_complete(workday_company):
+    # Workday reports at most 2,000 postings: a site that reports that many may have more
+    respx.post(WD + "/jobs").mock(side_effect=_wd_pages(workday.REPORTED_CAP, workday.REPORTED_CAP))
+    with httpx.Client() as client:
+        jobs = fetch_company(workday_company, client, lambda job: False)
+    assert len(jobs) == workday.REPORTED_CAP
+    assert not listing_is_complete(workday_company, jobs)
+
+
+@respx.mock
+def test_smartrecruiters_past_its_guard_is_not_complete(smartrecruiters_company, monkeypatch):
+    monkeypatch.setattr(smartrecruiters, "MAX_POSTINGS", 200)
+    respx.get(SR).mock(side_effect=_pages_with_gaps("smartrecruiters", 250, set()))
+    with httpx.Client() as client:
+        jobs = fetch_company(smartrecruiters_company, client, lambda job: False)
+    assert len(jobs) == 200 and not listing_is_complete(smartrecruiters_company, jobs)
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["serial", "pooled"])
+@pytest.mark.parametrize(("source", "total", "empty"), [("workday", 65, {20}), ("smartrecruiters", 250, {100})])
+@respx.mock
+def test_an_empty_page_before_the_total_is_not_complete(
+    source, total, empty, pooled, workday_company, smartrecruiters_company
+):
+    company, route = {
+        "workday": (workday_company, respx.post(WD + "/jobs")),
+        "smartrecruiters": (smartrecruiters_company, respx.get(SR)),
+    }[source]
+    route.mock(side_effect=_pages_with_gaps(source, total, empty))
+    with httpx.Client() as client, ThreadPoolExecutor(4) as pool:
+        jobs = fetch_company(company, client, lambda job: False, pool=pool if pooled else None)
+    assert jobs and not listing_is_complete(company, jobs)
+
+
+@respx.mock
+def test_icims_careers_at_its_page_guard_is_not_complete_whatever_the_count():
+    site = Company(name="X", ats="icims_careers", slug="careers.example.com")
+
+    def page(request):
+        n = int(request.url.params["page"])
+        ids = [(n - 1) * 100 + i for i in range(100)]
+        if n == 50:
+            ids[0] = ids[0] - 1  # one posting shifted: seen again on the next page
+        rows = [{"data": {"req_id": str(i), "title": "t"}} for i in ids]
+        return httpx.Response(200, json={"jobs": rows, "totalCount": 12000})
+
+    respx.get(IC).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = fetch_company(site, client)
+    assert len(jobs) == 9999  # under the guard's 10,000, yet postings 10,000..11,999 weren't read
+    assert not listing_is_complete(site, jobs)
+
+
+@respx.mock
+def test_icims_careers_read_to_its_total_is_complete(icims_careers_company, fixture_json):
+    pages = _icims_pages(fixture_json, [100, 100, 7])
+    respx.get(IC).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
+    with httpx.Client() as client:
+        jobs = fetch_company(icims_careers_company, client)
+    assert listing_is_complete(icims_careers_company, jobs)
+
+
+@pytest.mark.parametrize("robots", [httpx.Response(200, text="User-agent: *\nDisallow: /sitemap.xml\n"), httpx.Response(503)])
+@respx.mock
+def test_successfactors_sitemap_ruled_out_by_robots_txt_is_not_complete(sf_company, robots):
+    _sf_routes(robots=robots)
+    with httpx.Client() as client:
+        jobs = fetch_company(sf_company, client)
+    assert not listing_is_complete(sf_company, jobs)
+    assert _partial.take(sf_company.key) is None  # consumed
+
+
+@respx.mock
+def test_successfactors_sitemap_read_is_complete(sf_company):
+    _sf_routes(sitemap="successfactors_feed.xml", pages={})
+    with httpx.Client() as client:
+        jobs = fetch_company(sf_company, client)
+    assert jobs and listing_is_complete(sf_company, jobs)
+
+
+@respx.mock
+def test_a_skipped_sitemap_is_not_complete(paradox_company):
+    _paradox_routes()
+    with httpx.Client() as client:
+        assert listing_is_complete(paradox_company, fetch_company(paradox_company, client, lambda j: False))
+        respx.get(PX + "/sitemap-pages.xml").mock(return_value=httpx.Response(500))
+        jobs = fetch_company(paradox_company, client, lambda j: False)
+    assert len(jobs) == 3 and not listing_is_complete(paradox_company, jobs)
+
+
+@respx.mock
+def test_sitemaps_past_the_limit_are_not_complete(paradox_company, monkeypatch):
+    monkeypatch.setattr(_sitemap, "MAX_SITEMAPS", 2)
+    _paradox_routes()
+    with httpx.Client() as client:
+        jobs = fetch_company(paradox_company, client, lambda j: False)
+    assert len(jobs) == 3 and not listing_is_complete(paradox_company, jobs)
+
+
+@respx.mock
+def test_radancy_failed_child_sitemap_is_not_complete(radancy_company):
+    ns = "http://www.sitemaps.org/schemas/sitemap/0.9"
+    respx.get(RD + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(RD + "/sitemap.xml").mock(return_value=httpx.Response(200, text=(
+        f'<sitemapindex xmlns="{ns}"><sitemap><loc>{RD}/s1.xml</loc></sitemap>'
+        f'<sitemap><loc>{RD}/s2.xml</loc></sitemap></sitemapindex>')))
+    respx.get(RD + "/s1.xml").mock(return_value=_urlset(RD + "/job/seattle/cashier/1/111"))
+    respx.get(RD + "/s2.xml").mock(return_value=httpx.Response(500))  # holds other postings
+    with httpx.Client() as client:
+        jobs = fetch_company(radancy_company, client, lambda j: False)
+    assert [j.external_id for j in jobs] == ["111"]
+    assert not listing_is_complete(radancy_company, jobs)
+
+
+@respx.mock
+def test_an_earlier_fetchs_note_does_not_outlive_it(gh_company, fixture_json):
+    _partial.note(gh_company.key, "left over from a fetch that then failed")
+    respx.get(GH_JOBS_URL).mock(return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json")))
+    with httpx.Client() as client:
+        jobs = fetch_company(gh_company, client)
+    assert listing_is_complete(gh_company, jobs)
+
+
+def test_search_sources_and_empty_listings_are_not_complete(gh_company):
+    job = Job(source="greenhouse", company="X", company_slug="examplecorp", external_id="1", title="t",
+              url="https://x/1")
+    assert listing_is_complete(gh_company, [job])
+    assert not listing_is_complete(gh_company, [])  # an empty answer may be a glitch: not trusted
+    assert not listing_is_complete(Company(name="Amazon", ats="amazon", slug="amazon"), [job])

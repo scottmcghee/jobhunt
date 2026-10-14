@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 import httpx
 
 from jobhunt.schema import Company, Job
+from jobhunt.sources import _partial
 from jobhunt.sources._html import to_text
 from jobhunt.sources._postings import with_ids
 from jobhunt.sources._rate import RATE
@@ -84,6 +85,7 @@ def fetch(company: Company, client: httpx.Client) -> list[Job]:
             log.warning(
                 "icims_careers %s: kept the first %d of %d postings", company.slug, len(rows), total
             )
+            _partial.note(company.key, f"read the first {len(rows)} of {total} postings")
             break
         page += 1
         more, _ = _page(company, client, page)

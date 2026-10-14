@@ -324,13 +324,16 @@ class _ClosedJobs:
 
     After each board's full listing, a recorded job it leaves out gets one more miss; after
     ``close_after`` in a row it's marked closed (``by="fetch"``), and one that comes back is
-    restored. Jobs you marked yourself are left alone.
+    restored. Jobs you marked yourself are left alone, a restore included.
     """
 
     def __init__(self, data_dir: Path, close_after: int):
         self.path = data_dir / "dismissed.jsonl"
         self.misses = storage.MissLedger(data_dir / "job_misses.json")
         self.marks = storage.load_dismissed(data_dir)
+        marks = map(Dismissal.model_validate, storage.read_jsonl(self.path))
+        latest = {m.job_key: m for m in marks}
+        self.you_restored = {k for k, m in latest.items() if m.kind == "restore" and m.by == "you"}
         self.close_after = close_after
         self.by_board: dict[str, set[str]] = {}
         for job in storage.load_jobs(data_dir):
@@ -338,17 +341,22 @@ class _ClosedJobs:
         self.closed = self.restored = 0
 
     def board(self, company: Company, listed: set[str]) -> None:
-        """Count one full listing of the board, and save."""
-        for key in sorted(self.by_board.get(company.key, ())):
+        """Count one full listing of the board, and save if a count changed."""
+        keys = self.by_board.get(company.key)
+        if not keys:
+            return
+        before = {key: self.misses.counts.get(key) for key in keys}
+        for key in sorted(keys):
             mark = self.marks.get(key)
-            if key in listed:
+            if key in listed or key in self.you_restored:  # you said it's open: left open
                 self.misses.clear(key)
                 if mark is not None and mark.kind == "closed" and mark.by == "fetch":
                     self._mark(key, "restore", "back on its board")
                     self.restored += 1
             elif mark is None and (n := self.misses.miss(key)) >= self.close_after:
                 self._close(key, f"gone from its board {n} fetches in a row")
-        self.misses.save()
+        if any(self.misses.counts.get(key) != n for key, n in before.items()):
+            self.misses.save()
 
     def board_removed(self, board_key: str) -> None:
         """The board left companies.yaml (gone): its recorded jobs can't be applied to."""

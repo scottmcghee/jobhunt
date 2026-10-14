@@ -13,6 +13,7 @@ import pytest
 
 from jobhunt import config, settings
 from jobhunt.schema import Company, Job, Score, ScoredJob
+from jobhunt.sources import _partial
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config.example"
@@ -30,6 +31,12 @@ def _no_settings_env(monkeypatch):
     """Settings from your shell (JOBHUNT_FETCH_WORKERS=...) don't leak in; a test sets its own."""
     for name in settings.env_names():
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_partial_notes(monkeypatch):
+    """A note one test's fetch left behind (sources._partial) doesn't reach the next."""
+    monkeypatch.setattr(_partial, "_partial", {})
 
 
 @pytest.fixture

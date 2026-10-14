@@ -169,7 +169,9 @@ two fetches in a row (`fetch.close_after_misses` in `settings.yaml`), the job is
 shown as `[closed by fetch]`; if it comes back, the mark is undone. A board removed for being
 gone closes its jobs the same way. Your own marks are never changed. Sites searched one term at
 a time (Amazon, Apple, Eightfold, Oracle, Phenom, USAJOBS) aren't checked, since a job a search
-didn't return may still be open; mark those with `jobhunt closed`.
+didn't return may still be open; mark those with `jobhunt closed`. Nor is a listing cut short
+(a capped or partly read board), or an empty one, which may be a glitch: a board whose postings
+all go closes its jobs only when it's removed, or by hand.
 
 ### 6. Check the scorer
 
