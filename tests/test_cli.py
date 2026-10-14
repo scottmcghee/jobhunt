@@ -2223,3 +2223,27 @@ def test_a_board_listed_twice_counts_one_miss_per_fetch(tmp_path, fixture_json):
     assert _fetch(tmp_path, p) == 0  # one fetch: one miss, however many entries name the board
     assert key not in _marks(tmp_path)
     assert storage.MissLedger(tmp_path / "data" / "job_misses.json").counts[key] == 1
+
+
+@respx.mock
+def test_a_workday_board_at_its_cap_listed_twice_is_fetched_once_and_closes_nothing(tmp_path, capsys):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n  - name: Acme\n    ats: workday\n    slug: acme/ext\n    datacenter: wd5\n"
+        "  - name: Acme again\n    ats: workday\n    slug: acme/ext\n    datacenter: wd5\n"
+    )
+    key = _record_job(tmp_path, source="workday", company_slug="acme/ext", external_id="R9999")
+    offsets = []
+
+    def page(request):
+        offsets.append(offset := json.loads(request.content)["offset"])
+        posts = [{"title": "Cashier", "externalPath": f"/job/x/Cashier_R{offset + i}"} for i in range(20)]
+        return httpx.Response(200, json={"total": 2000 if offset == 0 else 0, "jobPostings": posts})
+
+    respx.post("https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/ext/jobs").mock(side_effect=page)
+    for _ in range(2):
+        offsets.clear()
+        assert _fetch(tmp_path, p, "--per-host", "4") == 0
+        assert offsets and len(offsets) == len(set(offsets))  # each page requested once, not twice
+    assert key not in _marks(tmp_path)  # the second entry can't hide the first's cut-short listing
+    assert "skipped 1 duplicate board entry(ies)" in capsys.readouterr().err

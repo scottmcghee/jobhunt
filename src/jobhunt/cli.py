@@ -397,6 +397,13 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         if not companies:
             print(f"no company named {args.company!r} in companies.yaml", file=sys.stderr)
             return 2
+    # A board listed twice is fetched once: two fetches at once would mix up its partial note.
+    unique: dict[str, Company] = {}
+    for c in companies:
+        unique.setdefault(c.key, c)  # the first entry wins
+    if skipped := len(companies) - len(unique):
+        print(f"skipped {skipped} duplicate board entry(ies) in companies.yaml", file=sys.stderr)
+        companies = list(unique.values())
     prefs = config.load_preferences()
     jobs_path = data_dir / "jobs.jsonl"
     seen = storage.SeenSet(data_dir / "seen.json", jobs=jobs_path)
