@@ -202,3 +202,17 @@ def test_a_later_label_for_a_job_replaces_an_earlier_one(tmp_path):
     labels = storage.load_labels(tmp_path)
     assert set(labels) == {"a", "b"}
     assert (labels["a"].score, labels["a"].note) == (8, "second")
+
+
+def test_dismissed_jobs_take_the_latest_mark_and_a_restore_clears_it(tmp_path):
+    from jobhunt.schema import Dismissal
+
+    log = tmp_path / "dismissed.jsonl"
+    for key, kind in [("a", "passed"), ("b", "closed"), ("a", "restore"), ("c", "passed"), ("c", "closed")]:
+        storage.append_jsonl(log, Dismissal(job_key=key, kind=kind, date="2026-10-14").model_dump())
+    marks = storage.load_dismissed(tmp_path)
+    assert {k: m.kind for k, m in marks.items()} == {"b": "closed", "c": "closed"}
+
+
+def test_no_dismissed_log_means_nothing_dismissed(tmp_path):
+    assert storage.load_dismissed(tmp_path) == {}

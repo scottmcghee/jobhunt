@@ -152,6 +152,18 @@ to the first one. Everything is appended to `data/applications.jsonl` (a correct
 entry), which stays on your machine. `jobhunt list --hide-applied` leaves out jobs you've
 applied to.
 
+Two more marks keep `jobhunt list` to jobs you still might apply to:
+
+```bash
+jobhunt closed greenhouse:acme:4012345                   # the posting is gone
+jobhunt pass greenhouse:acme:4012399 --note "on-site"    # you've decided not to apply
+jobhunt restore greenhouse:acme:4012399                  # changed your mind
+```
+
+`list` hides marked jobs (`--show-dismissed` shows them, tagged), and `score` and `letter` skip
+them; `letter --job KEY` still writes one if you ask. Each command takes several keys at once.
+The marks are appended to `data/dismissed.jsonl`; the latest mark for a job wins.
+
 ### 6. Check the scorer
 
 How far can you trust the scores? Score a sample of jobs yourself, then compare:
@@ -198,12 +210,15 @@ To make it yours, rewrite `profile.md` and the Kit in your own words, edit the f
 |---|---|---|
 | `jobhunt fetch` | Pull postings, filter them, record the new ones | `--company NAME`, `--dry-run`, `--resume`, `--workers N`, `--per-host N` |
 | `jobhunt score` | Score every recorded job that has no score yet | `--limit N`, `--rescore` |
-| `jobhunt list` | Show scored jobs, best first, with their keys | `--min-score N`, `--hide-applied` |
+| `jobhunt list` | Show scored jobs, best first, with their keys | `--min-score N`, `--hide-applied`, `--show-dismissed` |
 | `jobhunt letter` | Write letters for high scorers that don't have one | `--min-score N`, `--job KEY`, `--force` |
 | `jobhunt run` | `fetch`, then `score`, then `letter` | any of the above |
 | `jobhunt applied KEY` | Record an application to a job jobhunt found | `--resume VERSION` (required), `--warm`, `--date`, `--force` |
 | `jobhunt outcome KEY STATUS` | Record what came of it | `--date` |
 | `jobhunt applications` | Each application, and reply rates by resume, warm or cold, and score | |
+| `jobhunt closed KEY ...` | Mark jobs whose postings are gone; `list`, `score` and `letter` skip them | |
+| `jobhunt pass KEY ...` | Mark jobs you won't apply to; skipped the same way | `--note TEXT` |
+| `jobhunt restore KEY ...` | Undo `closed` or `pass` | |
 | `jobhunt label` | Score a sample of jobs yourself | `--sample N` |
 | `jobhunt eval` | How well the scorer agrees with your labels | `--rescore` |
 

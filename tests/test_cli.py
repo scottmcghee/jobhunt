@@ -1854,3 +1854,124 @@ def test_fetch_without_usajobs_settings_passes_no_credentials(tmp_path, monkeypa
     monkeypatch.setattr(cli, "fetch_company", lambda company, client, **kw: seen.append(kw) or [])
     assert _fetch(tmp_path, companies, "--dry-run") == 0
     assert seen[0]["usajobs_auth"] is None
+
+
+# --------------------------------------------------------------------------- closed and passed
+
+
+def _dismissed(tmp_path):
+    return storage.read_jsonl(tmp_path / "data" / "dismissed.jsonl")
+
+
+def _second(scored_job, title="VP of Infrastructure"):
+    job = scored_job.job.model_copy(update={"external_id": "2002", "title": title})
+    return scored_job.model_copy(update={"job": job})
+
+
+def test_closed_and_passed_jobs_are_hidden_from_list(tmp_path, scored_job, capsys):
+    second = _second(scored_job)
+    third = _second(scored_job, "Head of SRE").model_copy(
+        update={"job": scored_job.job.model_copy(update={"external_id": "3003", "title": "Head of SRE"})}
+    )
+    key = _with_scored_job(tmp_path, scored_job, second, third)
+    assert _applications(tmp_path, "closed", key) == 0
+    assert _applications(tmp_path, "pass", second.job.key, "--note", "on-site 4 days") == 0
+    capsys.readouterr()
+    assert _applications(tmp_path, "list") == 0
+    out = capsys.readouterr().out
+    assert third.job.key in out and key not in out and second.job.key not in out
+    assert "2 closed or passed hidden" in out
+    assert [(e["job_key"], e["kind"], e["note"]) for e in _dismissed(tmp_path)] == [
+        (key, "closed", ""), (second.job.key, "passed", "on-site 4 days"),
+    ]
+
+
+def test_show_dismissed_lists_them_tagged(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "pass", key) == 0
+    capsys.readouterr()
+    assert _applications(tmp_path, "list", "--show-dismissed") == 0
+    out = capsys.readouterr().out
+    assert key in out and "[passed]" in out
+
+
+def test_restore_brings_a_job_back(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "closed", key) == 0
+    assert _applications(tmp_path, "restore", key) == 0
+    capsys.readouterr()
+    assert _applications(tmp_path, "list") == 0
+    assert key in capsys.readouterr().out
+
+
+def test_several_keys_at_once(tmp_path, scored_job):
+    second = _second(scored_job)
+    key = _with_scored_job(tmp_path, scored_job, second)
+    assert _applications(tmp_path, "pass", key, second.job.key) == 0
+    assert [e["job_key"] for e in _dismissed(tmp_path)] == [key, second.job.key]
+
+
+def test_an_unknown_key_is_an_error_and_nothing_is_marked(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "closed", key, "greenhouse:nope:1") == 2
+    assert "greenhouse:nope:1" in capsys.readouterr().err
+    assert _dismissed(tmp_path) == []
+
+
+def test_restoring_a_job_that_isnt_marked_is_an_error(tmp_path, scored_job, capsys):
+    key = _with_scored_job(tmp_path, scored_job)
+    assert _applications(tmp_path, "restore", key) == 2
+    assert "not marked" in capsys.readouterr().err
+
+
+def test_score_skips_closed_and_passed_jobs(tmp_path, scored_job, monkeypatch, capsys):
+    data = tmp_path / "data"
+    second = _second(scored_job)
+    for s in (scored_job, second):
+        storage.append_jsonl(data / "jobs.jsonl", s.job.model_dump())
+    assert _applications(tmp_path, "pass", scored_job.job.key) == 0
+    seen = []
+
+    def fake_score(job, *args, **kwargs):
+        seen.append(job.key)
+        return second.model_copy(update={"job": job})
+
+    monkeypatch.setattr(cli, "score_job", fake_score)
+    monkeypatch.setattr(cli, "_completer", lambda _=None: None)
+    assert _applications(tmp_path, "score") == 0
+    assert seen == [second.job.key]
+
+
+def test_letter_skips_closed_and_passed_jobs_unless_named(tmp_path, scored_job, monkeypatch):
+    first, second = _two_scored_jobs(tmp_path, scored_job)
+    for s in (first, second):
+        storage.append_jsonl(tmp_path / "data" / "jobs.jsonl", s.job.model_dump())
+    assert _applications(tmp_path, "closed", first.job.key) == 0
+    monkeypatch.setattr(cli, "_completer", lambda _=None: lambda system, user, max_tokens: LETTER_REPLY)
+    assert _letter(tmp_path) == 0
+    assert storage.lettered_job_keys(tmp_path / "out") == {second.job.key}
+    assert _letter(tmp_path, "--job", first.job.key) == 0  # named: written anyway
+    assert storage.lettered_job_keys(tmp_path / "out") == {first.job.key, second.job.key}
+
+
+def test_letter_says_when_closed_and_passed_jobs_were_the_only_ones(tmp_path, scored_job, capsys):
+    def at(s, n):
+        return s.model_copy(update={"score": s.score.model_copy(update={"score": n})})
+
+    nine, eight = at(scored_job, 9), at(_second(scored_job), 8)
+    third = scored_job.job.model_copy(update={"external_id": "3003", "title": "Head of SRE"})
+    low = at(scored_job.model_copy(update={"job": third}), 3)
+    _with_scored_job(tmp_path, nine, eight, low)
+    assert _applications(tmp_path, "closed", nine.job.key, eight.job.key) == 0
+    capsys.readouterr()
+    assert _letter(tmp_path, "--min-score", "7") == 0
+    assert "no jobs at or above 7/10 to write (2 closed or passed skipped)." in capsys.readouterr().out
+
+
+def test_restore_checks_every_key_before_marking_any(tmp_path, scored_job, capsys):
+    second = _second(scored_job)
+    key = _with_scored_job(tmp_path, scored_job, second)
+    assert _applications(tmp_path, "closed", key) == 0
+    assert _applications(tmp_path, "restore", key, second.job.key) == 2
+    assert second.job.key in capsys.readouterr().err
+    assert [(e["job_key"], e["kind"]) for e in _dismissed(tmp_path)] == [(key, "closed")]

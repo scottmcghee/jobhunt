@@ -37,7 +37,7 @@ config/               # personal, gitignored; same files as below
   kit/                # Cover Letter Kit: opening.md, closing.md, modules/*.md
 docs/sources.md       # per-source details: endpoints, slug formats, limits
 src/jobhunt/
-  schema.py           # Company, Job, Score, ScoredJob, Letter models; ATSName
+  schema.py           # Company, Job, Score, ScoredJob, Letter, Dismissal models; ATSName
   config.py           # load and validate companies.yaml, preferences.yaml, profile and Kit
   settings.py         # tunables: defaults < config/settings.yaml < JOBHUNT_<SECTION>_<KEY> env < CLI flags
   sources/            # one module per source; __init__.py dispatches (fetch_company) and assigns rate groups
@@ -46,14 +46,14 @@ src/jobhunt/
   score.py            # Claude call: Job x profile -> ScoredJob
   generate.py         # Claude call: ScoredJob x Kit -> Letter
   storage.py          # data/ and output/: seen-set, gone-board and fetch-progress ledgers, JSONL records
-                      # (jobs, scores, applications, labels, evals), letters
+                      # (jobs, scores, applications, labels, evals, dismissed), letters
   throttle.py         # polite HTTP for fetch: adaptive per-group concurrency, rate caps, 429/Retry-After and transient retries
   runner.py           # concurrent fetch: a worker pool per rate-limit group, results in config order
   llm.py              # the only module that talks to a model: Anthropic SDK, Bedrock, or `claude -p` backend
   applications.py     # pure: applied/outcome events -> applications, and reply stats by group
   evaluate.py         # pure: a sample of jobs to label; labels vs. model scores -> agreement metrics
   cli.py              # `jobhunt fetch | score | list | letter | run | applied | outcome | applications
-                      #  | label | eval`
+                      #  | closed | pass | restore | label | eval`
   commoncrawl.py      # Common Crawl's URL index read by byte range: every URL a crawl saw under some hosts;
                       # and its web graph's host list: every careers.* / jobs.* host it saw
   discover.py         # `python -m jobhunt.discover`: new boards from Common Crawl and careers hosts
