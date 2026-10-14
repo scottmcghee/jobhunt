@@ -496,7 +496,9 @@ def cmd_letter(
     if args.job:  # named: written even if closed or passed
         targets = [s for s in latest.values() if s.job.key == args.job]
     if not targets:
-        print(f"no jobs at or above {threshold}/10.")
+        met = sum(s.score.score >= threshold and s.job.key in dismissed for s in latest.values())
+        note = f" to write ({met} closed or passed skipped)" if met and not args.job else ""
+        print(f"no jobs at or above {threshold}/10{note}.")
         return 0
     if not args.force:
         done = storage.lettered_job_keys(output_dir)

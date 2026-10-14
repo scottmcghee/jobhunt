@@ -1952,3 +1952,26 @@ def test_letter_skips_closed_and_passed_jobs_unless_named(tmp_path, scored_job, 
     assert storage.lettered_job_keys(tmp_path / "out") == {second.job.key}
     assert _letter(tmp_path, "--job", first.job.key) == 0  # named: written anyway
     assert storage.lettered_job_keys(tmp_path / "out") == {first.job.key, second.job.key}
+
+
+def test_letter_says_when_closed_and_passed_jobs_were_the_only_ones(tmp_path, scored_job, capsys):
+    def at(s, n):
+        return s.model_copy(update={"score": s.score.model_copy(update={"score": n})})
+
+    nine, eight = at(scored_job, 9), at(_second(scored_job), 8)
+    third = scored_job.job.model_copy(update={"external_id": "3003", "title": "Head of SRE"})
+    low = at(scored_job.model_copy(update={"job": third}), 3)
+    _with_scored_job(tmp_path, nine, eight, low)
+    assert _applications(tmp_path, "closed", nine.job.key, eight.job.key) == 0
+    capsys.readouterr()
+    assert _letter(tmp_path, "--min-score", "7") == 0
+    assert "no jobs at or above 7/10 to write (2 closed or passed skipped)." in capsys.readouterr().out
+
+
+def test_restore_checks_every_key_before_marking_any(tmp_path, scored_job, capsys):
+    second = _second(scored_job)
+    key = _with_scored_job(tmp_path, scored_job, second)
+    assert _applications(tmp_path, "closed", key) == 0
+    assert _applications(tmp_path, "restore", key, second.job.key) == 2
+    assert second.job.key in capsys.readouterr().err
+    assert [(e["job_key"], e["kind"]) for e in _dismissed(tmp_path)] == [(key, "closed")]
