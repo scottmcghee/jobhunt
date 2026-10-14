@@ -52,7 +52,7 @@ from jobhunt.runner import BoardRunner
 from jobhunt.schema import Company, Dismissal, Job, ScoredJob
 from jobhunt.score import SYSTEM as SCORE_SYSTEM
 from jobhunt.score import build_user_prompt, score_job
-from jobhunt.sources import fetch_company, rate_group
+from jobhunt.sources import fetch_company, listing_is_complete, rate_group
 
 log = logging.getLogger("jobhunt")
 
@@ -319,6 +319,58 @@ def _record(
     return fresh
 
 
+class _ClosedJobs:
+    """Recorded jobs whose postings have left their boards. Main thread only.
+
+    After each board's full listing, a recorded job it leaves out gets one more miss; after
+    ``close_after`` in a row it's marked closed (``by="fetch"``), and one that comes back is
+    restored. Jobs you marked yourself are left alone.
+    """
+
+    def __init__(self, data_dir: Path, close_after: int):
+        self.path = data_dir / "dismissed.jsonl"
+        self.misses = storage.MissLedger(data_dir / "job_misses.json")
+        self.marks = storage.load_dismissed(data_dir)
+        self.close_after = close_after
+        self.by_board: dict[str, set[str]] = {}
+        for job in storage.load_jobs(data_dir):
+            self.by_board.setdefault(f"{job.source}:{job.company_slug}", set()).add(job.key)
+        self.closed = self.restored = 0
+
+    def board(self, company: Company, listed: set[str]) -> None:
+        """Count one full listing of the board, and save."""
+        for key in sorted(self.by_board.get(company.key, ())):
+            mark = self.marks.get(key)
+            if key in listed:
+                self.misses.clear(key)
+                if mark is not None and mark.kind == "closed" and mark.by == "fetch":
+                    self._mark(key, "restore", "back on its board")
+                    self.restored += 1
+            elif mark is None and (n := self.misses.miss(key)) >= self.close_after:
+                self._close(key, f"gone from its board {n} fetches in a row")
+        self.misses.save()
+
+    def board_removed(self, board_key: str) -> None:
+        """The board left companies.yaml (gone): its recorded jobs can't be applied to."""
+        for key in sorted(self.by_board.get(board_key, ())):
+            if key not in self.marks:
+                self._close(key, "its board was removed")
+        self.misses.save()
+
+    def _close(self, key: str, note: str) -> None:
+        self._mark(key, "closed", note)
+        self.misses.clear(key)
+        self.closed += 1
+
+    def _mark(self, key: str, kind: str, note: str) -> None:
+        mark = Dismissal(job_key=key, kind=kind, date=_today(), note=note, by="fetch")
+        storage.append_jsonl(self.path, mark.model_dump())
+        if kind == "restore":
+            self.marks.pop(key, None)
+        else:
+            self.marks[key] = mark
+
+
 def cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     with _interrupt_on_signals():
         return _cmd_fetch(args, data_dir)
@@ -361,6 +413,7 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     prune = fetch.prune_after_404s
     federal = args.settings.usajobs  # the key and email go to USAJOBS boards only
     usajobs_auth = (federal.api_key, federal.email) if federal.api_key and federal.email else None
+    closed = _ClosedJobs(data_dir, fetch.close_after_misses)
 
     def book(outcome: BoardOutcome) -> None:
         """Record one board, then save it: its new jobs, the seen set and misses, then progress."""
@@ -375,6 +428,8 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             seen.save()
         if misses.counts.get(outcome.company.key) != before:  # --resume won't fetch it again
             misses.save()
+        if outcome.jobs is not None and listing_is_complete(outcome.company, outcome.jobs):
+            closed.board(outcome.company, {j.key for j in outcome.jobs})
         if progress is not None:
             progress.mark(outcome.company.key)
 
@@ -429,11 +484,15 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
         print(f"removed {_label(company)} from {where}: gone {prune} fetches in a row")
     for key in dead:
         misses.clear(key)
+        closed.board_removed(key)
     misses.save()
 
     if progress is not None and not interrupted:
         progress.finish()
     print(f"\n{len(new_jobs)} new job(s) recorded.")
+    if closed.closed or closed.restored:
+        gone, back = closed.closed, closed.restored
+        print(f"{gone} job(s) closed (gone from their boards), {back} restored.")
     if progress is not None and interrupted:
         print(f"run `jobhunt {args.cmd} --resume` to fetch the rest", file=sys.stderr)
     return 130 if interrupted else 0
@@ -545,7 +604,9 @@ def cmd_list(args: argparse.Namespace, data_dir: Path) -> int:
         hidden = sum(s.job.key in dismissed for s in rows)
         rows = [s for s in rows if s.job.key not in dismissed]
     for s in rows:
-        mark = f"[{dismissed[s.job.key].kind}] " if s.job.key in dismissed else ""
+        mark = ""
+        if (d := dismissed.get(s.job.key)) is not None:
+            mark = f"[{d.kind}{' by fetch' if d.by == 'fetch' else ''}] "
         print(f"{s.score.score:>2}/10  {s.job.company:<14} {s.job.title[:55]:<55} {s.job.key}")
         print(f"        {mark}{s.job.url}")
     note = f" ({hidden} closed or passed hidden; --show-dismissed shows them)" if hidden else ""

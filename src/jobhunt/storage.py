@@ -4,6 +4,7 @@
 - fetch_progress.txt : board keys an interrupted `fetch` finished, one a line, for `--resume`.
 - misses.json  : {board_key: fetches in a row that found the board gone (see cli._board_gone)}.
                  Boards that answered fine are absent.
+- job_misses.json : {job_key: fetches in a row whose full board listing left the job out}.
 - jobs.jsonl   : every Job that passed the filter, appended once.
 - scores.jsonl : every ScoredJob, appended once per job.
 - applications.jsonl : applied/outcome events, appended (see applications.py).
@@ -72,7 +73,9 @@ class SeenSet:
 
 
 class MissLedger:
-    """Per board (by ``Company.key``): fetches in a row that found it gone (see cli._board_gone)."""
+    """Fetches in a row that missed something, by key: a board found gone (``misses.json``, by
+    ``Company.key``; see cli._board_gone), or a recorded job left out of its board's full
+    listing (``job_misses.json``, by ``Job.key``)."""
 
     def __init__(self, path: Path):
         self.path = path

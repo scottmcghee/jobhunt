@@ -56,6 +56,9 @@ class FetchSettings(_Section):
     # Fetches in a row that find the board gone (a 404; for Workday also a 422, or a 403 "S22"
     # closed site) before it leaves companies.yaml. The name predates the Workday cases.
     prune_after_404s: int = Field(3, ge=1)
+    # Fetches in a row whose full listing of a board leaves out a recorded job before that job
+    # is marked closed (jobhunt list hides it; it's restored if it comes back)
+    close_after_misses: int = Field(2, ge=1)
     transient_retries: int = Field(2, ge=0)  # retries on 500/502/504, connection errors, timeouts
     # Most requests sent per second, per rate group: the group names `fetch -v` stats print
     # ("workable", "lever", "workday:wd5"); *.eightfold.ai boards share "eightfold", an Eightfold

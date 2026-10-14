@@ -71,6 +71,17 @@ SEARCH_FETCHERS: dict[ATSName, SearchFetcher] = {
 }
 
 
+def listing_is_complete(company: Company, jobs: Sequence[Job]) -> bool:
+    """Whether a successful fetch of the board listed every posting it has, so a recorded job it
+    left out has closed. Not for search sources (a job a search didn't return may still be open),
+    nor for an iCIMS Career Sites listing cut off at its page guard."""
+    if company.ats in SEARCH_FETCHERS:
+        return False
+    if company.ats == "icims_careers":
+        return len(jobs) < icims_careers.PAGE_SIZE * icims_careers.MAX_PAGES
+    return True
+
+
 def fetch_company(
     company: Company,
     client: httpx.Client,

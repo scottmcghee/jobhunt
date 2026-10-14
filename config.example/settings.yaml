@@ -40,6 +40,11 @@ fetch:
   # 404, or for Workday a 422 (site removed) or a 403 "S22" (site closed).
   # Env: JOBHUNT_FETCH_PRUNE_AFTER_404S
   prune_after_404s: 3
+  # Successful fetches in a row whose full listing of a board leaves out a job you have recorded
+  # before that job is marked closed (`jobhunt list` hides it; it's restored if it reappears).
+  # Search sources (Amazon, Apple, Eightfold, Oracle, Phenom, USAJOBS) are never checked: a job
+  # a search didn't return may still be open. Env: JOBHUNT_FETCH_CLOSE_AFTER_MISSES
+  close_after_misses: 2
   # Retries, after a 1 s then 2 s wait, on a 500/502/504, a connection error (e.g. a failed DNS
   # lookup) or a timeout, before the board is skipped for this run.
   # Env: JOBHUNT_FETCH_TRANSIENT_RETRIES

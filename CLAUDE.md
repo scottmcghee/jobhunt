@@ -105,6 +105,8 @@ Endpoints, slug formats, gone-board signals and rate caps for each source are in
 
 **Dead boards are pruned.** `jobhunt fetch` counts consecutive fetches that find a board gone (`cli._board_gone`: a 404, or a source's own signal) in `data/misses.json`. A successful fetch resets the count; after `fetch.prune_after_404s` in a row (default 3) the entry is removed from `config/companies.yaml`. `--dry-run` changes neither.
 
+**Closed jobs are marked.** After a board's full listing (not a search source's: `sources.listing_is_complete`), `fetch` counts each recorded job it left out in `data/job_misses.json`; after `fetch.close_after_misses` in a row (default 2) the job gets a `closed` mark `by="fetch"` in `data/dismissed.jsonl`, undone if it reappears. Marks by the user are never changed. A pruned board's jobs are closed too.
+
 **Companies with no supported ATS** (e.g., Apple) are case-by-case and may need crawling HTML rather than calling an API.
 
 - **Investigate first.** Check whether the careers site is backed by a JSON endpoint before writing a crawler.
