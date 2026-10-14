@@ -172,7 +172,8 @@ def fetch(
         resp = first
     else:
         target = urljoin(url, first.headers["location"])
-        if sap_hosted(target):  # the site moved to SAP's hosting: read it there, within its rules
+        # the site moved to SAP's hosting: read it there, within its rules
+        if sap_hosted(target) and not _sitemap.on_host(target, host):
             host = (urlsplit(target).hostname or "").lower()
             log.info("successfactors %s: served from %s", company.slug, host)
             rules = _sitemap.robots(client, host)

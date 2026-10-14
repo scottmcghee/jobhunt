@@ -1792,6 +1792,22 @@ def test_successfactors_reads_the_sap_hosts_own_robots_txt(sf_company):
 
 
 @respx.mock
+def test_successfactors_a_sap_hosted_board_follows_a_same_host_redirect():
+    """A board whose slug is a SAP host: /sitemap.xml to /en/sitemap.xml is not a move."""
+    board = Company(name="Example Co", ats="successfactors", slug="careers-exampleco.jobs.hr.cloud.sap")
+    robots = respx.get(SAP + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SAP + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "/en/sitemap.xml"}))
+    text = (FIXTURES / "successfactors_sitemap.xml").read_text().replace(SF, SAP)
+    respx.get(SAP + "/en/sitemap.xml").mock(return_value=httpx.Response(200, text=text))
+    page = (FIXTURES / "successfactors_job.html").read_text()
+    respx.get(url__startswith=SAP + "/").mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(board, client)
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+    assert robots.call_count == 1  # its own robots.txt, read once
+
+
+@respx.mock
 def test_successfactors_a_posting_twice_in_the_feed_comes_once(sf_company):
     feed = (FIXTURES / "successfactors_feed.xml").read_text()
     first_item = feed[feed.index("<item>"):feed.index("</item>") + len("</item>")]

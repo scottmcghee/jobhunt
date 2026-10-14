@@ -373,7 +373,7 @@ what the sites allow: the sitemap, and job pages.
   URLs in this shape; it is never removed, and `fetch` warns that it found nothing.
 - **Rate group:** the careers host. A board that moved to SAP's hosting is the exception: past
   robots.txt and the first sitemap hop, its requests fall in the SAP host's group (the name
-  `fetch -v` prints), so a `fetch.max_rate` entry keyed by the old host no longer applies to them.
+  `jobhunt -v fetch` prints), so a `fetch.max_rate` entry keyed by the old host no longer applies to them.
 
 ## Radancy and Paradox
 
