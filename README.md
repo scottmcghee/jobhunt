@@ -281,7 +281,8 @@ generic (anything but a country code, plus .io, .co and .ai) or one of
 
 Hosts are cached in `data/discovery/hosts.json`, so a rerun visits only new ones; a host that
 didn't answer is tried again on a later run, a day or more on, three tries in all (`discover` in
-`settings.yaml` changes both; `--refresh` visits every host again). Discovery writes
+`settings.yaml` changes both), except one with no DNS record, which is settled after one try
+(`--refresh` visits every host again). Discovery writes
 `data/discovered.yaml`; boards from careers hosts are named after the host, so fix names as you
 paste. With `--check`, the unchecked list is written first, so stopping the check with Ctrl-C
 still leaves it.

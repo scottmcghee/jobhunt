@@ -22,6 +22,14 @@ def _no_delay(monkeypatch):
     monkeypatch.setattr(discover.fingerprint.time, "sleep", lambda s: None)
 
 
+@pytest.fixture(autouse=True)
+def _dns_resolves(monkeypatch):
+    """No real DNS lookups: every host resolves unless a test says otherwise (see _dns)."""
+    monkeypatch.setattr(
+        discover.socket, "getaddrinfo", lambda host, *a, **k: [("f", "t", "p", "", ("192.0.2.1", 443))]
+    )
+
+
 NOW = datetime(2026, 10, 9, 12, tzinfo=UTC)
 
 
@@ -529,6 +537,73 @@ def test_main_reports_a_busy_common_crawl_without_a_traceback(monkeypatch, tmp_p
     caplog.set_level("ERROR", logger="jobhunt.discover")
     assert discover.main(["--no-crawl", "--webgraph", "--data-dir", str(tmp_path)]) == 1
     assert "503 Slow Down" in caplog.text and "rerun" in caplog.text
+
+
+def _dns(monkeypatch, errno=None, control=None):
+    """getaddrinfo that fails with ``errno`` (a socket.EAI_* code), or resolves when None.
+
+    ``control`` is the same for discover.DNS_CONTROL_HOST, which resolves by default.
+    """
+    def getaddrinfo(host, *args, **kwargs):
+        code = control if host == discover.DNS_CONTROL_HOST else errno
+        if code is None:
+            return [("family", "type", "proto", "", ("192.0.2.1", 443))]
+        raise discover.socket.gaierror(code, "lookup failed")
+
+    monkeypatch.setattr(discover.socket, "getaddrinfo", getaddrinfo)
+
+
+@respx.mock
+def test_a_host_with_no_dns_record_is_settled_after_one_try(tmp_path, monkeypatch):
+    _dns(monkeypatch, discover.socket.EAI_NONAME)
+    robots = respx.get("https://careers.gone.com/robots.txt").mock(side_effect=httpx.ConnectError("nodename"))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        assert discover.survey_hosts(["careers.gone.com"], client, cache, delay=0, now=NOW) == []
+        entry = json.loads(cache.read_text())["careers.gone.com"]
+        assert entry["no_dns"] is True and "failures" not in entry and entry["boards"] == []
+        discover.survey_hosts(["careers.gone.com"], client, cache, delay=0, now=NOW + timedelta(days=5))
+        assert robots.call_count == 1  # settled: not tried again
+        discover.survey_hosts(["careers.gone.com"], client, cache, delay=0, refresh=True, now=NOW + timedelta(days=6))
+    assert robots.call_count == 2  # --refresh still tries it
+
+
+@respx.mock
+@pytest.mark.parametrize("errno", ["EAI_AGAIN", None])  # a lookup that failed for now; one that works
+def test_a_connect_error_with_a_working_or_temporary_dns_is_still_retried(tmp_path, monkeypatch, errno):
+    _dns(monkeypatch, getattr(discover.socket, errno) if errno else None)
+    respx.get("https://careers.flaky.com/robots.txt").mock(side_effect=httpx.ConnectError("refused"))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.flaky.com"], client, cache, delay=0, now=NOW)
+    entry = json.loads(cache.read_text())["careers.flaky.com"]
+    assert entry["failures"] == 1 and "no_dns" not in entry
+
+
+@respx.mock
+def test_a_host_is_not_settled_when_dns_itself_is_down(tmp_path, monkeypatch):
+    # macOS answers EAI_NONAME for every name when the network is down, a real one too
+    _dns(monkeypatch, discover.socket.EAI_NONAME, control=discover.socket.EAI_NONAME)
+    respx.get("https://careers.blip.com/robots.txt").mock(side_effect=httpx.ConnectError("nodename"))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.blip.com"], client, cache, delay=0, now=NOW)
+    entry = json.loads(cache.read_text())["careers.blip.com"]
+    assert entry["failures"] == 1 and "no_dns" not in entry
+
+
+@respx.mock
+def test_refresh_keeps_the_boards_of_a_host_whose_dns_record_is_gone(tmp_path, monkeypatch):
+    respx.get("https://careers.acme.com/robots.txt").mock(
+        side_effect=[httpx.Response(404), httpx.ConnectError("nodename")]
+    )
+    respx.get("https://careers.acme.com/").mock(return_value=httpx.Response(200, text=WORKDAY_PAGE))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, now=NOW)
+        _dns(monkeypatch, discover.socket.EAI_NONAME)
+        again = discover.survey_hosts(["careers.acme.com"], client, cache, delay=0, refresh=True, now=NOW)
+    assert [b.slug for b in again] == ["acme/External"]  # as for any refresh that fails
 
 
 # ------------------------------------------------------------------ Common Crawl
