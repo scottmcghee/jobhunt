@@ -271,7 +271,8 @@ python -m jobhunt.discover --platforms gem rippling --check # just these; drop b
 ```
 
 On platforms whose board URLs follow a pattern (Workday, Greenhouse, Lever, Ashby,
-SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Rippling; Oracle with `--platforms oracle`),
+SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Rippling, SuccessFactors sites hosted by SAP;
+Oracle with `--platforms oracle`),
 it reads [Common Crawl](https://commoncrawl.org/)'s URL index: each platform's URLs sit together,
 so about 100 MB of index (cached after the first run) plus some tens of MB of index blocks per
 crawl finds every board a crawl saw.

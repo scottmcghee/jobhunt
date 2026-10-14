@@ -46,7 +46,7 @@ PLATFORMS = {
     "icims_careers": r"jibecdn\.com",  # iCIMS Career Sites (formerly Jibe)
     "jobvite": r"jobvite\.com",
     "taleo": r"taleo\.net",
-    "successfactors": r"successfactors\.(com|eu)|jobs2web|rmkcdn",
+    "successfactors": r"successfactors\.(com|eu)|jobs2web|rmkcdn|jobs\.hr\.cloud\.sap",
     "phenom": r"phenompeople\.com|cdn\.phenompeople",
     "avature": r"avature\.net",
     "radancy": r"radancy|tbcdn\.talentbrew|talentbrew\.com",

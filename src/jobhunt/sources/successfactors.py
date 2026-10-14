@@ -19,6 +19,12 @@ description.
 Not every site the survey sees SuccessFactors on is Career Site Builder (careers.netapp.com is
 another platform in front of it). Its sitemap lists no job URLs in this shape, so ``fetch``
 warns about a board with no postings.
+
+SAP is moving these sites to its own hosting (``careers-crocsinc.jobs.hr.cloud.sap``): the old
+host's sitemap redirects there. That one redirect is followed, and the new host's robots.txt,
+sitemap and job pages are read; the board keeps its slug, so its jobs' keys don't change. A
+discovered board may be the SAP host itself (``slugs.board_from_url``). A redirect to any other
+host is an error, as before.
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ import re
 from collections.abc import Callable
 from concurrent.futures import Executor
 from datetime import UTC, datetime
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -40,12 +46,21 @@ from jobhunt.sources._html import to_text
 
 log = logging.getLogger(__name__)
 
+SAP_HOSTING = "jobs.hr.cloud.sap"  # <site>.jobs.hr.cloud.sap: SAP's hosting of these sites
+
 _JOB_PATH = re.compile(r"/(?:[\w-]+/)?job/([^/]+)/(\d+)/?")
 _GOOGLE_NS = "{http://base.google.com/ns/1.0}"
 _ITEMPROP_OPEN = re.compile(r'<(\w+)\b[^>]*\bitemprop="(title|description)"[^>]*>', re.I)
 _OG_TITLE = re.compile(r'<meta\s+property="og:title"\s+content="([^"]*)"', re.I)
 _META = re.compile(r'<meta\s+itemprop="(\w+)"\s+content="([^"]*)"', re.I)
 _ADDRESS = ("addressLocality", "addressRegion", "addressCountry", "postalCode")
+
+
+def sap_hosted(url: str) -> bool:
+    """Whether the URL is on one site of SAP's hosting (``<site>.jobs.hr.cloud.sap``)."""
+    host = (urlsplit(url).hostname or "").lower()
+    site, _, rest = host.partition(".")
+    return rest == SAP_HOSTING and bool(site)
 
 
 def _url(company: Company, path: str) -> str:
@@ -144,12 +159,30 @@ def fetch(
 
     With ``pool``, job pages are fetched concurrently.
     """
-    rules = _sitemap.robots(client, company.slug.lower())
-    if not rules.can_fetch(_sitemap.agent(client), _url(company, "/sitemap.xml")):
+    host = company.slug.lower()
+    rules = _sitemap.robots(client, host)
+    url = _url(company, "/sitemap.xml")
+    if not rules.can_fetch(_sitemap.agent(client), url):
         log.warning("successfactors %s: robots.txt disallows /sitemap.xml", company.slug)
         _partial.note(company.key, "robots.txt disallows /sitemap.xml")
         return []
-    resp = _sitemap.get_on_host(client, _url(company, "/sitemap.xml"), company.slug.lower(), rules)
+    first = client.get(url, follow_redirects=False)
+    if not (first.is_redirect and "location" in first.headers):
+        first.raise_for_status()
+        resp = first
+    else:
+        target = urljoin(url, first.headers["location"])
+        if sap_hosted(target):  # the site moved to SAP's hosting: read it there, within its rules
+            host = (urlsplit(target).hostname or "").lower()
+            log.info("successfactors %s: served from %s", company.slug, host)
+            rules = _sitemap.robots(client, host)
+            if not rules.can_fetch(_sitemap.agent(client), target):
+                log.warning("successfactors %s: robots.txt on %s disallows it", company.slug, host)
+                _partial.note(company.key, f"robots.txt on {host} disallows the sitemap")
+                return []
+        elif not _sitemap.on_host(target, host):
+            raise ValueError(f"it redirects to another host ({target})")
+        resp = _sitemap.get_on_host(client, target, host, rules)
     root = _sitemap.parse_xml(resp.content, "the sitemap")
     if root.tag == "rss":
         jobs = _from_feed(company, root)
@@ -157,9 +190,11 @@ def fetch(
         found: dict[str, Job] = {}
         for loc in root.iter(f"{ns}loc"):
             url = (loc.text or "").strip()
-            if _sitemap.on_host(url, company.slug.lower()) and (words_id := _job_id(url)):
+            if _sitemap.on_host(url, host) and (words_id := _job_id(url)):
                 found.setdefault(words_id[1], _sitemap.listed(company, url, *words_id))
-        jobs = _sitemap.fetch_pages(company, client, found, wants_body, rules, _from_page, pool)
+        jobs = _sitemap.fetch_pages(
+            company, client, found, wants_body, rules, _from_page, pool, host=host
+        )
     else:
         raise ValueError(f"the sitemap is neither an RSS feed nor a urlset ({root.tag})")
     if not jobs:

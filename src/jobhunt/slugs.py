@@ -76,6 +76,8 @@ _BAMBOOHR_OWN = {
 
 # <tenant>.<datacenter>.myworkdayjobs.com/[<language>/]<site>/...
 _WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com")
+# SuccessFactors Career Site Builder sites on SAP's hosting: the board is the host
+_SAP_HOSTED = re.compile(r"([a-z0-9-]+)\.jobs\.hr\.cloud\.sap")
 _LANGUAGE = re.compile(r"[a-z]{2}(-[a-z]{2})?", re.I)  # en-US, en-us, es
 
 # Ends at whitespace, quotes, angle brackets, or a backslash; see _trim for trailing punctuation.
@@ -161,6 +163,8 @@ def board_from_url(url: str) -> Company | None:
     try:  # a host the patterns allow but Company rejects (a label ending in "-") is no board
         if m := _WORKDAY_HOST.fullmatch(host):
             return _workday_board(m.group(1), m.group(2), segments)
+        if m := _SAP_HOSTED.fullmatch(host):
+            return Company(name=m.group(1), ats="successfactors", slug=host)
         if board := _workable_or_bamboohr(host, segments):
             return board
     except ValueError:

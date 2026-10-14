@@ -616,6 +616,7 @@ def test_every_platform_slugs_reads_has_its_hosts():
     }
     assert "oracle" not in discover.DEFAULT_PLATFORMS  # all of oraclecloud.com: opt in
     assert discover.prefixes(["gem", "workday"]) == ["com,gem,jobs)", "com,myworkdayjobs,"]
+    assert discover.prefixes(["successfactors"]) == ["sap,cloud,hr,jobs,"]  # SAP-hosted sites
 
 
 def test_crawl_boards_dedupes_across_crawls_and_skips_known(monkeypatch, tmp_path):

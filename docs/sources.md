@@ -334,7 +334,11 @@ SAP SuccessFactors careers sites built with Career Site Builder, often `jobs.<co
 API, and robots.txt disallows `/services/`, the paths their feeds and search use. `jobhunt` reads
 what the sites allow: the sitemap, and job pages.
 
-- **Slug:** the careers site's host, e.g. `jobs.ball.com`.
+- **Slug:** the careers site's host, e.g. `jobs.ball.com`. SAP is moving these sites to its own
+  hosting, `<site>.jobs.hr.cloud.sap`: a site found there has that host as its slug, and an
+  older board whose sitemap now redirects there (`careers.crocs.com` to
+  `careers-crocsinc.jobs.hr.cloud.sap`) keeps its slug, so its job keys don't change. That one
+  redirect is followed: the new host's robots.txt is read first, then its sitemap and job pages.
 - **Pages:**
   - `GET /robots.txt` first. If it disallows the sitemap, the board is skipped with a warning; if
     it disallows job pages, postings are kept without descriptions. Following RFC 9309, a

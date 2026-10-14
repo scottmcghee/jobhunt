@@ -1728,6 +1728,44 @@ def test_successfactors_a_sitemap_redirect_to_another_host_is_an_error(sf_compan
     assert elsewhere.call_count == 0
 
 
+SAP = "https://careers-exampleco.jobs.hr.cloud.sap"
+
+
+def _sap_hosted(robots=None):
+    """careers.example.com's sitemap redirects to the same site on SAP's hosting."""
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(
+        return_value=httpx.Response(301, headers={"location": SAP + "/xml/sitemap.xml"})
+    )
+    respx.get(SAP + "/robots.txt").mock(return_value=robots or httpx.Response(404))
+    text = (FIXTURES / "successfactors_sitemap.xml").read_text().replace(SF, SAP)
+    sitemap = respx.get(SAP + "/xml/sitemap.xml").mock(return_value=httpx.Response(200, text=text))
+    page = (FIXTURES / "successfactors_job.html").read_text()
+    pages = respx.get(url__startswith=SAP + "/").mock(return_value=httpx.Response(200, text=page))
+    return sitemap, pages
+
+
+@respx.mock
+def test_successfactors_follows_its_sitemap_to_sap_hosting(sf_company):
+    sitemap, _ = _sap_hosted()
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, lambda j: "Director" in j.title)
+    assert sitemap.call_count == 1
+    first = jobs[0]
+    assert first.company_slug == "careers.example.com"  # the board's slug: keys don't change
+    assert first.url.startswith(SAP + "/job/") and first.body  # its page, read on the new host
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+
+
+@respx.mock
+def test_successfactors_reads_the_sap_hosts_own_robots_txt(sf_company):
+    sitemap, _ = _sap_hosted(robots=httpx.Response(200, text="User-agent: *\nDisallow: /xml/\n"))
+    with httpx.Client() as client:
+        assert successfactors.fetch(sf_company, client) == []
+    assert sitemap.call_count == 0
+    assert "robots.txt" in (_partial.take(sf_company.key) or "")
+
+
 @respx.mock
 def test_successfactors_a_posting_twice_in_the_feed_comes_once(sf_company):
     feed = (FIXTURES / "successfactors_feed.xml").read_text()
