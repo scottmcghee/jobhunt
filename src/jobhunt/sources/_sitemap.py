@@ -230,6 +230,7 @@ def fetch_pages(
     rules: RobotFileParser,
     parse: Callable[[Job, str], Job],
     pool: Executor | None,
+    host: str | None = None,
 ) -> list[Job]:
     """``found`` (postings known by URL) with the pages ``wanted`` asks for fetched and parsed.
 
@@ -237,7 +238,7 @@ def fetch_pages(
     followed: that posting is kept without a description.
     """
     found = dict(found)
-    host = company.slug.lower()
+    host = host or company.slug.lower()  # where the site is served, if not the board's slug
     want = {
         job.external_id: reading
         for job in found.values()

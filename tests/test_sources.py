@@ -1729,6 +1729,85 @@ def test_successfactors_a_sitemap_redirect_to_another_host_is_an_error(sf_compan
 
 
 @respx.mock
+def test_successfactors_follows_a_sitemap_redirect_on_the_same_host(sf_company):
+    """careers.l3harris.com/sitemap.xml redirects to /en/sitemap.xml."""
+    _, pages = _sf_routes()
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "/en/sitemap.xml"}))
+    moved = respx.get(SF + "/en/sitemap.xml").mock(
+        return_value=httpx.Response(200, content=(FIXTURES / "successfactors_sitemap.xml").read_bytes())
+    )
+    respx.get(SF + "/job/Tulsa-Plant-Operator-OK-74101/1200000300/").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client)
+    assert moved.call_count == 1
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+
+
+@respx.mock
+def test_successfactors_robots_txt_can_rule_out_a_sitemap_redirect(sf_company):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /en/\n"))
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "/en/sitemap.xml"}))
+    moved = respx.get(SF + "/en/sitemap.xml").mock(return_value=_urlset(SF_JOB1))
+    with httpx.Client() as client, pytest.raises(ValueError, match="robots.txt disallows"):
+        successfactors.fetch(sf_company, client)
+    assert moved.call_count == 0
+
+
+SAP = "https://careers-exampleco.jobs.hr.cloud.sap"
+
+
+def _sap_hosted(robots=None):
+    """careers.example.com's sitemap redirects to the same site on SAP's hosting."""
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SF + "/sitemap.xml").mock(
+        return_value=httpx.Response(301, headers={"location": SAP + "/xml/sitemap.xml"})
+    )
+    respx.get(SAP + "/robots.txt").mock(return_value=robots or httpx.Response(404))
+    text = (FIXTURES / "successfactors_sitemap.xml").read_text().replace(SF, SAP)
+    sitemap = respx.get(SAP + "/xml/sitemap.xml").mock(return_value=httpx.Response(200, text=text))
+    page = (FIXTURES / "successfactors_job.html").read_text()
+    pages = respx.get(url__startswith=SAP + "/").mock(return_value=httpx.Response(200, text=page))
+    return sitemap, pages
+
+
+@respx.mock
+def test_successfactors_follows_its_sitemap_to_sap_hosting(sf_company):
+    sitemap, _ = _sap_hosted()
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client, lambda j: "Director" in j.title)
+    assert sitemap.call_count == 1
+    first = jobs[0]
+    assert first.company_slug == "careers.example.com"  # the board's slug: keys don't change
+    assert first.url.startswith(SAP + "/job/") and first.body  # its page, read on the new host
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+
+
+@respx.mock
+def test_successfactors_reads_the_sap_hosts_own_robots_txt(sf_company):
+    sitemap, _ = _sap_hosted(robots=httpx.Response(200, text="User-agent: *\nDisallow: /xml/\n"))
+    with httpx.Client() as client:
+        assert successfactors.fetch(sf_company, client) == []
+    assert sitemap.call_count == 0
+    assert "robots.txt" in (_partial.take(sf_company.key) or "")
+
+
+@respx.mock
+def test_successfactors_a_sap_hosted_board_follows_a_same_host_redirect():
+    """A board whose slug is a SAP host: /sitemap.xml to /en/sitemap.xml is not a move."""
+    board = Company(name="Example Co", ats="successfactors", slug="careers-exampleco.jobs.hr.cloud.sap")
+    robots = respx.get(SAP + "/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get(SAP + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "/en/sitemap.xml"}))
+    text = (FIXTURES / "successfactors_sitemap.xml").read_text().replace(SF, SAP)
+    respx.get(SAP + "/en/sitemap.xml").mock(return_value=httpx.Response(200, text=text))
+    page = (FIXTURES / "successfactors_job.html").read_text()
+    respx.get(url__startswith=SAP + "/").mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(board, client)
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+    assert robots.call_count == 1  # its own robots.txt, read once
+
+
+@respx.mock
 def test_successfactors_a_posting_twice_in_the_feed_comes_once(sf_company):
     feed = (FIXTURES / "successfactors_feed.xml").read_text()
     first_item = feed[feed.index("<item>"):feed.index("</item>") + len("</item>")]

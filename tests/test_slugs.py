@@ -571,3 +571,17 @@ def test_render_writes_an_eightfold_location():
     assert "    location: United States\n" in text
     loaded = yaml.safe_load("companies:\n" + text)["companies"][0]
     assert Company.model_validate(loaded) == board
+
+
+@pytest.mark.parametrize(
+    ("url", "slug"),
+    [
+        ("https://colas.jobs.hr.cloud.sap/job/Paris-Directeur/1234567/", "colas.jobs.hr.cloud.sap"),
+        ("https://WLGore.jobs.hr.cloud.sap/", "wlgore.jobs.hr.cloud.sap"),
+        ("https://jobs.hr.cloud.sap/", None),  # SAP's own host, no site
+        ("https://a.b.jobs.hr.cloud.sap/", None),  # one label only
+    ],
+)
+def test_sap_hosted_career_sites_are_successfactors_boards(url, slug):
+    board = slugs.board_from_url(url)
+    assert (board.ats, board.slug) == ("successfactors", slug) if slug else board is None

@@ -173,7 +173,9 @@ def rate_group(company: Company) -> str:
 
 
 def request_group(url: httpx.URL) -> str:
-    """The rate-limit group of one request URL. Agrees with ``rate_group`` for every source."""
+    """The rate-limit group of one request URL. Agrees with ``rate_group`` for every source,
+    except a SuccessFactors board that moved to SAP's hosting: past robots.txt and the first
+    sitemap hop, its requests fall in the SAP host's group (``<site>.jobs.hr.cloud.sap``)."""
     host = url.host.lower()
     if m := _WORKDAY_HOST.fullmatch(host):
         return f"workday:{m.group(1)}"

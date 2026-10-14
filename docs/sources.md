@@ -334,7 +334,13 @@ SAP SuccessFactors careers sites built with Career Site Builder, often `jobs.<co
 API, and robots.txt disallows `/services/`, the paths their feeds and search use. `jobhunt` reads
 what the sites allow: the sitemap, and job pages.
 
-- **Slug:** the careers site's host, e.g. `jobs.ball.com`.
+- **Slug:** the careers site's host, e.g. `jobs.ball.com`. SAP is moving these sites to its own
+  hosting, `<site>.jobs.hr.cloud.sap`: a site found there has that host as its slug, and an
+  older board whose sitemap now redirects there (`careers.crocs.com` to
+  `careers-crocsinc.jobs.hr.cloud.sap`) keeps its slug, so its job keys don't change. That one
+  redirect is followed: the new host's robots.txt is read first, then its sitemap and job pages.
+  Discovery can find such a site under its SAP host while `companies.yaml` already lists it under
+  the company's own domain; keep only one, or the same postings are fetched under two keys.
 - **Pages:**
   - `GET /robots.txt` first. If it disallows the sitemap, the board is skipped with a warning; if
     it disallows job pages, postings are kept without descriptions. Following RFC 9309, a
@@ -365,7 +371,9 @@ what the sites allow: the sitemap, and job pages.
 - **Unknown board:** a host with no sitemap answers 404 and is removed. A site that isn't Career
   Site Builder (careers.netapp.com mentions SuccessFactors but runs another platform) lists no job
   URLs in this shape; it is never removed, and `fetch` warns that it found nothing.
-- **Rate group:** the careers host.
+- **Rate group:** the careers host. A board that moved to SAP's hosting is the exception: past
+  robots.txt and the first sitemap hop, its requests fall in the SAP host's group (the name
+  `jobhunt -v fetch` prints), so a `fetch.max_rate` entry keyed by the old host no longer applies to them.
 
 ## Radancy and Paradox
 
