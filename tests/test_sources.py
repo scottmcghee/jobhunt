@@ -1728,6 +1728,31 @@ def test_successfactors_a_sitemap_redirect_to_another_host_is_an_error(sf_compan
     assert elsewhere.call_count == 0
 
 
+@respx.mock
+def test_successfactors_follows_a_sitemap_redirect_on_the_same_host(sf_company):
+    """careers.l3harris.com/sitemap.xml redirects to /en/sitemap.xml."""
+    _, pages = _sf_routes()
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "/en/sitemap.xml"}))
+    moved = respx.get(SF + "/en/sitemap.xml").mock(
+        return_value=httpx.Response(200, content=(FIXTURES / "successfactors_sitemap.xml").read_bytes())
+    )
+    respx.get(SF + "/job/Tulsa-Plant-Operator-OK-74101/1200000300/").mock(return_value=httpx.Response(404))
+    with httpx.Client() as client:
+        jobs = successfactors.fetch(sf_company, client)
+    assert moved.call_count == 1
+    assert [j.external_id for j in jobs] == ["1200000100", "1200000200", "1200000300"]
+
+
+@respx.mock
+def test_successfactors_robots_txt_can_rule_out_a_sitemap_redirect(sf_company):
+    respx.get(SF + "/robots.txt").mock(return_value=httpx.Response(200, text="User-agent: *\nDisallow: /en/\n"))
+    respx.get(SF + "/sitemap.xml").mock(return_value=httpx.Response(301, headers={"location": "/en/sitemap.xml"}))
+    moved = respx.get(SF + "/en/sitemap.xml").mock(return_value=_urlset(SF_JOB1))
+    with httpx.Client() as client, pytest.raises(ValueError, match="robots.txt disallows"):
+        successfactors.fetch(sf_company, client)
+    assert moved.call_count == 0
+
+
 SAP = "https://careers-exampleco.jobs.hr.cloud.sap"
 
 
