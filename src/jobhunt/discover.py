@@ -76,6 +76,7 @@ PLATFORM_HOSTS: dict[str, list[tuple[str, bool]]] = {
     "oracle": [("oraclecloud.com", True)],
 }
 DEFAULT_PLATFORMS = [p for p in PLATFORM_HOSTS if p != "oracle"]
+DNS_CONTROL_HOST = "data.commoncrawl.org"  # resolves whenever DNS works (_no_dns_record)
 _CLASSIC_ICIMS = re.compile(r"[a-z0-9-]+\.icims\.com")
 _SURT_HOST = re.compile(r"([a-z0-9-]+(?:,[a-z0-9-]+)+)(?::\d+)?\)")
 _HOST = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
@@ -233,14 +234,25 @@ def _due(
 
 
 def _no_dns_record(host: str) -> bool:
-    """Whether DNS says the host doesn't exist (not a lookup that failed for now)."""
+    """Whether DNS says the host doesn't exist (not a lookup that failed for now).
+
+    macOS answers "no such name" for every host when the network or resolver is down, so the
+    answer only counts if ``DNS_CONTROL_HOST``, a name discovery already contacts, resolves.
+    """
     try:
         socket.getaddrinfo(host, 443)
     except socket.gaierror as e:
-        return e.errno in {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
+        if e.errno not in {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}:
+            return False
     except OSError:
         return False
-    return False
+    else:
+        return False
+    try:
+        socket.getaddrinfo(DNS_CONTROL_HOST, 443)
+    except OSError:  # gaierror too: DNS itself is down, so the host is retried as usual
+        return False
+    return True
 
 
 def _survey_one(

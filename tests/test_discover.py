@@ -539,12 +539,16 @@ def test_main_reports_a_busy_common_crawl_without_a_traceback(monkeypatch, tmp_p
     assert "503 Slow Down" in caplog.text and "rerun" in caplog.text
 
 
-def _dns(monkeypatch, errno=None):
-    """getaddrinfo that fails with ``errno`` (a socket.EAI_* code), or resolves when None."""
+def _dns(monkeypatch, errno=None, control=None):
+    """getaddrinfo that fails with ``errno`` (a socket.EAI_* code), or resolves when None.
+
+    ``control`` is the same for discover.DNS_CONTROL_HOST, which resolves by default.
+    """
     def getaddrinfo(host, *args, **kwargs):
-        if errno is None:
+        code = control if host == discover.DNS_CONTROL_HOST else errno
+        if code is None:
             return [("family", "type", "proto", "", ("192.0.2.1", 443))]
-        raise discover.socket.gaierror(errno, "lookup failed")
+        raise discover.socket.gaierror(code, "lookup failed")
 
     monkeypatch.setattr(discover.socket, "getaddrinfo", getaddrinfo)
 
@@ -573,6 +577,18 @@ def test_a_connect_error_with_a_working_or_temporary_dns_is_still_retried(tmp_pa
     with httpx.Client() as client:
         discover.survey_hosts(["careers.flaky.com"], client, cache, delay=0, now=NOW)
     entry = json.loads(cache.read_text())["careers.flaky.com"]
+    assert entry["failures"] == 1 and "no_dns" not in entry
+
+
+@respx.mock
+def test_a_host_is_not_settled_when_dns_itself_is_down(tmp_path, monkeypatch):
+    # macOS answers EAI_NONAME for every name when the network is down, a real one too
+    _dns(monkeypatch, discover.socket.EAI_NONAME, control=discover.socket.EAI_NONAME)
+    respx.get("https://careers.blip.com/robots.txt").mock(side_effect=httpx.ConnectError("nodename"))
+    cache = tmp_path / "hosts.json"
+    with httpx.Client() as client:
+        discover.survey_hosts(["careers.blip.com"], client, cache, delay=0, now=NOW)
+    entry = json.loads(cache.read_text())["careers.blip.com"]
     assert entry["failures"] == 1 and "no_dns" not in entry
 
 
