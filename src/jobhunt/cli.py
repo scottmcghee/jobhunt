@@ -338,13 +338,15 @@ class _ClosedJobs:
         self.by_board: dict[str, set[str]] = {}
         for job in storage.load_jobs(data_dir):
             self.by_board.setdefault(f"{job.source}:{job.company_slug}", set()).add(job.key)
+        self.counted: set[str] = set()  # boards counted this run: one listed twice counts once
         self.closed = self.restored = 0
 
     def board(self, company: Company, listed: set[str]) -> None:
         """Count one full listing of the board, and save if a count changed."""
         keys = self.by_board.get(company.key)
-        if not keys:
+        if not keys or company.key in self.counted:
             return
+        self.counted.add(company.key)
         before = {key: self.misses.counts.get(key) for key in keys}
         for key in sorted(keys):
             mark = self.marks.get(key)

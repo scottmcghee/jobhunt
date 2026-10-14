@@ -83,8 +83,8 @@ After a board's full listing, `fetch` counts each recorded job the listing left 
 it after `fetch.close_after_misses` fetches in a row. A listing counts as full only if the source
 says nothing was left out: search sources never do, and a source notes a listing it cut short
 (`sources/_partial.py`): Workday reporting its 2,000 cap, SmartRecruiters or iCIMS Career Sites
-past their page guards, a Workday or SmartRecruiters page that comes back empty before the
-reported total, a SuccessFactors sitemap robots.txt rules out, and a Radancy, Paradox or
+past their page guards, a Workday, SmartRecruiters or iCIMS Career Sites page that comes back
+empty before the reported total, a SuccessFactors sitemap robots.txt rules out, and a Radancy, Paradox or
 SuccessFactors sitemap skipped (failed, or past `MAX_SITEMAPS`). An empty listing isn't trusted
 either, since some platforms answer a glitch or an unknown board with no postings: a board that
 empties closes its jobs only when it's pruned, or by hand.

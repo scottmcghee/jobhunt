@@ -3056,6 +3056,21 @@ def test_icims_careers_at_its_page_guard_is_not_complete_whatever_the_count():
 
 
 @respx.mock
+def test_icims_careers_an_empty_page_before_the_total_is_not_complete():
+    site = Company(name="X", ats="icims_careers", slug="careers.example.com")
+
+    def page(request):
+        n = int(request.url.params["page"])
+        rows = [{"data": {"req_id": f"R{i}", "title": "t"}} for i in range(100)] if n == 1 else []
+        return httpx.Response(200, json={"jobs": rows, "totalCount": 200})  # page 2 came back empty
+
+    respx.get(IC).mock(side_effect=page)
+    with httpx.Client() as client:
+        jobs = fetch_company(site, client)
+    assert len(jobs) == 100 and not listing_is_complete(site, jobs)
+
+
+@respx.mock
 def test_icims_careers_read_to_its_total_is_complete(icims_careers_company, fixture_json):
     pages = _icims_pages(fixture_json, [100, 100, 7])
     respx.get(IC).mock(side_effect=[httpx.Response(200, json=p) for p in pages])
@@ -3070,8 +3085,7 @@ def test_successfactors_sitemap_ruled_out_by_robots_txt_is_not_complete(sf_compa
     _sf_routes(robots=robots)
     with httpx.Client() as client:
         jobs = fetch_company(sf_company, client)
-    assert not listing_is_complete(sf_company, jobs)
-    assert _partial.take(sf_company.key) is None  # consumed
+    assert jobs == [] and "robots.txt" in (_partial.take(sf_company.key) or "")  # noted as partial
 
 
 @respx.mock

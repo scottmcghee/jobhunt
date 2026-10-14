@@ -90,6 +90,7 @@ def fetch(company: Company, client: httpx.Client) -> list[Job]:
         page += 1
         more, _ = _page(company, client, page)
         if not more:  # an empty page ends the listing, whatever the total says
+            _partial.note(company.key, "an empty page before the reported total")
             break
         rows += more
     rows = [{**r, "req_id": r.get("req_id") or r.get("slug")} for r in rows]

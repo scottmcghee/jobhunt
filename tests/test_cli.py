@@ -2209,3 +2209,17 @@ def test_job_misses_are_saved_only_when_they_change(tmp_path, fixture_json, monk
     dead.mock(return_value=_listing(fixture_json, 1001))
     assert _fetch(tmp_path, companies) == 0
     assert saves.count("job_misses.json") == 1  # one board's count changed
+
+
+@respx.mock
+def test_a_board_listed_twice_counts_one_miss_per_fetch(tmp_path, fixture_json):
+    p = tmp_path / "companies.yaml"
+    p.write_text(
+        "companies:\n  - name: Live\n    ats: greenhouse\n    slug: live\n"
+        "  - name: Live again\n    ats: greenhouse\n    slug: live\n"
+    )
+    key = _record_job(tmp_path, source="greenhouse", company_slug="live", external_id="999999")
+    respx.get(GH.format("live")).mock(return_value=_listing(fixture_json))
+    assert _fetch(tmp_path, p) == 0  # one fetch: one miss, however many entries name the board
+    assert key not in _marks(tmp_path)
+    assert storage.MissLedger(tmp_path / "data" / "job_misses.json").counts[key] == 1
