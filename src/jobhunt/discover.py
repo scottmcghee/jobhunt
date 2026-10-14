@@ -237,7 +237,8 @@ def _no_dns_record(host: str) -> bool:
     """Whether DNS says the host doesn't exist (not a lookup that failed for now).
 
     macOS answers "no such name" for every host when the network or resolver is down, so the
-    answer only counts if ``DNS_CONTROL_HOST``, a name discovery already contacts, resolves.
+    answer only counts if ``DNS_CONTROL_HOST``, a well-known name (Common Crawl's data host)
+    that resolves whenever DNS works, resolves.
     """
     try:
         socket.getaddrinfo(host, 443)
