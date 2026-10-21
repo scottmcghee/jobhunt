@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 ATSName = Literal[
     "greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable", "bamboohr",
     "amazon", "eightfold", "oracle", "apple", "phenom", "successfactors", "radancy",
-    "paradox", "icims_careers", "gem", "rippling", "usajobs",
+    "paradox", "icims_careers", "gem", "rippling", "usajobs", "kula",
 ]
 
 _WORKDAY_DATACENTER = re.compile(r"wd\d+")

@@ -193,6 +193,11 @@ def gem_company() -> Company:
 
 
 @pytest.fixture
+def kula_company() -> Company:
+    return Company(name="Example Kula Co", ats="kula", slug="examplekula")
+
+
+@pytest.fixture
 def rippling_company() -> Company:
     return Company(name="Example Rip", ats="rippling", slug="examplerip")
 

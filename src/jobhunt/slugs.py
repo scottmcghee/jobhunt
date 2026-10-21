@@ -47,6 +47,7 @@ _BOARD_HOSTS: dict[str, ATSName] = {
     "jobs.lever.co": "lever",
     "jobs.ashbyhq.com": "ashby",
     "jobs.gem.com": "gem",
+    "careers.kula.ai": "kula",
     "ats.rippling.com": "rippling",
     "jobs.smartrecruiters.com": "smartrecruiters",
     "careers.smartrecruiters.com": "smartrecruiters",
@@ -89,8 +90,9 @@ _NOT_SLUGS = {"embed", "robots.txt", "llms.txt", "favicon.ico", "sitemap.xml"}
 _NOT_WORKDAY_SITES = {"wday", "job", "details", "login"}
 _NOT_SMARTRECRUITERS = {"oneclick-ui", "my-applications", "external-referrals", "xhtmlized"}
 _NOT_RIPPLING = {"api", "internal"}
+_NOT_KULA = {"api"}
 _NOT_SLUGS_FOR: dict[ATSName, set[str]] = {
-    "smartrecruiters": _NOT_SMARTRECRUITERS, "rippling": _NOT_RIPPLING
+    "smartrecruiters": _NOT_SMARTRECRUITERS, "rippling": _NOT_RIPPLING, "kula": _NOT_KULA
 }
 # ats.rippling.com/<locale>/<slug>/... (fr-FR, es-419) is the same board as /<slug>/...
 _RIPPLING_LOCALE = re.compile(r"[a-z]{2}-([A-Z]{2}|\d{3})")

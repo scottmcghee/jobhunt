@@ -53,6 +53,7 @@ PLATFORMS = {
     "brassring": r"brassring\.com|kenexa",
     "ukg": r"ultipro\.com|ukg\.net",
     "paradox": r"paradox\.ai",
+    "kula": r"careers(-cdn)?\.kula\.ai",
 }
 _PLATFORMS = {name: re.compile(pattern, re.I) for name, pattern in PLATFORMS.items()}
 _URL = re.compile(r"""https?://[^\s"'<>\\)]+""")

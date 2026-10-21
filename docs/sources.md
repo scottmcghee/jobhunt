@@ -7,7 +7,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - [How sources work](#how-sources-work)
 - [At a glance](#at-a-glance)
 - Listing sources: [Greenhouse](#greenhouse), [Lever](#lever), [Ashby](#ashby),
-  [Workable](#workable), [Gem](#gem), [iCIMS Career Sites](#icims-career-sites)
+  [Workable](#workable), [Gem](#gem), [Kula](#kula), [iCIMS Career Sites](#icims-career-sites)
 - Listing sources with descriptions on demand: [Workday](#workday),
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr), [Rippling](#rippling),
   [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
@@ -39,8 +39,8 @@ don't know or care where a posting came from.
 Sources fall into three groups.
 
 **Listing sources** return every open posting, with its description, in one request per board:
-Greenhouse, Lever, Ashby, Workable and Gem. iCIMS Career Sites is a listing source too, but paged: one
-request per 100 postings.
+Greenhouse, Lever, Ashby, Workable, Gem and Kula (which also reads its host's robots.txt, once per
+run unless it answers 5xx). iCIMS Career Sites is a listing source too, but paged: one request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
 descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR,
@@ -98,6 +98,7 @@ empties closes its jobs only when it's pruned, or by hand.
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
 | `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
 | `gem` | board name | in the listing | 404, removed | `gem` |
+| `kula` | board name | in the page | 404, removed; listing not in the page or robots.txt 5xx: empty, warned | `kula` (1 request/s) |
 | `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
@@ -200,6 +201,35 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Remote:** from Gem's `location_type`: `remote` is yes, `hybrid` and `in_office` are no; otherwise yes
   only if the location or title says "remote".
 - **Unknown board:** 404, removed.
+
+## Kula
+
+```yaml
+  - name: Rocketlane
+    ats: kula
+    slug: rocketlane
+```
+
+Kula is an applicant tracking system popular with startups; its boards are at
+`careers.kula.ai/<slug>`.
+
+- **Slug:** the board name in `careers.kula.ai/<slug>`; case doesn't matter.
+- **Endpoint:** `GET https://careers.kula.ai/<slug>`, the board's own page. Kula's JSON API
+  (`/api/`) is disallowed by robots.txt, but the page is server-rendered by Next.js, and the data
+  it streams into the page (`self.__next_f.push(...)` scripts) holds the whole listing,
+  descriptions included. Postings that are unlisted or past their end date are left out. The
+  host's robots.txt is read once per run, and a board it disallows is skipped. If robots.txt
+  answers 5xx, that board comes back empty with a warning, its recorded jobs aren't closed, and
+  the next board asks again.
+- **Job link:** `https://careers.kula.ai/<slug>/<id>`, which redirects to a longer form.
+- **Remote:** from Kula's `workplace`: `remote` is yes, `hybrid` and `office` are no; otherwise yes
+  only if the location or title says "remote".
+- **Unknown board:** 404, removed.
+- **Listing not in the page:** some boards load their jobs in the browser, from the disallowed
+  API. They come back empty with a warning, and their recorded jobs aren't closed.
+- **Rate cap:** 1 request a second. robots.txt asks for no crawl delay, but every board is on one
+  host, so the source sends a cap with its requests; a `fetch.max_rate` entry for `kula`
+  overrides it.
 
 ## iCIMS Career Sites
 
@@ -657,13 +687,15 @@ A group can also be held to a number of requests per second, `fetch.max_rate` in
 | `apply.careers.microsoft.com` | 0.5/s | Microsoft's site answered 429 to requests one second apart. |
 | `apple` | 1/s | Each page is about 300 KB. |
 
-iCIMS Career Sites aren't in the map: each site's 0.2/s cap comes from its robots.txt's crawl
-delay and is built into the source, though an entry for its host overrides it.
+iCIMS Career Sites and Kula aren't in the map: each iCIMS site's 0.2/s cap comes from its
+robots.txt's crawl delay, and Kula's 1/s cap is shared by every board on its one host; both are
+built into the source, though an entry for the group (an iCIMS site's host, or `kula`) overrides it.
 
 Keys are the group names `jobhunt -v fetch` prints, and are case-sensitive. Setting `max_rate`, in the
 file or in `JOBHUNT_FETCH_MAX_RATE`, replaces the whole map, so copy these four into it to keep
-them. Groups not listed have no cap, except iCIMS Career Sites; `{}` removes every configured
-cap, while an iCIMS site keeps its built-in 0.2/s unless its host gets its own entry.
+them. Groups not listed have no cap, except iCIMS Career Sites and Kula; `{}` removes every
+configured cap, while an iCIMS site keeps its built-in 0.2/s unless its host gets its own entry,
+and Kula its built-in 1/s unless `kula` gets one.
 
 ### Retries
 
@@ -726,8 +758,8 @@ or finds nothing.
 
 Some platforms forbid automated access in robots.txt or their terms, or block it outright, so `jobhunt` doesn't
 support them, and their boards must not be added to `companies.yaml`. Nothing enforces this for
-listing and API sources: `jobhunt` checks robots.txt itself only for the sitemap sources, so
-check a board's robots.txt before adding it. Their jobs are worth a manual search or the
+listing and API sources: `jobhunt` checks robots.txt itself only for the sitemap sources and
+Kula, so check a board's robots.txt before adding it. Their jobs are worth a manual search or the
 platform's own email alerts.
 
 | Platform | Who posts there | Why it's off-limits | Instead |

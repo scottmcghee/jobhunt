@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from jobhunt.sources import (
     gem,
     greenhouse,
     icims_careers,
+    kula,
     lever,
     listing_is_complete,
     oracle,
@@ -2819,6 +2821,197 @@ def test_gem_skips_a_post_with_no_id(gem_company, fixture_json, caplog):
 def test_gem_rate_group():
     board = Company(name="x", ats="gem", slug="examplegem")
     assert rate_group(board) == "gem" == request_group(httpx.URL(GEM))
+
+
+# ------------------------------------------------------------------ Kula (server-rendered board)
+
+KULA = "https://careers.kula.ai/examplekula"
+KULA_ROBOTS = "https://careers.kula.ai/robots.txt"
+KULA_ROBOTS_TXT = "User-Agent: *\nAllow: /\nDisallow: /api/\nDisallow: /*/portal$\nDisallow: /*/portal/\n"
+
+
+def _kula_routes(page="kula_board.html", robots=None):
+    respx.get(KULA_ROBOTS).mock(return_value=robots or httpx.Response(200, text=KULA_ROBOTS_TXT))
+    body = (FIXTURES / page).read_bytes()
+    return respx.get(KULA).mock(return_value=httpx.Response(200, content=body))
+
+
+@respx.mock
+def test_kula_normalizes(kula_company):
+    _kula_routes()
+    with httpx.Client() as client:
+        jobs = fetch_company(kula_company, client)
+    # an unlisted posting and one past its end date are left out
+    assert [j.external_id for j in jobs] == ["5101", "5102", "5103"]
+    j = jobs[0]
+    assert (j.source, j.company, j.company_slug) == ("kula", "Example Kula Co", "examplekula")
+    assert j.key == "kula:examplekula:5101"
+    assert j.title == "Senior Software Engineer"
+    assert j.url == "https://careers.kula.ai/examplekula/5101"
+    assert j.location == "United States"
+    assert j.posted_at == "2026-09-28T17:05:09+00:00"
+    assert "About Example Kula Co" in j.body and "Ship with care & speed." in j.body
+    assert "<" not in j.body
+    # remote from Kula's workplace: remote, then office and hybrid (explicitly not remote)
+    assert [j.remote for j in jobs] == [True, False, False]
+    assert jobs[1].title == "Engineering Manager, Platform"
+    assert jobs[1].location == "Zürich, Zürich, Switzerland; London, England, United Kingdom"
+    assert jobs[2].location == "Austin, Texas, United States"
+
+
+@respx.mock
+def test_kula_descriptions_are_read_by_their_utf8_length(kula_company):
+    # a text row's length counts bytes: a multi-byte description must not swallow the next row
+    _kula_routes()
+    with httpx.Client() as client:
+        jobs = {j.external_id: j for j in kula.fetch(kula_company, client)}
+    assert "Zürich café crew" in jobs["5102"].body and "Line two." in jobs["5102"].body
+    assert jobs["5103"].body == "Hybrid role in Austin."
+
+
+@respx.mock
+def test_kula_keeps_a_posting_until_its_end_date(kula_company):
+    _kula_routes()
+    with httpx.Client() as client:
+        jobs = kula.fetch(kula_company, client, now=datetime(2025, 1, 15, tzinfo=UTC))
+    assert [j.external_id for j in jobs] == ["5101", "5102", "5103", "5105"]
+
+
+@respx.mock
+def test_kula_page_without_a_listing_is_partial(kula_company, caplog):
+    # some boards load their jobs in the browser, from /api/, which robots.txt disallows
+    _kula_routes(page="kula_board_unrendered.html")
+    with httpx.Client() as client:
+        assert kula.fetch(kula_company, client) == []
+    assert "kula examplekula: the page lists no jobs" in caplog.text
+    assert _partial.take(kula_company.key) is not None
+
+
+@respx.mock
+def test_kula_unreadable_payload_raises(kula_company):
+    page = '<script>self.__next_f.push([1,"1:\\"x\\"\\nnot a row"])</script>'
+    respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    respx.get(KULA).mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client, pytest.raises(ValueError):
+        kula.fetch(kula_company, client)
+
+
+@respx.mock
+def test_kula_a_missing_description_leaves_the_body_empty(kula_company):
+    page = (FIXTURES / "kula_board.html").read_text().replace(r'\"$1e\"', r'\"$ff\"')  # the payload is a JS string in the page
+    respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    respx.get(KULA).mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client:
+        jobs = kula.fetch(kula_company, client)
+    assert jobs[0].external_id == "5101" and jobs[0].body == ""
+
+
+@respx.mock
+def test_kula_inline_and_escaped_descriptions(kula_company):
+    # React Flight inlines a short string rather than a "$<id>" reference, and escapes a leading
+    # "$" as "$$"; the payload is a JS string in the page
+    page = (
+        (FIXTURES / "kula_board.html")
+        .read_text()
+        .replace(r'\"$1e\"', r'\"<p>Short inline.</p>\"')
+        .replace(r'\"$1f\"', r'\"$$5 stipend\"')
+    )
+    respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    respx.get(KULA).mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client:
+        jobs = {j.external_id: j for j in kula.fetch(kula_company, client)}
+    assert jobs["5101"].body == "Short inline."
+    assert jobs["5102"].body == "$5 stipend"
+
+
+@respx.mock
+def test_kula_reads_robots_txt_once_per_client(kula_company):
+    # every board is on one host capped at 1/s: one request per board, plus robots.txt once
+    robots = respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    body = (FIXTURES / "kula_board.html").read_bytes()
+    first = respx.get(KULA).mock(return_value=httpx.Response(200, content=body))
+    second = respx.get("https://careers.kula.ai/otherkula").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    other = Company(name="Other Kula Co", ats="kula", slug="otherkula")
+    with httpx.Client() as client:
+        kula.fetch(kula_company, client)
+        kula.fetch(other, client)
+    assert (robots.call_count, first.call_count, second.call_count) == (1, 1, 1)
+    with httpx.Client() as client:  # a new client (a new run) reads it again
+        kula.fetch(kula_company, client)
+    assert robots.call_count == 2
+
+
+@respx.mock
+def test_kula_retries_robots_txt_after_a_5xx(kula_company, caplog):
+    # a 5xx isn't kept for the run: that board is skipped this fetch, the next asks again
+    robots = respx.get(KULA_ROBOTS).mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, text=KULA_ROBOTS_TXT)]
+    )
+    body = (FIXTURES / "kula_board.html").read_bytes()
+    first = respx.get(KULA).mock(return_value=httpx.Response(200, content=body))
+    respx.get("https://careers.kula.ai/otherkula").mock(return_value=httpx.Response(200, content=body))
+    other = Company(name="Other Kula Co", ats="kula", slug="otherkula")
+    with httpx.Client() as client:
+        assert kula.fetch(kula_company, client) == []
+        assert len(kula.fetch(other, client)) == 3
+    assert (robots.call_count, first.call_count) == (2, 0)
+    assert "kula examplekula: robots.txt unavailable (HTTP 503)" in caplog.text
+    assert "disallows" not in caplog.text
+    assert _partial.take(kula_company.key) is not None
+
+
+@respx.mock
+def test_kula_skips_a_posting_with_no_id(kula_company, caplog):
+    page = (FIXTURES / "kula_board.html").read_text().replace(r'\"id\":5101,', "")
+    respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    respx.get(KULA).mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client:
+        assert [j.external_id for j in kula.fetch(kula_company, client)] == ["5102", "5103"]
+    assert "skipped a posting with no id" in caplog.text
+
+
+@respx.mock
+def test_kula_unknown_board_404_raises(kula_company):
+    respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    respx.get(KULA).mock(return_value=httpx.Response(404))
+    with httpx.Client() as client, pytest.raises(httpx.HTTPStatusError):
+        kula.fetch(kula_company, client)
+
+
+@respx.mock
+def test_kula_robots_txt_can_rule_out_the_board(kula_company, caplog):
+    board = _kula_routes(robots=httpx.Response(200, text="User-agent: *\nDisallow: /examplekula\n"))
+    with httpx.Client() as client:
+        assert kula.fetch(kula_company, client) == []
+    assert board.call_count == 0
+    assert "kula examplekula: robots.txt disallows the board" in caplog.text
+    assert _partial.take(kula_company.key) is not None
+
+
+@respx.mock
+def test_kula_robots_txt_4xx_allows_the_board(kula_company):
+    # RFC 9309: robots.txt missing (any 4xx) means nothing is disallowed
+    board = _kula_routes(robots=httpx.Response(404))
+    with httpx.Client() as client:
+        assert len(kula.fetch(kula_company, client)) == 3
+    assert board.call_count == 1
+
+
+@respx.mock
+def test_kula_rate_group_and_cap(kula_company):
+    # every board is on careers.kula.ai: one group, capped by default, a max_rate entry wins
+    assert rate_group(kula_company) == "kula" == request_group(httpx.URL(KULA))
+    _kula_routes()
+    transport = throttle.ThrottledTransport()
+    with httpx.Client(transport=transport) as client:
+        kula.fetch(kula_company, client)
+    assert transport.limiter("kula").rate == pytest.approx(kula.RATE_CAP)
+    transport = throttle.ThrottledTransport(max_rate={"kula": 3.0})
+    with httpx.Client(transport=transport) as client:
+        kula.fetch(kula_company, client)
+    assert transport.limiter("kula").rate == pytest.approx(3.0)
 
 
 # ------------------------------------------------------------------ Rippling
