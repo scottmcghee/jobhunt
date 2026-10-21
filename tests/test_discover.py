@@ -612,11 +612,12 @@ def test_refresh_keeps_the_boards_of_a_host_whose_dns_record_is_gone(tmp_path, m
 def test_every_platform_slugs_reads_has_its_hosts():
     assert set(discover.PLATFORM_HOSTS) >= {
         "workday", "greenhouse", "lever", "ashby", "smartrecruiters", "workable", "bamboohr",
-        "eightfold", "gem", "rippling", "oracle",
+        "eightfold", "gem", "rippling", "oracle", "kula",
     }
     assert "oracle" not in discover.DEFAULT_PLATFORMS  # all of oraclecloud.com: opt in
     assert discover.prefixes(["gem", "workday"]) == ["com,gem,jobs)", "com,myworkdayjobs,"]
     assert discover.prefixes(["successfactors"]) == ["sap,cloud,hr,jobs,"]  # SAP-hosted sites
+    assert discover.prefixes(["kula"]) == ["ai,kula,careers)"]
 
 
 def test_crawl_boards_dedupes_across_crawls_and_skips_known(monkeypatch, tmp_path):

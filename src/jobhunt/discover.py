@@ -8,11 +8,12 @@ Two routes, one output (``data/discovered.yaml``, entries to review and paste in
 ``config/companies.yaml``; boards already there are left out):
 
 - **Known platforms.** Board URLs on Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable,
-  BambooHR, Eightfold, Gem, Rippling and SAP-hosted SuccessFactors sites follow patterns, and Common
-  Crawl's index keeps each platform's URLs together, so ``commoncrawl.urls`` finds every one a crawl
-  saw for about 100 MB of index (cached after the first run) plus some tens of MB of index blocks
-  per crawl. ``slugs.board_from_url`` turns them into boards (new Workday datacenters included).
-  Oracle is opt-in (``--platforms oracle``): its prefix is all of oraclecloud.com.
+  BambooHR, Eightfold, Gem, Kula, Rippling and SAP-hosted SuccessFactors sites follow patterns,
+  and Common Crawl's index keeps each platform's URLs together, so ``commoncrawl.urls`` finds
+  every one a crawl saw for about 100 MB of index (cached after the first run) plus some tens of
+  MB of index blocks per crawl. ``slugs.board_from_url`` turns them into boards (new Workday
+  datacenters included). Oracle is opt-in (``--platforms oracle``): its prefix is all of
+  oraclecloud.com.
 - **Careers hosts.** A company's own careers site (``careers.acme.com``) says nothing in its URL, so
   each host in ``--hosts`` files (plain hosts, URLs, or lines grepped from a Common Crawl
   ``cluster.idx``), and with ``--webgraph`` each careers host in Common Crawl's latest web graph
@@ -74,6 +75,7 @@ PLATFORM_HOSTS: dict[str, list[tuple[str, bool]]] = {
     "eightfold": [("eightfold.ai", True)],
     "gem": [("jobs.gem.com", False)],
     "rippling": [("ats.rippling.com", False)],
+    "kula": [("careers.kula.ai", False)],
     "successfactors": [("jobs.hr.cloud.sap", True)],  # SAP-hosted sites; others need --hosts
     "oracle": [("oraclecloud.com", True)],
 }

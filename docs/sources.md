@@ -7,7 +7,7 @@ covers how fetching stays polite to the servers it calls. For setup and everyday
 - [How sources work](#how-sources-work)
 - [At a glance](#at-a-glance)
 - Listing sources: [Greenhouse](#greenhouse), [Lever](#lever), [Ashby](#ashby),
-  [Workable](#workable), [Gem](#gem), [iCIMS Career Sites](#icims-career-sites)
+  [Workable](#workable), [Gem](#gem), [Kula](#kula), [iCIMS Career Sites](#icims-career-sites)
 - Listing sources with descriptions on demand: [Workday](#workday),
   [SmartRecruiters](#smartrecruiters), [BambooHR](#bamboohr), [Rippling](#rippling),
   [SuccessFactors](#successfactors-career-site-builder), [Radancy and Paradox](#radancy-and-paradox)
@@ -39,7 +39,7 @@ don't know or care where a posting came from.
 Sources fall into three groups.
 
 **Listing sources** return every open posting, with its description, in one request per board:
-Greenhouse, Lever, Ashby, Workable and Gem. iCIMS Career Sites is a listing source too, but paged: one
+Greenhouse, Lever, Ashby, Workable, Gem and Kula. iCIMS Career Sites is a listing source too, but paged: one
 request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
@@ -98,6 +98,7 @@ empties closes its jobs only when it's pruned, or by hand.
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
 | `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
 | `gem` | board name | in the listing | 404, removed | `gem` |
+| `kula` | board name | in the page | 404, removed; listing not in the page: empty, warned | `kula` (1 request/s) |
 | `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
@@ -200,6 +201,32 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Remote:** from Gem's `location_type`: `remote` is yes, `hybrid` and `in_office` are no; otherwise yes
   only if the location or title says "remote".
 - **Unknown board:** 404, removed.
+
+## Kula
+
+```yaml
+  - name: Rocketlane
+    ats: kula
+    slug: rocketlane
+```
+
+Kula is an applicant tracking system popular with startups; its boards are at
+`careers.kula.ai/<slug>`.
+
+- **Slug:** the board name in `careers.kula.ai/<slug>`; case doesn't matter.
+- **Endpoint:** `GET https://careers.kula.ai/<slug>`, the board's own page. Kula's JSON API
+  (`/api/`) is disallowed by robots.txt, but the page is server-rendered by Next.js, and the data
+  it streams into the page (`self.__next_f.push(...)` scripts) holds the whole listing,
+  descriptions included. Postings that are unlisted or past their end date are left out.
+- **Job link:** `https://careers.kula.ai/<slug>/<id>`, which redirects to a longer form.
+- **Remote:** from Kula's `workplace`: `remote` is yes, `hybrid` and `office` are no; otherwise yes
+  only if the location or title says "remote".
+- **Unknown board:** 404, removed.
+- **Listing not in the page:** some boards load their jobs in the browser, from the disallowed
+  API. They come back empty with a warning, and their recorded jobs aren't closed.
+- **Rate cap:** 1 request a second. robots.txt asks for no crawl delay, but every board is on one
+  host, so the source sends a cap with its requests; a `fetch.max_rate` entry for `kula`
+  overrides it.
 
 ## iCIMS Career Sites
 

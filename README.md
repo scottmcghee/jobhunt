@@ -59,8 +59,8 @@ companies.yaml ──► fetch ──► filter ──► score ──► letter
 
 ### 1. Fetch
 
-`jobhunt fetch` reads every board in `config/companies.yaml`. It supports ten applicant-tracking
-systems (Greenhouse, Lever, Ashby, Workable, Gem, Rippling, Workday, SmartRecruiters, BambooHR and
+`jobhunt fetch` reads every board in `config/companies.yaml`. It supports eleven applicant-tracking
+systems (Greenhouse, Lever, Ashby, Workable, Gem, Kula, Rippling, Workday, SmartRecruiters, BambooHR and
 SuccessFactors) and iCIMS's branded careers sites,
 plus Amazon, Apple, Eightfold, Oracle Recruiting Cloud and Phenom sites and USAJOBS (federal jobs;
 needs a free API key), which are too big to list and are searched by your target title words
@@ -271,7 +271,7 @@ python -m jobhunt.discover --platforms gem rippling --check # just these; drop b
 ```
 
 On platforms whose board URLs follow a pattern (Workday, Greenhouse, Lever, Ashby,
-SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Rippling, SuccessFactors sites hosted by SAP;
+SmartRecruiters, Workable, BambooHR, Eightfold, Gem, Kula, Rippling, SuccessFactors sites hosted by SAP;
 Oracle with `--platforms oracle`),
 it reads [Common Crawl](https://commoncrawl.org/)'s URL index: each platform's URLs sit together,
 so about 100 MB of index (cached after the first run) plus some tens of MB of index blocks per

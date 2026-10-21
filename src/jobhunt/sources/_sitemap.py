@@ -33,6 +33,7 @@ import httpx
 from jobhunt.schema import Company, Job
 from jobhunt.sources import _partial
 from jobhunt.sources._html import to_text
+from jobhunt.sources._rate import RATE
 
 log = logging.getLogger(__name__)
 
@@ -60,11 +61,13 @@ _ADDRESS = ("addressLocality", "addressRegion", "addressCountry")
 JobUrl = Callable[[str], "tuple[str, str, int] | None"]
 
 
-def robots(client: httpx.Client, host: str) -> RobotFileParser:
+def robots(client: httpx.Client, host: str, rate: float | None = None) -> RobotFileParser:
     """A site's robots.txt rules, per RFC 9309: redirects are followed, a 4xx allows everything,
-    a 5xx nothing."""
+    a 5xx nothing. ``rate`` is the source's own cap for the host (``_rate.RATE``), if it has one:
+    the host's first request sets it."""
     rules = RobotFileParser()
-    resp = client.get(f"https://{host}/robots.txt", follow_redirects=True)
+    extensions = {RATE: rate} if rate is not None else {}
+    resp = client.get(f"https://{host}/robots.txt", follow_redirects=True, extensions=extensions)
     if resp.status_code >= 500:
         rules.disallow_all = True
     elif resp.status_code >= 400:

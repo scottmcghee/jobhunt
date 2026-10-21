@@ -26,6 +26,7 @@ def test_platforms_from_text():
     assert fingerprint.platforms("https://acme.wd5.myworkdayjobs.com/x") == {"workday"}
     assert fingerprint.platforms("nothing here") == set()
     assert fingerprint.platforms("https://colas.jobs.hr.cloud.sap/") == {"successfactors"}
+    assert fingerprint.platforms("<a href='https://careers.kula.ai/acme'>Jobs</a>") == {"kula"}
 
 
 @respx.mock
