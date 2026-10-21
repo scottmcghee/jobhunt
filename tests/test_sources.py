@@ -2991,6 +2991,15 @@ def test_kula_robots_txt_can_rule_out_the_board(kula_company, caplog):
 
 
 @respx.mock
+def test_kula_robots_txt_4xx_allows_the_board(kula_company):
+    # RFC 9309: robots.txt missing (any 4xx) means nothing is disallowed
+    board = _kula_routes(robots=httpx.Response(404))
+    with httpx.Client() as client:
+        assert len(kula.fetch(kula_company, client)) == 3
+    assert board.call_count == 1
+
+
+@respx.mock
 def test_kula_rate_group_and_cap(kula_company):
     # every board is on careers.kula.ai: one group, capped by default, a max_rate entry wins
     assert rate_group(kula_company) == "kula" == request_group(httpx.URL(KULA))

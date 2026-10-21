@@ -39,8 +39,8 @@ don't know or care where a posting came from.
 Sources fall into three groups.
 
 **Listing sources** return every open posting, with its description, in one request per board:
-Greenhouse, Lever, Ashby, Workable, Gem and Kula (which also reads its host's robots.txt once per
-run). iCIMS Career Sites is a listing source too, but paged: one request per 100 postings.
+Greenhouse, Lever, Ashby, Workable, Gem and Kula (which also reads its host's robots.txt, once per
+run unless it answers 5xx). iCIMS Career Sites is a listing source too, but paged: one request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
 descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR,
@@ -98,7 +98,7 @@ empties closes its jobs only when it's pruned, or by hand.
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
 | `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
 | `gem` | board name | in the listing | 404, removed | `gem` |
-| `kula` | board name | in the page | 404, removed; listing not in the page: empty, warned | `kula` (1 request/s) |
+| `kula` | board name | in the page | 404, removed; listing not in the page or robots.txt 5xx: empty, warned | `kula` (1 request/s) |
 | `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
 | `workday` | `tenant/site` + `datacenter` | one request each | 404, 422 or 403 `S22`, removed | `workday:wdN` |
 | `smartrecruiters` | company identifier | one request each | empty list, warned | `smartrecruiters` |
@@ -218,7 +218,9 @@ Kula is an applicant tracking system popular with startups; its boards are at
   (`/api/`) is disallowed by robots.txt, but the page is server-rendered by Next.js, and the data
   it streams into the page (`self.__next_f.push(...)` scripts) holds the whole listing,
   descriptions included. Postings that are unlisted or past their end date are left out. The
-  host's robots.txt is read once per run, and a board it disallows is skipped.
+  host's robots.txt is read once per run, and a board it disallows is skipped. If robots.txt
+  answers 5xx, that board comes back empty with a warning, its recorded jobs aren't closed, and
+  the next board asks again.
 - **Job link:** `https://careers.kula.ai/<slug>/<id>`, which redirects to a longer form.
 - **Remote:** from Kula's `workplace`: `remote` is yes, `hybrid` and `office` are no; otherwise yes
   only if the location or title says "remote".
