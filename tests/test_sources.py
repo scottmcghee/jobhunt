@@ -2944,6 +2944,25 @@ def test_kula_reads_robots_txt_once_per_client(kula_company):
 
 
 @respx.mock
+def test_kula_retries_robots_txt_after_a_5xx(kula_company, caplog):
+    # a 5xx isn't kept for the run: that board is skipped this fetch, the next asks again
+    robots = respx.get(KULA_ROBOTS).mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, text=KULA_ROBOTS_TXT)]
+    )
+    body = (FIXTURES / "kula_board.html").read_bytes()
+    first = respx.get(KULA).mock(return_value=httpx.Response(200, content=body))
+    respx.get("https://careers.kula.ai/otherkula").mock(return_value=httpx.Response(200, content=body))
+    other = Company(name="Other Kula Co", ats="kula", slug="otherkula")
+    with httpx.Client() as client:
+        assert kula.fetch(kula_company, client) == []
+        assert len(kula.fetch(other, client)) == 3
+    assert (robots.call_count, first.call_count) == (2, 0)
+    assert "kula examplekula: robots.txt unavailable (HTTP 503)" in caplog.text
+    assert "disallows" not in caplog.text
+    assert _partial.take(kula_company.key) is not None
+
+
+@respx.mock
 def test_kula_skips_a_posting_with_no_id(kula_company, caplog):
     page = (FIXTURES / "kula_board.html").read_text().replace(r'\"id\":5101,', "")
     respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
