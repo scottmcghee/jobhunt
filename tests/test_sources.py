@@ -2907,6 +2907,43 @@ def test_kula_a_missing_description_leaves_the_body_empty(kula_company):
 
 
 @respx.mock
+def test_kula_inline_and_escaped_descriptions(kula_company):
+    # React Flight inlines a short string rather than a "$<id>" reference, and escapes a leading
+    # "$" as "$$"; the payload is a JS string in the page
+    page = (
+        (FIXTURES / "kula_board.html")
+        .read_text()
+        .replace(r'\"$1e\"', r'\"<p>Short inline.</p>\"')
+        .replace(r'\"$1f\"', r'\"$$5 stipend\"')
+    )
+    respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    respx.get(KULA).mock(return_value=httpx.Response(200, text=page))
+    with httpx.Client() as client:
+        jobs = {j.external_id: j for j in kula.fetch(kula_company, client)}
+    assert jobs["5101"].body == "Short inline."
+    assert jobs["5102"].body == "$5 stipend"
+
+
+@respx.mock
+def test_kula_reads_robots_txt_once_per_client(kula_company):
+    # every board is on one host capped at 1/s: one request per board, plus robots.txt once
+    robots = respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))
+    body = (FIXTURES / "kula_board.html").read_bytes()
+    first = respx.get(KULA).mock(return_value=httpx.Response(200, content=body))
+    second = respx.get("https://careers.kula.ai/otherkula").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+    other = Company(name="Other Kula Co", ats="kula", slug="otherkula")
+    with httpx.Client() as client:
+        kula.fetch(kula_company, client)
+        kula.fetch(other, client)
+    assert (robots.call_count, first.call_count, second.call_count) == (1, 1, 1)
+    with httpx.Client() as client:  # a new client (a new run) reads it again
+        kula.fetch(kula_company, client)
+    assert robots.call_count == 2
+
+
+@respx.mock
 def test_kula_skips_a_posting_with_no_id(kula_company, caplog):
     page = (FIXTURES / "kula_board.html").read_text().replace(r'\"id\":5101,', "")
     respx.get(KULA_ROBOTS).mock(return_value=httpx.Response(200, text=KULA_ROBOTS_TXT))

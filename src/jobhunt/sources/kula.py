@@ -2,7 +2,8 @@
 
 Kula's JSON API (``/api/``) is disallowed by robots.txt, but each board's page is server-rendered
 by Next.js, and the payload it streams into the page (``self.__next_f.push([1, "..."])`` scripts)
-carries the whole listing, descriptions included, in one request:
+carries the whole listing, descriptions included, in one request (plus the host's robots.txt,
+read once per run):
 
     GET https://careers.kula.ai/{slug}
 
@@ -26,7 +27,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import weakref
 from datetime import UTC, datetime
+from urllib.robotparser import RobotFileParser
 
 import httpx
 
@@ -44,6 +48,10 @@ RATE_CAP = 1.0  # requests a second, shared by every board on the host
 _PUSH = re.compile(r"self\.__next_f\.push\((\[.*?\])\)</script>", re.S)
 _ROW = re.compile(rb"([0-9a-f]*):")  # a row's id may be empty (":HL[...]", a preload hint)
 _LISTING = '{"jobs":['
+
+# robots.txt is read once per client (a run), not per board; boards are fetched from worker threads
+_robots: weakref.WeakKeyDictionary[httpx.Client, RobotFileParser] = weakref.WeakKeyDictionary()
+_robots_lock = threading.Lock()
 
 
 def _payload(page: str) -> str:
@@ -108,6 +116,14 @@ def _description(value: object, texts: dict[str, str]) -> str:
     return value
 
 
+def _rules(client: httpx.Client) -> RobotFileParser:
+    """The host's robots.txt rules, fetched the first time this client asks."""
+    with _robots_lock:
+        if client not in _robots:
+            _robots[client] = _sitemap.robots(client, HOST, RATE_CAP)
+        return _robots[client]
+
+
 def _when(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -156,7 +172,7 @@ def fetch(company: Company, client: httpx.Client, now: datetime | None = None) -
     """Every open posting the board's page lists."""
     now = now or datetime.now(UTC)
     url = f"https://{HOST}/{company.slug}"
-    rules = _sitemap.robots(client, HOST, RATE_CAP)
+    rules = _rules(client)
     if not rules.can_fetch(_sitemap.agent(client), url):
         log.warning("kula %s: robots.txt disallows the board", company.slug)
         _partial.note(company.key, "robots.txt disallows the board")

@@ -39,8 +39,8 @@ don't know or care where a posting came from.
 Sources fall into three groups.
 
 **Listing sources** return every open posting, with its description, in one request per board:
-Greenhouse, Lever, Ashby, Workable, Gem and Kula. iCIMS Career Sites is a listing source too, but paged: one
-request per 100 postings.
+Greenhouse, Lever, Ashby, Workable, Gem and Kula (which also reads its host's robots.txt once per
+run). iCIMS Career Sites is a listing source too, but paged: one request per 100 postings.
 
 **Listing sources with descriptions on demand** list every posting but leave out the
 descriptions, so each description costs one more request: Workday, SmartRecruiters, BambooHR,
@@ -217,7 +217,8 @@ Kula is an applicant tracking system popular with startups; its boards are at
 - **Endpoint:** `GET https://careers.kula.ai/<slug>`, the board's own page. Kula's JSON API
   (`/api/`) is disallowed by robots.txt, but the page is server-rendered by Next.js, and the data
   it streams into the page (`self.__next_f.push(...)` scripts) holds the whole listing,
-  descriptions included. Postings that are unlisted or past their end date are left out.
+  descriptions included. Postings that are unlisted or past their end date are left out. The
+  host's robots.txt is read once per run, and a board it disallows is skipped.
 - **Job link:** `https://careers.kula.ai/<slug>/<id>`, which redirects to a longer form.
 - **Remote:** from Kula's `workplace`: `remote` is yes, `hybrid` and `office` are no; otherwise yes
   only if the location or title says "remote".
@@ -684,13 +685,15 @@ A group can also be held to a number of requests per second, `fetch.max_rate` in
 | `apply.careers.microsoft.com` | 0.5/s | Microsoft's site answered 429 to requests one second apart. |
 | `apple` | 1/s | Each page is about 300 KB. |
 
-iCIMS Career Sites aren't in the map: each site's 0.2/s cap comes from its robots.txt's crawl
-delay and is built into the source, though an entry for its host overrides it.
+iCIMS Career Sites and Kula aren't in the map: each iCIMS site's 0.2/s cap comes from its
+robots.txt's crawl delay, and Kula's 1/s cap is shared by every board on its one host; both are
+built into the source, though an entry for the group (an iCIMS site's host, or `kula`) overrides it.
 
 Keys are the group names `jobhunt -v fetch` prints, and are case-sensitive. Setting `max_rate`, in the
 file or in `JOBHUNT_FETCH_MAX_RATE`, replaces the whole map, so copy these four into it to keep
-them. Groups not listed have no cap, except iCIMS Career Sites; `{}` removes every configured
-cap, while an iCIMS site keeps its built-in 0.2/s unless its host gets its own entry.
+them. Groups not listed have no cap, except iCIMS Career Sites and Kula; `{}` removes every
+configured cap, while an iCIMS site keeps its built-in 0.2/s unless its host gets its own entry,
+and Kula its built-in 1/s unless `kula` gets one.
 
 ### Retries
 
@@ -753,8 +756,8 @@ or finds nothing.
 
 Some platforms forbid automated access in robots.txt or their terms, or block it outright, so `jobhunt` doesn't
 support them, and their boards must not be added to `companies.yaml`. Nothing enforces this for
-listing and API sources: `jobhunt` checks robots.txt itself only for the sitemap sources, so
-check a board's robots.txt before adding it. Their jobs are worth a manual search or the
+listing and API sources: `jobhunt` checks robots.txt itself only for the sitemap sources and
+Kula, so check a board's robots.txt before adding it. Their jobs are worth a manual search or the
 platform's own email alerts.
 
 | Platform | Who posts there | Why it's off-limits | Instead |

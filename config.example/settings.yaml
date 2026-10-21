@@ -50,14 +50,16 @@ fetch:
   # Env: JOBHUNT_FETCH_TRANSIENT_RETRIES
   transient_retries: 2
   # Most requests sent per second for a rate group; groups not listed have no cap, except iCIMS
-  # Career Sites (0.2/s, from their robots.txt crawl delay; an entry for the host overrides it). Keys are the
+  # Career Sites (0.2/s, from their robots.txt crawl delay; an entry for the host overrides it)
+  # and Kula (1/s, its boards share one host; a kula entry overrides it). Keys are the
   # group names `jobhunt -v fetch` prints in its stats (workable, lever, bamboohr, "workday:wd5"), and are
   # case-sensitive; *.eightfold.ai boards share "eightfold", an Eightfold board on its own host
   # has that host, and an Oracle board its tenant host (e.g. eeho.fa.us2.oraclecloud.com). Workable's Cloudflare bans an IP for a
   # minute or so after a burst of about 50 requests in 10 s. Setting the map (here or in
   # the environment) replaces it whole, so keep workable, eightfold, apply.careers.microsoft.com
   # and apple in it to keep their caps; {} removes every configured cap (an iCIMS site keeps its
-  # built-in 0.2/s unless its host gets its own entry). Env: JOBHUNT_FETCH_MAX_RATE as
+  # built-in 0.2/s unless its host gets its own entry, and Kula its 1/s unless kula gets one).
+  # Env: JOBHUNT_FETCH_MAX_RATE as
   # JSON, e.g. '{"workable": 3, "eightfold": 2, "apply.careers.microsoft.com": 0.5, "apple": 1}'
   # Microsoft's careers site (Eightfold) answered 429 to requests one second apart.
   max_rate:
