@@ -371,6 +371,20 @@ class ThrottledTransport(httpx.BaseTransport):
         self._inner.close()
 
 
+def host_refused(response: httpx.Response) -> bool:
+    """The host pushing back, which feeds a circuit breaker: 429 always; 403 unless it is a
+    board-level error, as Workday sends for a closed site."""
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    try:
+        body = response.json()
+    except ValueError:  # an HTML block page, say
+        return True
+    return not (isinstance(body, dict) and "errorCode" in body)
+
+
 def from_settings(fetch: FetchSettings, workers: int, per_host: int) -> ThrottledTransport:
     """The transport ``fetch`` and ``slugs --check`` use, tuned by the fetch settings.
 

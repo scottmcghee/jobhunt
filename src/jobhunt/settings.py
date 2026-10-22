@@ -66,12 +66,13 @@ class FetchSettings(_Section):
     # (eeho.fa.us2.oraclecloud.com); case-sensitive. Setting the map replaces it whole, so keep
     # "workable", "eightfold", "apply.careers.microsoft.com" and "apple" in it to keep their caps.
     # Workable's Cloudflare bans an IP for a burst of about 50 requests in 10 s, and 429s a
-    # steady ~1.9/s after 900-1,250 requests (October 2026 full runs); *.eightfold.ai
+    # steady ~1.9/s after 900-1,250 requests (October 2026 full runs), and a long --check at
+    # 1.4/s after about 1,000 (it got through 316 at 0.5/s); *.eightfold.ai
     # answered 405 to a fetch's burst; Microsoft's careers site 429s at 1 per second; Apple's
     # pages are ~300 KB each.
     max_rate: dict[str, float] = Field(
         default_factory=lambda: {
-            "workable": 1.4, "eightfold": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0
+            "workable": 0.5, "eightfold": 2.0, "apply.careers.microsoft.com": 0.5, "apple": 1.0
         }
     )
 
@@ -131,7 +132,7 @@ class PathSettings(_Section):
 
 
 class SlugsSettings(_Section):
-    check_workers: int = Field(4, ge=1)  # threads for `python -m jobhunt.slugs --check`
+    check_workers: int = Field(4, ge=1)  # threads per rate group for `slugs --check`
     check_progress_every: int = Field(50, ge=1)  # boards between --check progress lines
 
 

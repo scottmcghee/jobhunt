@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-import time
-from concurrent.futures import as_completed
+import logging
+import threading
 
 import httpx
 import pytest
 import respx
 import yaml
 
-from jobhunt import slugs
+from jobhunt import slugs, throttle
 from jobhunt.schema import Company
 
 
@@ -352,7 +352,7 @@ def test_check_keeps_only_boards_with_jobs(fixture_json, caplog):
 
 
 def test_check_reports_its_progress(monkeypatch, caplog):
-    monkeypatch.setattr(slugs, "_has_jobs", lambda company, client: company.slug != "dead")
+    monkeypatch.setattr(slugs, "_check_board", lambda company, client: slugs.Verdict(company.slug != "dead"))
     boards = [Company(name=s, ats="greenhouse", slug=s) for s in ("a", "dead", "c")]
     caplog.set_level("INFO", logger="jobhunt.slugs")
     with httpx.Client() as client:
@@ -362,20 +362,44 @@ def test_check_reports_its_progress(monkeypatch, caplog):
     assert "checked 2 of 3 boards" in caplog.text and "checked 3 of 3 boards" in caplog.text
 
 
+def test_check_counts_boards_as_they_finish_not_as_they_are_released(monkeypatch):
+    # results come back in input order: a slow first board would hold every count back
+    fast_counted = threading.Event()
+
+    class Watch(logging.Handler):
+        def emit(self, record):
+            if record.getMessage() == "checked 3 of 4 boards":
+                fast_counted.set()
+
+    def check_board(company, client):
+        if company.slug == "slow":
+            assert fast_counted.wait(5)  # only reached if the count waits for this board
+        return slugs.Verdict(True)
+
+    monkeypatch.setattr(slugs, "_check_board", check_board)
+    boards = [Company(name="slow", ats="greenhouse", slug="slow")]
+    boards += [Company(name=s, ats="lever", slug=s) for s in ("a", "b", "c")]
+    handler = Watch(level=logging.INFO)
+    slugs.log.addHandler(handler)
+    monkeypatch.setattr(slugs.log, "level", logging.INFO)
+    try:
+        with httpx.Client() as client:
+            assert slugs.check(boards, client, workers=1, progress_every=1) == boards
+    finally:
+        slugs.log.removeHandler(handler)
+    assert fast_counted.is_set()
+
+
 def test_an_interrupt_during_check_cancels_the_checks_not_yet_started(monkeypatch):
     calls = []
 
-    def slow_check(company, client):
+    def check_board(company, client):
         calls.append(company.slug)
-        time.sleep(0.2)
-        return True
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return slugs.Verdict(True)
 
-    def interrupted(futures):
-        yield next(iter(as_completed(futures)))
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(slugs, "_has_jobs", slow_check)
-    monkeypatch.setattr(slugs, "as_completed", interrupted)
+    monkeypatch.setattr(slugs, "_check_board", check_board)
     boards = [Company(name=str(i), ats="greenhouse", slug=str(i)) for i in range(10)]
     with httpx.Client() as client, pytest.raises(KeyboardInterrupt):
         slugs.check(boards, client, workers=1)
@@ -494,6 +518,78 @@ def test_check_keeps_rate_limited_boards(caplog):
     assert "busy: kept, could not check (HTTP 429)" in caplog.text
 
 
+def _refusing_boards(n=7):
+    respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
+        return_value=httpx.Response(429)
+    )
+    return [Company(name=f"b{i}", ats="greenhouse", slug=f"b{i}") for i in range(n)]
+
+
+@respx.mock
+def test_check_stops_checking_a_group_that_keeps_refusing(caplog):
+    # Workable once 429'd every request for hours: each board waited out its retries in turn
+    boards = _refusing_boards()
+    with httpx.Client() as client:
+        kept = slugs.check(boards, client, workers=1, breaker=5)
+    assert kept == boards  # refused or skipped: kept, unchecked
+    assert respx.calls.call_count == 5
+    assert (
+        'greenhouse: 5 boards in a row refused (429/403); 2 boards left unchecked. '
+        'Lower fetch.max_rate\'s "greenhouse" (no cap set) and check them again.'
+    ) in caplog.text
+
+
+@respx.mock
+def test_the_breaker_summary_names_the_groups_cap(caplog):
+    boards = _refusing_boards()
+    with httpx.Client() as client:
+        slugs.check(boards, client, workers=1, breaker=5, max_rate={"greenhouse": 0.5})
+    assert 'Lower fetch.max_rate\'s "greenhouse" (now 0.5)' in caplog.text
+
+
+def test_the_breaker_summary_names_a_sources_own_cap(caplog):
+    # Kula caps its host at 1/s itself, with no fetch.max_rate entry: the summary says so
+    t = [0.0]
+
+    def handler(request):
+        return httpx.Response(404 if request.url.path == "/robots.txt" else 429)
+
+    transport = throttle.ThrottledTransport(
+        inner=httpx.MockTransport(handler), max_retries=0,
+        clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + s),
+    )
+    boards = [Company(name=f"k{i}", ats="kula", slug=f"k{i}") for i in range(7)]
+    with httpx.Client(transport=transport) as client:
+        assert slugs.check(boards, client, workers=1, breaker=5, max_rate={}) == boards
+    assert (
+        'kula: 5 boards in a row refused (429/403); 2 boards left unchecked. '
+        'Lower fetch.max_rate\'s "kula" (now 1) and check them again.'
+    ) in caplog.text
+
+
+@respx.mock
+def test_a_refusing_group_does_not_hold_up_the_others(fixture_json):
+    boards = _refusing_boards()
+    lever = respx.get("https://api.lever.co/v0/postings/live").mock(
+        return_value=httpx.Response(200, json=fixture_json("lever_postings.json"))
+    )
+    live = Company(name="live", ats="lever", slug="live")
+    with httpx.Client() as client:
+        kept = slugs.check([*boards, live], client, workers=1, breaker=5)
+    assert lever.call_count == 1 and kept[-1] == live
+
+
+@respx.mock
+def test_a_block_page_counts_as_a_refusal_and_keeps_the_board(caplog):
+    respx.get(GH.format("blocked")).mock(
+        return_value=httpx.Response(403, text="<html>Just a moment...</html>", headers={"Content-Type": "text/html"})
+    )
+    board = Company(name="blocked", ats="greenhouse", slug="blocked")
+    with httpx.Client() as client:
+        assert slugs.check([board], client) == [board]
+    assert "blocked: kept, could not check (HTTP 403)" in caplog.text
+
+
 def test_check_workers_and_client_come_from_settings(monkeypatch):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "2")
     monkeypatch.setenv("JOBHUNT_FETCH_TIMEOUT", "7")
@@ -544,27 +640,37 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY", "7")
     monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
+    monkeypatch.setenv("JOBHUNT_FETCH_BREAKER", "4")
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RATE", '{"workable": 0.5}')
     seen = {}
 
     def client(fetch):
         seen["agent"] = fetch.user_agent
         return httpx.Client()
 
-    def check(found, client, workers, progress_every):
+    def check(found, client, workers, progress_every, breaker, max_rate):
         seen["workers"], seen["every"] = workers, progress_every
+        seen["breaker"], seen["max_rate"] = breaker, max_rate
         return found
 
     monkeypatch.setattr(slugs, "_client", client)
     monkeypatch.setattr(slugs, "check", check)
     monkeypatch.setattr(slugs, "check_workers", lambda: pytest.fail("settings loaded again"))
     assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(tmp_path / "o"), "--check"]) == 0
-    assert seen == {"agent": "test-agent/1", "workers": 3, "every": 7}
+    assert seen == {
+        "agent": "test-agent/1", "workers": 3, "every": 7, "breaker": 4, "max_rate": {"workable": 0.5}
+    }
 
 
-def test_check_pool_size_comes_from_the_argument_or_settings(monkeypatch):
+def test_check_threads_per_group_come_from_the_argument_or_settings(monkeypatch):
     sizes = []
-    real = slugs.ThreadPoolExecutor
-    monkeypatch.setattr(slugs, "ThreadPoolExecutor", lambda n: sizes.append(n) or real(n))
+    real = slugs.BoardRunner
+
+    def runner(*args, per_group, **kwargs):
+        sizes.append(per_group)
+        return real(*args, per_group=per_group, **kwargs)
+
+    monkeypatch.setattr(slugs, "BoardRunner", runner)
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
     with httpx.Client() as client:
         slugs.check([], client, workers=2)

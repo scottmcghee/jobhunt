@@ -10,11 +10,12 @@ and re-pasted as more data arrives.
 
 Without ``--check`` this runs offline. With it, the first page of each new board is fetched
 through its source adapter (no descriptions), and the board is dropped if it has no open postings
-or answers with any status below 500 other than 429: a SmartRecruiters identifier with no
-postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that redirects (302). It is
-also dropped if its adapter can't read it as configured (an Eightfold page with no domain).
-Boards that time out, are rate limited, fail with a 5xx, or answer 200 with something that
-isn't JSON (a gateway or proxy page) are kept.
+or answers with any status below 500 but a refusal (429, or a 403 block page): a SmartRecruiters
+identifier with no postings, say, a Greenhouse slug that 404s, or a BambooHR tenant that
+redirects (302). It is also dropped if its adapter can't read it as configured (an Eightfold page
+with no domain). Boards that time out, are refused, fail with a 5xx, or answer 200 with something
+that isn't JSON (a gateway or proxy page) are kept. Boards are checked like fetch fetches them:
+a pool per rate group, and a circuit breaker that stops checking a group that keeps refusing.
 """
 
 from __future__ import annotations
@@ -23,17 +24,19 @@ import argparse
 import json
 import logging
 import re
-from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 import yaml
 
 from jobhunt import config, settings, throttle
+from jobhunt.runner import BoardRunner
 from jobhunt.schema import ATSName, Company
-from jobhunt.sources import fetch_company
+from jobhunt.sources import fetch_company, rate_group
 
 log = logging.getLogger("jobhunt.slugs")
 
@@ -273,34 +276,42 @@ def check_workers() -> int:
     return settings.load().slugs.check_workers
 
 
-def _has_jobs(company: Company, client: httpx.Client) -> bool:
+class Verdict(NamedTuple):
+    """One board's check: whether it's worth listing, and whether its host refused the request."""
+
+    keep: bool
+    refused: bool = False
+
+
+def _check_board(company: Company, client: httpx.Client) -> Verdict:
     """Whether a board is worth listing.
 
-    Boards that can't be checked right now (timeouts, 429, 5xx, a 200 that isn't JSON) are kept.
-    Boards its adapter can't read as configured (any other ValueError) are dropped.
+    Boards that can't be checked right now (timeouts, refusals, 5xx, a 200 that isn't JSON) are
+    kept. Boards its adapter can't read as configured (any other ValueError) are dropped.
     """
     try:
         jobs = fetch_company(company, client, wants_body=lambda job: False, max_pages=1)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
-        if status < 500 and status != 429:  # 429: busy, not gone
+        refused = throttle.host_refused(e.response)  # 429, or a 403 block page: busy, not gone
+        if status < 500 and not refused:
             log.info("dropped %s: HTTP %s", company.key, status)
-            return False
+            return Verdict(False)
         log.warning("%s: kept, could not check (HTTP %s)", company.key, status)
-        return True
+        return Verdict(True, refused)
     except httpx.HTTPError as e:
         log.warning("%s: kept, could not check (%s)", company.key, e)
-        return True
+        return Verdict(True)
     # a 200 that isn't the API, e.g. a gateway page (not UTF-8 fails before JSON parsing)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         log.warning("%s: kept, could not check (not JSON: %s)", company.key, e)
-        return True
+        return Verdict(True)
     except ValueError as e:  # the adapters' signal for data they can't read
         log.warning("dropped %s: can't fetch it as configured (%s)", company.key, e)
-        return False
+        return Verdict(False)
     if not jobs:
         log.info("dropped %s: no open postings", company.key)
-    return bool(jobs)
+    return Verdict(bool(jobs))
 
 
 def check(
@@ -308,23 +319,58 @@ def check(
     client: httpx.Client,
     workers: int | None = None,
     progress_every: int | None = None,
+    breaker: int | None = None,
+    max_rate: Mapping[str, float] | None = None,
 ) -> list[Company]:
-    """The boards that have open postings, in their original order.
+    """The boards that have open postings, and those it couldn't check, in their original order.
 
-    Logs a running count; an interrupt (Ctrl-C) cancels the checks not yet started.
+    Like fetch, each rate group (``sources.rate_group``) gets its own ``workers`` threads, so a
+    group that is slow or refusing doesn't hold up the others; and after ``breaker`` refusals in
+    a row a group's remaining boards are kept unchecked, and the run ends with a line per such
+    group naming its cap (``max_rate``'s, or its source's own). Logs a running count of boards
+    finished; an interrupt (Ctrl-C) stops the checks not yet started. Unset arguments come from
+    settings.
     """
     every = progress_every or settings.SlugsSettings().check_progress_every
+    if breaker is None or max_rate is None:
+        fetch = settings.load().fetch
+        breaker = fetch.breaker if breaker is None else breaker
+        max_rate = fetch.max_rate if max_rate is None else max_rate
     log.info("checking %d boards", len(companies))
-    with ThreadPoolExecutor(workers or check_workers()) as pool:
-        futures = [pool.submit(_has_jobs, c, client) for c in companies]
-        try:
-            for done, _ in enumerate(as_completed(futures), 1):
-                if done % every == 0 or done == len(futures):
-                    log.info("checked %d of %d boards", done, len(futures))
-        except BaseException:
-            pool.shutdown(wait=False, cancel_futures=True)
-            raise
-    return [c for c, f in zip(companies, futures, strict=True) if f.result()]
+    lock, done = threading.Lock(), [0]
+
+    def counted(verdict: Verdict) -> Verdict:
+        # counted as each board finishes: the runner releases results in input order, so one
+        # slow board would hold back the count of every board after it
+        with lock:
+            done[0] += 1
+            if done[0] % every == 0 or done[0] == len(companies):
+                log.info("checked %d of %d boards", done[0], len(companies))
+        return verdict
+
+    runner = BoardRunner(
+        companies,
+        lambda company: counted(_check_board(company, client)),
+        group_of=rate_group,
+        per_group=workers or check_workers(),
+        refused=lambda verdict: verdict.refused,
+        skip=lambda company: counted(Verdict(True)),  # kept, unchecked
+        breaker=breaker,
+    )
+    verdicts = list(runner)
+    transport = client._transport  # _client's throttles; a plain client (tests) has max_rate only
+    for group, skipped in runner.skipped_by_group().items():
+        if isinstance(transport, throttle.ThrottledTransport):
+            rate = transport.limiter(str(group)).rate  # max_rate's, else the source's own cap
+        else:
+            rate = max_rate.get(str(group))
+        cap = f"now {rate:g}" if rate else "no cap set"
+        log.warning(
+            "%s: %d boards in a row refused (429/403); %d boards left unchecked. "
+            'Lower fetch.max_rate\'s "%s" (%s) and check them again.',
+            group, breaker, skipped, group, cap,
+        )
+    return [c for c, verdict in zip(companies, verdicts, strict=True) if verdict.keep]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -350,7 +396,10 @@ def main(argv: list[str] | None = None) -> int:
             log.error("%s", e)
             return 2
         with _client(s.fetch) as client:
-            checked = check(found, client, s.slugs.check_workers, s.slugs.check_progress_every)
+            checked = check(
+                found, client, s.slugs.check_workers, s.slugs.check_progress_every,
+                breaker=s.fetch.breaker, max_rate=s.fetch.max_rate,
+            )
         log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
         found = checked
     args.out.write_text(render(found))
@@ -363,4 +412,5 @@ if __name__ == "__main__":
     # (httpx) and every board's job count (sources) as well.
     logging.basicConfig(level=logging.ERROR, format="%(message)s")
     log.setLevel(logging.INFO)
+    logging.getLogger("jobhunt.runner").setLevel(logging.INFO)  # a circuit breaker tripping
     raise SystemExit(main())

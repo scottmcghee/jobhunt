@@ -11,7 +11,8 @@ consumes results on its own thread, so all bookkeeping stays single-threaded.
 
 A circuit breaker protects hosts that push back: after ``breaker`` refusals in a row in one group
 (as judged by ``refused``), that group's remaining items get ``skip(item)`` instead of work. Whether
-an item is skipped is decided when it is taken off the queue, so the logged count is exact.
+an item is skipped is decided when it is taken off the queue, so the logged count is exact;
+``skipped_by_group()`` says how many each tripped group skipped, for an end-of-run summary.
 
 Ctrl-C, or a ``KeyboardInterrupt`` raised inside ``work``, stops the run: iteration raises
 ``KeyboardInterrupt``, workers start no new items, and ``finished_out_of_order()`` returns the
@@ -68,6 +69,7 @@ class BoardRunner(Generic[T, R]):
         self._lock = threading.Lock()
         self._refusals: dict[Hashable, int] = {}
         self._tripped: set[Hashable] = set()
+        self._skipped: dict[Hashable, int] = {}
 
     @property
     def stopping(self) -> bool:
@@ -95,6 +97,12 @@ class BoardRunner(Generic[T, R]):
             self._stop.set()
             raise
 
+    def skipped_by_group(self) -> dict[Hashable, int]:
+        """How many items each group's tripped breaker skipped; groups that skipped none are
+        left out."""
+        with self._lock:
+            return dict(self._skipped)
+
     def finished_out_of_order(self) -> list[R]:
         """After an interrupt: results done before it but not yet released, in input order."""
         while True:
@@ -113,7 +121,10 @@ class BoardRunner(Generic[T, R]):
             if not work_queue or self._stop.is_set():
                 return None
             index, item = work_queue.popleft()
-            return index, item, group in self._tripped and self._skip is not None
+            skip = group in self._tripped and self._skip is not None
+            if skip:
+                self._skipped[group] = self._skipped.get(group, 0) + 1
+            return index, item, skip
 
     def _worker(self, group: Hashable) -> None:
         while (job := self._next(group)) is not None:

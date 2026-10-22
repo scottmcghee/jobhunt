@@ -541,7 +541,9 @@ def _discover(
             log.info("%d new boards -> %s (unchecked until the check finishes)", len(found), out)
             try:
                 checked = slugs.check(
-                    found, client, tunables.slugs.check_workers, tunables.slugs.check_progress_every
+                    found, client, tunables.slugs.check_workers,
+                    tunables.slugs.check_progress_every,
+                    breaker=tunables.fetch.breaker, max_rate=tunables.fetch.max_rate,
                 )
             except KeyboardInterrupt:
                 log.error("interrupted: the unchecked boards are in %s", out)
@@ -557,4 +559,5 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.ERROR, format="%(message)s")
     log.setLevel(logging.INFO)
     slugs.log.setLevel(logging.INFO)  # --check's progress and the boards it drops
+    logging.getLogger("jobhunt.runner").setLevel(logging.INFO)  # a circuit breaker tripping
     raise SystemExit(main())

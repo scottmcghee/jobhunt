@@ -921,6 +921,41 @@ def test_a_host_level_refusal_trips_the_breaker(tmp_path, monkeypatch, response)
 
 
 @respx.mock
+def test_a_tripped_breaker_is_summarized_at_the_end(tmp_path, monkeypatch, capsys):
+    # the trip's own warning scrolls past among hundreds; the summary says what to change
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RETRIES", "0")
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_RATE", '{"greenhouse": 0.5}')
+    respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "0"})
+    )
+    assert _fetch(tmp_path, _seven_boards(tmp_path), "--per-host", "1") == 0
+    out = capsys.readouterr().out
+    assert (
+        "greenhouse: 5 boards in a row refused (429/403); 2 boards skipped this run. "
+        'Lower fetch.max_rate\'s "greenhouse" (now 0.5); the next fetch tries them again.'
+    ) in out
+
+
+def test_the_tripped_summary_names_a_sources_own_cap(tmp_path, monkeypatch, capsys):
+    # Kula caps its host at 1/s itself, with no fetch.max_rate entry: the summary says so
+    t = [0.0]
+
+    def handler(request):
+        return httpx.Response(404 if request.url.path == "/robots.txt" else 429)
+
+    monkeypatch.setattr(
+        cli, "_transport", lambda fetch, workers=32, per_host=6: throttle.ThrottledTransport(
+            inner=httpx.MockTransport(handler), ceiling=per_host, max_in_flight=workers,
+            max_retries=0, clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + s),
+        )
+    )
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n" + "".join(f"  - name: K{i}\n    ats: kula\n    slug: k{i}\n" for i in range(7)))
+    assert _fetch(tmp_path, companies, "--per-host", "1") == 0
+    assert 'Lower fetch.max_rate\'s "kula" (now 1);' in capsys.readouterr().out
+
+
+@respx.mock
 def test_verbose_fetch_prints_per_group_stats(tmp_path, fixture_json, capsys):
     companies = tmp_path / "companies.yaml"
     companies.write_text("companies:\n  - name: ExampleCorp\n    ats: greenhouse\n    slug: examplecorp\n")
