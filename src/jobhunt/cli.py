@@ -34,7 +34,7 @@ import os
 import signal
 import sys
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -74,6 +74,16 @@ def _client(transport: httpx.BaseTransport, fetch: settings.FetchSettings) -> ht
     )
 
 
+def _print_tripped(skipped: dict[Hashable, int], fetch: settings.FetchSettings) -> None:
+    """A line per group whose circuit breaker tripped: its warning may have scrolled past."""
+    for group, n in skipped.items():
+        cap = f"now {fetch.max_rate[group]:g}" if group in fetch.max_rate else "no cap set"
+        print(
+            f"{group}: {fetch.breaker} boards in a row refused (429/403); {n} boards skipped this "
+            f'run. Lower fetch.max_rate\'s "{group}" ({cap}); the next fetch tries them again.'
+        )
+
+
 def _print_stats(transport: throttle.ThrottledTransport) -> None:
     print("requests by host:", file=sys.stderr)
     for group, st in transport.stats().items():
@@ -101,19 +111,6 @@ class BoardOutcome:
     skipped: bool = False  # not fetched: its group's circuit breaker had tripped
     refused: bool = False  # the host pushed back (429, or a 403 that isn't about this board)
     gone: bool = False  # the board itself no longer exists (see _board_gone)
-
-
-def _host_refused(response: httpx.Response) -> bool:
-    """429 always; 403 unless it is a board-level error, as Workday sends for a closed site."""
-    if response.status_code == 429:
-        return True
-    if response.status_code != 403:
-        return False
-    try:
-        body = response.json()
-    except ValueError:  # an HTML block page, say
-        return True
-    return not (isinstance(body, dict) and "errorCode" in body)
 
 
 def _board_gone(company: Company, response: httpx.Response) -> bool:
@@ -270,7 +267,7 @@ def _fetch_board(
         return BoardOutcome(
             company,
             status=status,
-            refused=_host_refused(e.response),
+            refused=throttle.host_refused(e.response),
             gone=_board_gone(company, e.response),
         )
     except httpx.HTTPError as e:
@@ -494,6 +491,7 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     if args.dry_run:
         for j in new_jobs:
             print(f"  + {j.company}: {j.title} ({j.location}) {j.url}")
+        _print_tripped(boards.skipped_by_group(), fetch)
         return 130 if interrupted else 0
 
     for company in config.remove_companies(args.companies, dead) if dead else []:
@@ -510,6 +508,7 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     if closed.closed or closed.restored:
         gone, back = closed.closed, closed.restored
         print(f"{gone} job(s) closed (gone from their boards), {back} restored.")
+    _print_tripped(boards.skipped_by_group(), fetch)
     if progress is not None and interrupted:
         print(f"run `jobhunt {args.cmd} --resume` to fetch the rest", file=sys.stderr)
     return 130 if interrupted else 0

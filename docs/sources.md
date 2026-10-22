@@ -96,7 +96,7 @@ empties closes its jobs only when it's pruned, or by hand.
 | `greenhouse` | board token | in the listing | 404, removed | `greenhouse` |
 | `lever` | company name | in the listing | 404, removed | `lever` |
 | `ashby` | board name | in the listing | 404, removed | `ashby` |
-| `workable` | account | in the listing | 404, removed | `workable` (1.4 requests/s) |
+| `workable` | account | in the listing | 404, removed | `workable` (0.5 requests/s) |
 | `gem` | board name | in the listing | 404, removed | `gem` |
 | `kula` | board name | in the page | 404, removed; listing not in the page or robots.txt 5xx: empty, warned | `kula` (1 request/s) |
 | `icims_careers` | careers site host | in the listing | 404, removed; unknown host: connection error, kept | the careers host (0.2 requests/s) |
@@ -182,10 +182,11 @@ The rate group is the queue a board's requests share; see [Politeness](#politene
 - **Remote:** yes if Workable's `telecommuting` flag is set. The flag is false for both on-site
   and hybrid roles, so false means unknown, unless the location or title says "remote".
 - **Unknown board:** 404, removed.
-- **Rate cap:** 1.4 requests a second. Workable's Cloudflare front end bans an IP for a minute or
+- **Rate cap:** 0.5 requests a second. Workable's Cloudflare front end bans an IP for a minute or
   so after a burst of about 50 requests in 10 seconds. It also has a longer-window limit: at a
   steady 1.9 a second, 429s began after 900 to 1,250 requests, and in a full fetch enough of
-  them tripped the circuit breaker, skipping about 1,900 boards.
+  them tripped the circuit breaker, skipping about 1,900 boards. At 1.4 a second, a long
+  `--check` was refused after about 1,000; at 0.5, 316 boards drew one 429.
 
 ## Gem
 
@@ -682,7 +683,7 @@ A group can also be held to a number of requests per second, `fetch.max_rate` in
 
 | Group | Cap | Why |
 |---|---|---|
-| `workable` | 1.4/s | Cloudflare bans an IP after about 50 requests in 10 seconds, and 429s a steady 1.9/s after about 1,000. |
+| `workable` | 0.5/s | Cloudflare bans an IP after about 50 requests in 10 seconds, and 429s a steady 1.9/s, or 1.4/s, after about 1,000. |
 | `eightfold` | 2/s | Every `*.eightfold.ai` board; 20 fetched side by side were answered 405. |
 | `apply.careers.microsoft.com` | 0.5/s | Microsoft's site answered 429 to requests one second apart. |
 | `apple` | 1/s | Each page is about 300 KB. |
@@ -717,8 +718,20 @@ description (with a warning).
 If five boards in a row in one group are refused (a 429 that outlasted its retries, or a 403 such
 as a block page), the rest of that group's boards are skipped for this run, with a warning
 (`fetch.breaker`). A 403 that is about one board, like the one Workday sends for a closed site,
-doesn't count. To get through a strict host, lower `--workers` and `--per-host`;
+doesn't count. The run ends with a line per group that tripped, naming its `fetch.max_rate`
+cap, so a host that has tightened its limits doesn't go unnoticed:
+
+```
+workable: 5 boards in a row refused (429/403); 312 boards skipped this run. Lower fetch.max_rate's "workable" (now 0.5); the next fetch tries them again.
+```
+
+To get through a strict host, lower its `fetch.max_rate` cap, or `--workers` and `--per-host`;
 `--workers 1 --per-host 1` is the gentlest setting.
+
+`--check` (`python -m jobhunt.slugs` and `python -m jobhunt.discover`) checks boards the same
+way: a pool of `slugs.check_workers` threads per group, so a refusing group doesn't hold up the
+others, and the same breaker. Boards it skips are kept, unchecked, and it ends with the same
+kind of line.
 
 ### Interrupting
 

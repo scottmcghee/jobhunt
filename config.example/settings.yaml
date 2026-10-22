@@ -63,8 +63,9 @@ fetch:
   # JSON, e.g. '{"workable": 3, "eightfold": 2, "apply.careers.microsoft.com": 0.5, "apple": 1}'
   # Microsoft's careers site (Eightfold) answered 429 to requests one second apart.
   max_rate:
-    # Cloudflare 429s a steady ~1.9/s after 900-1,250 requests; 2827 boards at 1.4/s is ~34 min
-    workable: 1.4
+    # Cloudflare 429s a steady ~1.9/s after 900-1,250 requests, and 1.4/s after ~1,000 in a long
+    # --check; 0.5/s got through 316 with one 429. 2827 boards at 0.5/s is ~94 min
+    workable: 0.5
     eightfold: 2.0  # every *.eightfold.ai board; 20 fetched side by side were answered 405
     apply.careers.microsoft.com: 0.5
     apple: 1.0  # each Apple search or job page is a ~300 KB server-rendered page
@@ -87,7 +88,8 @@ paths:
   output_dir: null  # null: the repo's output/ (`--output-dir`). Env: JOBHUNT_PATHS_OUTPUT_DIR
 
 slugs:
-  # Threads for `python -m jobhunt.slugs --check`. Env: JOBHUNT_SLUGS_CHECK_WORKERS
+  # Threads per rate group for `--check` (slugs and discover), as `fetch --per-host` is for
+  # fetch. Env: JOBHUNT_SLUGS_CHECK_WORKERS
   check_workers: 4
   # Boards between --check's progress lines (slugs and discover).
   # Env: JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY

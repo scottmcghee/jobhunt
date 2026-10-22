@@ -679,7 +679,7 @@ def test_main_check_drops_boards_with_no_postings(monkeypatch, tmp_path):
         discover.commoncrawl, "urls",
         lambda client, crawl, prefixes, cache_dir: iter(["https://jobs.gem.com/live", "https://jobs.gem.com/dead"]),
     )
-    monkeypatch.setattr(discover.slugs, "check", lambda boards, client, workers, progress_every: [b for b in boards if b.slug == "live"])
+    monkeypatch.setattr(discover.slugs, "check", lambda boards, client, workers, progress_every, breaker, max_rate: [b for b in boards if b.slug == "live"])
     out = tmp_path / "discovered.yaml"
     rc = discover.main([
         "--companies", str(_companies(tmp_path)), "--platforms", "gem", "--check",
@@ -695,7 +695,7 @@ def test_main_interrupted_while_checking_leaves_the_unchecked_boards(monkeypatch
         lambda client, crawl, prefixes, cache_dir: iter(["https://jobs.gem.com/live", "https://jobs.gem.com/dead"]),
     )
 
-    def interrupted(boards, client, workers, progress_every):
+    def interrupted(boards, client, *args, **kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(discover.slugs, "check", interrupted)

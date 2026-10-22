@@ -297,7 +297,8 @@ didn't answer is tried again on a later run, a day or more on, three tries in al
 (`--refresh` visits every host again). Discovery writes
 `data/discovered.yaml`; boards from careers hosts are named after the host, so fix names as you
 paste. With `--check`, the unchecked list is written first, so stopping the check with Ctrl-C
-still leaves it.
+still leaves it. A platform that keeps refusing (429) trips a circuit breaker: its remaining
+boards are kept unchecked, and the run ends with a line naming the rate cap to lower.
 
 **The slugs harvester** finds board URLs in any text file, such as lines grepped from
 [Common Crawl](https://index.commoncrawl.org/) index files, saved HTML, or a plain list of URLs:
@@ -346,7 +347,7 @@ comment saying what it does. The sections are:
 - `fetch`: concurrency, timeouts, retries, the circuit breaker, dead-board pruning, per-host rate
   caps, and how many postings each search term may bring in.
 - `paths`: where `data/` and `output/` live.
-- `slugs`: threads for `jobhunt.slugs --check`.
+- `slugs`: threads per rate group for `--check`.
 
 Any setting can be overridden for one run with an environment variable named
 `JOBHUNT_<SECTION>_<KEY>`, for example `JOBHUNT_FETCH_WORKERS=16 jobhunt fetch`. Map-valued

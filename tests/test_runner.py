@@ -137,6 +137,13 @@ def test_a_group_that_keeps_refusing_is_skipped_for_the_rest_of_the_run(caplog):
     assert calls == items[:5]
     assert [r[0] for r in results] == ["refused"] * 5 + ["skipped"] * 3
     assert "g: 5 boards in a row refused" in caplog.text and "skipping its other 3" in caplog.text
+    assert runner.skipped_by_group() == {"g": 3}
+
+
+def test_no_group_skipped_when_nothing_refuses():
+    runner = _run(["a1", "b1"], lambda item: item, per_group=1, skip=lambda item: None)
+    assert list(runner) == ["a1", "b1"]
+    assert runner.skipped_by_group() == {}
 
 
 def test_a_refusal_that_finishes_after_the_stop_does_not_trip_the_breaker(caplog):
