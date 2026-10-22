@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 
 import httpx
 import pytest
 import respx
 import yaml
 
-from jobhunt import slugs
+from jobhunt import slugs, throttle
 from jobhunt.schema import Company
 
 
@@ -360,6 +362,34 @@ def test_check_reports_its_progress(monkeypatch, caplog):
     assert "checked 2 of 3 boards" in caplog.text and "checked 3 of 3 boards" in caplog.text
 
 
+def test_check_counts_boards_as_they_finish_not_as_they_are_released(monkeypatch):
+    # results come back in input order: a slow first board would hold every count back
+    fast_counted = threading.Event()
+
+    class Watch(logging.Handler):
+        def emit(self, record):
+            if record.getMessage() == "checked 3 of 4 boards":
+                fast_counted.set()
+
+    def check_board(company, client):
+        if company.slug == "slow":
+            assert fast_counted.wait(5)  # only reached if the count waits for this board
+        return slugs.Verdict(True)
+
+    monkeypatch.setattr(slugs, "_check_board", check_board)
+    boards = [Company(name="slow", ats="greenhouse", slug="slow")]
+    boards += [Company(name=s, ats="lever", slug=s) for s in ("a", "b", "c")]
+    handler = Watch(level=logging.INFO)
+    slugs.log.addHandler(handler)
+    monkeypatch.setattr(slugs.log, "level", logging.INFO)
+    try:
+        with httpx.Client() as client:
+            assert slugs.check(boards, client, workers=1, progress_every=1) == boards
+    finally:
+        slugs.log.removeHandler(handler)
+    assert fast_counted.is_set()
+
+
 def test_an_interrupt_during_check_cancels_the_checks_not_yet_started(monkeypatch):
     calls = []
 
@@ -515,6 +545,26 @@ def test_the_breaker_summary_names_the_groups_cap(caplog):
     with httpx.Client() as client:
         slugs.check(boards, client, workers=1, breaker=5, max_rate={"greenhouse": 0.5})
     assert 'Lower fetch.max_rate\'s "greenhouse" (now 0.5)' in caplog.text
+
+
+def test_the_breaker_summary_names_a_sources_own_cap(caplog):
+    # Kula caps its host at 1/s itself, with no fetch.max_rate entry: the summary says so
+    t = [0.0]
+
+    def handler(request):
+        return httpx.Response(404 if request.url.path == "/robots.txt" else 429)
+
+    transport = throttle.ThrottledTransport(
+        inner=httpx.MockTransport(handler), max_retries=0,
+        clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + s),
+    )
+    boards = [Company(name=f"k{i}", ats="kula", slug=f"k{i}") for i in range(7)]
+    with httpx.Client(transport=transport) as client:
+        assert slugs.check(boards, client, workers=1, breaker=5, max_rate={}) == boards
+    assert (
+        'kula: 5 boards in a row refused (429/403); 2 boards left unchecked. '
+        'Lower fetch.max_rate\'s "kula" (now 1) and check them again.'
+    ) in caplog.text
 
 
 @respx.mock

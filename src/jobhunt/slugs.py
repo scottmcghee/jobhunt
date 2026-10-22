@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import re
+import threading
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import NamedTuple
@@ -326,8 +327,9 @@ def check(
     Like fetch, each rate group (``sources.rate_group``) gets its own ``workers`` threads, so a
     group that is slow or refusing doesn't hold up the others; and after ``breaker`` refusals in
     a row a group's remaining boards are kept unchecked, and the run ends with a line per such
-    group naming its ``fetch.max_rate`` cap (``max_rate``). Logs a running count; an interrupt
-    (Ctrl-C) stops the checks not yet started. Unset arguments come from settings.
+    group naming its cap (``max_rate``'s, or its source's own). Logs a running count of boards
+    finished; an interrupt (Ctrl-C) stops the checks not yet started. Unset arguments come from
+    settings.
     """
     every = progress_every or settings.SlugsSettings().check_progress_every
     if breaker is None or max_rate is None:
@@ -335,22 +337,34 @@ def check(
         breaker = fetch.breaker if breaker is None else breaker
         max_rate = fetch.max_rate if max_rate is None else max_rate
     log.info("checking %d boards", len(companies))
+    lock, done = threading.Lock(), [0]
+
+    def counted(verdict: Verdict) -> Verdict:
+        # counted as each board finishes: the runner releases results in input order, so one
+        # slow board would hold back the count of every board after it
+        with lock:
+            done[0] += 1
+            if done[0] % every == 0 or done[0] == len(companies):
+                log.info("checked %d of %d boards", done[0], len(companies))
+        return verdict
+
     runner = BoardRunner(
         companies,
-        lambda company: _check_board(company, client),
+        lambda company: counted(_check_board(company, client)),
         group_of=rate_group,
         per_group=workers or check_workers(),
         refused=lambda verdict: verdict.refused,
-        skip=lambda company: Verdict(True),  # kept, unchecked
+        skip=lambda company: counted(Verdict(True)),  # kept, unchecked
         breaker=breaker,
     )
-    verdicts = []
-    for done, verdict in enumerate(runner, 1):
-        verdicts.append(verdict)
-        if done % every == 0 or done == len(companies):
-            log.info("checked %d of %d boards", done, len(companies))
+    verdicts = list(runner)
+    transport = client._transport  # _client's throttles; a plain client (tests) has max_rate only
     for group, skipped in runner.skipped_by_group().items():
-        cap = f"now {max_rate[group]:g}" if group in max_rate else "no cap set"
+        if isinstance(transport, throttle.ThrottledTransport):
+            rate = transport.limiter(str(group)).rate  # max_rate's, else the source's own cap
+        else:
+            rate = max_rate.get(str(group))
+        cap = f"now {rate:g}" if rate else "no cap set"
         log.warning(
             "%s: %d boards in a row refused (429/403); %d boards left unchecked. "
             'Lower fetch.max_rate\'s "%s" (%s) and check them again.',
