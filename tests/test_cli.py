@@ -13,6 +13,7 @@ import signal
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -1038,8 +1039,46 @@ def test_a_groups_pool_is_shut_down_once_its_last_board_is_done(tmp_path, monkey
     assert _fetch(tmp_path, companies, "--dry-run", "--per-host", "6") == 0
     assert peak[0] <= base + 4 + 4 * 2  # board threads, and the pools of the boards running
     by_name = dict(pools)
-    assert by_name["First"] is by_name["Last"]  # a group's pool lasts until its last board
+    assert by_name["First"] is by_name["Last"]  # one pool per group, not per board
     assert all(pool._shutdown for _, pool in pools)
+
+
+def test_a_groups_pool_lasts_until_its_last_board_is_done():
+    pools = cli._GroupPools(2, Counter({"g": 2}))
+    first = pools.get("g")
+    pools.done("g")  # one board left
+    assert not first._shutdown
+    assert pools.get("g") is first
+    pools.done("g")
+    assert first._shutdown
+
+
+def test_a_skipped_board_releases_its_groups_pool(tmp_path, monkeypatch):
+    # the breaker trips on First, so Last is skipped: that's the group's last board
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n"
+        "  - name: First\n    ats: workday\n    slug: a/External\n    datacenter: wd5\n"
+        "  - name: Last\n    ats: workday\n    slug: b/External\n    datacenter: wd5\n"
+    )
+    used, left = [], []
+
+    def fetch(company, client, **kwargs):
+        used.append(kwargs["pool"])
+        response = httpx.Response(429, headers={"Retry-After": "0"}, request=httpx.Request("GET", "https://x"))
+        raise httpx.HTTPStatusError("429", request=response.request, response=response)
+
+    class Pools(cli._GroupPools):
+        def shutdown(self):
+            left.append(dict(self._pools))  # what the run's end would otherwise shut down
+            super().shutdown()
+
+    monkeypatch.setenv("JOBHUNT_FETCH_BREAKER", "1")
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    monkeypatch.setattr(cli, "_GroupPools", Pools)
+    assert _fetch(tmp_path, companies, "--dry-run", "--per-host", "1") == 0
+    assert len(used) == 1  # Last was skipped
+    assert left == [{}] and used[0]._shutdown
 
 
 def _throttled_transport(handler):
