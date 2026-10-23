@@ -290,17 +290,21 @@ def test_the_skip_count_in_the_log_matches_the_boards_skipped(caplog):
     assert "skipping its other 2" in caplog.text
 
 
-def test_max_threads_caps_the_workers_however_many_groups():
+@pytest.mark.parametrize("max_threads, started_count", [(3, 3), (None, 200)])
+def test_max_threads_caps_the_workers_however_many_groups(monkeypatch, max_threads, started_count):
     # 3,670 groups once meant ~3,800 threads, near macOS's 4,096 per process
-    threads = set()
+    started = []
 
-    def work(item):
-        threads.add(threading.get_ident())
-        return item
+    class Counting(threading.Thread):
+        def start(self):
+            started.append(self)
+            super().start()
 
+    monkeypatch.setattr(runner_module.threading, "Thread", Counting)
     items = [f"g{i}" for i in range(200)]  # 200 groups of one
-    assert list(_run(items, work, group_of=lambda item: item, per_group=6, max_threads=3)) == items
-    assert 1 <= len(threads) <= 3
+    runner = _run(items, lambda item: item, group_of=lambda item: item, per_group=6, max_threads=max_threads)
+    assert list(runner) == items
+    assert len(started) == started_count  # uncapped, every group of one gets its own thread
 
 
 def test_with_capped_threads_a_busy_group_does_not_hold_up_another():
