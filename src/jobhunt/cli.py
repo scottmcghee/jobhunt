@@ -477,6 +477,7 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
             refused=_refused,
             skip=lambda company: BoardOutcome(company, skipped=True),
             breaker=fetch.breaker,
+            max_threads=fetch.max_threads,
         )
         try:
             for outcome in boards:  # in companies.yaml order, whatever order they finish in

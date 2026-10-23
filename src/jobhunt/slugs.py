@@ -321,21 +321,24 @@ def check(
     progress_every: int | None = None,
     breaker: int | None = None,
     max_rate: Mapping[str, float] | None = None,
+    max_threads: int | None = None,
 ) -> list[Company]:
     """The boards that have open postings, and those it couldn't check, in their original order.
 
-    Like fetch, each rate group (``sources.rate_group``) gets its own ``workers`` threads, so a
-    group that is slow or refusing doesn't hold up the others; and after ``breaker`` refusals in
+    Like fetch, each rate group (``sources.rate_group``) runs up to ``workers`` boards at once,
+    from a pool of at most ``max_threads`` threads, so a group that is slow or refusing doesn't
+    hold up the others; and after ``breaker`` refusals in
     a row a group's remaining boards are kept unchecked, and the run ends with a line per such
     group naming its cap (``max_rate``'s, or its source's own). Logs a running count of boards
     finished; an interrupt (Ctrl-C) stops the checks not yet started. Unset arguments come from
     settings.
     """
     every = progress_every or settings.SlugsSettings().check_progress_every
-    if breaker is None or max_rate is None:
+    if breaker is None or max_rate is None or max_threads is None:
         fetch = settings.load().fetch
         breaker = fetch.breaker if breaker is None else breaker
         max_rate = fetch.max_rate if max_rate is None else max_rate
+        max_threads = fetch.max_threads if max_threads is None else max_threads
     log.info("checking %d boards", len(companies))
     lock, done = threading.Lock(), [0]
 
@@ -356,6 +359,7 @@ def check(
         refused=lambda verdict: verdict.refused,
         skip=lambda company: counted(Verdict(True)),  # kept, unchecked
         breaker=breaker,
+        max_threads=max_threads,
     )
     verdicts = list(runner)
     transport = client._transport  # _client's throttles; a plain client (tests) has max_rate only
@@ -399,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
             checked = check(
                 found, client, s.slugs.check_workers, s.slugs.check_progress_every,
                 breaker=s.fetch.breaker, max_rate=s.fetch.max_rate,
+                max_threads=s.fetch.max_threads,
             )
         log.info("checked %d boards: %d dropped", len(found), len(found) - len(checked))
         found = checked

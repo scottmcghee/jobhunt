@@ -36,6 +36,10 @@ fetch:
   # Refusals (429, or a 403 block page) in a row before a host's other boards are skipped.
   # Env: JOBHUNT_FETCH_BREAKER
   breaker: 5
+  # Most worker threads for fetch and --check, shared by every rate group (each company-hosted
+  # careers site is its own group; a thread each once meant ~3,800, near macOS's limit of 4,096
+  # a process). Requests in flight are still bounded by `workers`. Env: JOBHUNT_FETCH_MAX_THREADS
+  max_threads: 256
   # Fetches in a row that find a board gone before it is removed from companies.yaml: an HTTP
   # 404, or for Workday a 422 (site removed) or a 403 "S22" (site closed).
   # Env: JOBHUNT_FETCH_PRUNE_AFTER_404S
@@ -88,8 +92,8 @@ paths:
   output_dir: null  # null: the repo's output/ (`--output-dir`). Env: JOBHUNT_PATHS_OUTPUT_DIR
 
 slugs:
-  # Threads per rate group for `--check` (slugs and discover), as `fetch --per-host` is for
-  # fetch. Env: JOBHUNT_SLUGS_CHECK_WORKERS
+  # Boards checked at once per rate group for `--check` (slugs and discover), as `fetch
+  # --per-host` is for fetch; fetch.max_threads caps the threads. Env: JOBHUNT_SLUGS_CHECK_WORKERS
   check_workers: 4
   # Boards between --check's progress lines (slugs and discover).
   # Env: JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY

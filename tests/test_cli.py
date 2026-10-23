@@ -754,6 +754,24 @@ def test_interrupt_keeps_a_board_that_finished_out_of_order(tmp_path, fixture_js
     assert [j.company for j in storage.load_jobs(tmp_path / "data")] == ["ExampleLever"]
 
 
+@respx.mock
+def test_fetch_caps_the_runners_threads_from_settings(tmp_path, monkeypatch, fixture_json):
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_THREADS", "7")
+    seen = {}
+
+    class Runner(cli.BoardRunner):
+        def __init__(self, *args, **kwargs):
+            seen["max_threads"] = kwargs.get("max_threads")
+            super().__init__(*args, **kwargs)
+
+    respx.get(url__regex=r"https://boards-api\.greenhouse\.io/v1/boards/b\d/jobs").mock(
+        return_value=httpx.Response(200, json=fixture_json("greenhouse_jobs.json"))
+    )
+    monkeypatch.setattr(cli, "BoardRunner", Runner)
+    assert _fetch(tmp_path, _seven_boards(tmp_path)) == 0
+    assert seen == {"max_threads": 7}
+
+
 class _Announcing(queue.Queue):
     """A runner result queue that sets ``queued`` once the result at ``index`` is in it."""
 
@@ -819,9 +837,9 @@ def test_a_404_that_comes_back_after_an_interrupt_is_not_counted(tmp_path, monke
             super().__init__(*args, **kwargs)
             runners.append(self)
 
-        def _worker(self, group):
+        def _worker(self):
             try:
-                super()._worker(group)
+                super()._worker()
             finally:
                 if gone_thread == [threading.get_ident()]:
                     gone_done.set()

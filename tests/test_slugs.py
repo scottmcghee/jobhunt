@@ -641,6 +641,7 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_PROGRESS_EVERY", "7")
     monkeypatch.setenv("JOBHUNT_FETCH_USER_AGENT", "test-agent/1")
     monkeypatch.setenv("JOBHUNT_FETCH_BREAKER", "4")
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_THREADS", "9")
     monkeypatch.setenv("JOBHUNT_FETCH_MAX_RATE", '{"workable": 0.5}')
     seen = {}
 
@@ -648,9 +649,10 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
         seen["agent"] = fetch.user_agent
         return httpx.Client()
 
-    def check(found, client, workers, progress_every, breaker, max_rate):
+    def check(found, client, workers, progress_every, breaker, max_rate, max_threads):
         seen["workers"], seen["every"] = workers, progress_every
         seen["breaker"], seen["max_rate"] = breaker, max_rate
+        seen["max_threads"] = max_threads
         return found
 
     monkeypatch.setattr(slugs, "_client", client)
@@ -658,24 +660,26 @@ def test_main_check_passes_its_settings_down(tmp_path, monkeypatch):
     monkeypatch.setattr(slugs, "check_workers", lambda: pytest.fail("settings loaded again"))
     assert slugs.main([str(_index_with(tmp_path, "https://boards.greenhouse.io/live")), "-o", str(tmp_path / "o"), "--check"]) == 0
     assert seen == {
-        "agent": "test-agent/1", "workers": 3, "every": 7, "breaker": 4, "max_rate": {"workable": 0.5}
+        "agent": "test-agent/1", "workers": 3, "every": 7, "breaker": 4, "max_rate": {"workable": 0.5},
+        "max_threads": 9,
     }
 
 
-def test_check_threads_per_group_come_from_the_argument_or_settings(monkeypatch):
+def test_check_threads_come_from_the_arguments_or_settings(monkeypatch):
     sizes = []
     real = slugs.BoardRunner
 
-    def runner(*args, per_group, **kwargs):
-        sizes.append(per_group)
-        return real(*args, per_group=per_group, **kwargs)
+    def runner(*args, per_group, max_threads, **kwargs):
+        sizes.append((per_group, max_threads))
+        return real(*args, per_group=per_group, max_threads=max_threads, **kwargs)
 
     monkeypatch.setattr(slugs, "BoardRunner", runner)
     monkeypatch.setenv("JOBHUNT_SLUGS_CHECK_WORKERS", "3")
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_THREADS", "40")
     with httpx.Client() as client:
-        slugs.check([], client, workers=2)
+        slugs.check([], client, workers=2, max_threads=5)
         slugs.check([], client)
-    assert sizes == [2, 3]
+    assert sizes == [(2, 5), (3, 40)]
 
 
 def test_render_writes_an_eightfold_location():
