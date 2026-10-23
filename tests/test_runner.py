@@ -319,20 +319,31 @@ def test_with_capped_threads_a_busy_group_does_not_hold_up_another():
 
 def test_with_capped_threads_each_group_still_runs_at_most_per_group_at_once():
     lock, running, peak = threading.Lock(), [0], [0]
-    two_in = threading.Barrier(2, timeout=WAIT)
+    looked = threading.Event()  # a free thread found nothing to take, or a 3rd g started
 
     def work(item):
-        with lock:
-            running[0] += 1
-            peak[0] = max(peak[0], running[0])
-        if item in ("g0", "g1"):
-            two_in.wait()
-        with lock:
-            running[0] -= 1
+        if item[0] == "g":
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+                if running[0] > 2:
+                    looked.set()
+            assert looked.wait(WAIT)  # g0 and g1 stay in flight while free threads look for work
+            with lock:
+                running[0] -= 1
         return item
 
-    items = [f"g{i}" for i in range(6)]
-    assert list(_run(items, work, per_group=2, max_threads=8)) == items
+    # g has more items than per_group, and the one-item h groups leave threads free afterwards
+    items = [f"g{i}" for i in range(4)] + [f"h{i}" for i in range(6)]
+    runner = _run(items, work, lambda item: "g" if item[0] == "g" else item, per_group=2, max_threads=8)
+    wait = runner._freed.wait
+
+    def waiting(timeout=None):
+        looked.set()
+        return wait(timeout)
+
+    runner._freed.wait = waiting
+    assert list(runner) == items
     assert peak[0] == 2
 
 

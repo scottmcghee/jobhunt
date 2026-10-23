@@ -53,9 +53,10 @@ class FetchSettings(_Section):
     max_retry_after: float = Field(120.0, ge=0)  # longer Retry-After: skip the board instead
     cooldown: float = Field(5.0, ge=0)  # seconds between two halvings of a host's limit
     breaker: int = Field(5, ge=1)  # refusals in a row before a host's other boards are skipped
-    # Most worker threads fetch (and --check) runs, shared by every rate group: each
+    # Most board worker threads fetch (and --check) runs, shared by every rate group: each
     # company-hosted careers site is its own group, and a thread per group once meant ~3,800
-    # threads, near macOS's 4,096 per process. `workers` still bounds requests in flight.
+    # threads, near macOS's 4,096 per process. A group's page/description pool (per_host
+    # threads) lives only while its boards run. `workers` still bounds requests in flight.
     max_threads: int = Field(256, ge=1)
     # Fetches in a row that find the board gone (a 404; for Workday also a 422, or a 403 "S22"
     # closed site) before it leaves companies.yaml. The name predates the Workday cases.

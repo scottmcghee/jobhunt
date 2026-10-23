@@ -680,7 +680,10 @@ group would come close to macOS's limit of 4,096 threads a process.
 
 Within a board, Workday's and SmartRecruiters' later listing pages, and the description requests
 of every source that fetches them separately, go out concurrently in that board's group, under
-the same limits. Output still comes out in `companies.yaml` order.
+the same limits, from a pool of up to `--per-host` threads per group. `fetch.max_threads` caps
+the board workers; a group's pool lives only while that group's boards run, and is shut down
+when its last board is done, so the threads alive at once stay near `fetch.max_threads` plus
+the pools of the boards running. Output still comes out in `companies.yaml` order.
 
 ### Rate caps
 

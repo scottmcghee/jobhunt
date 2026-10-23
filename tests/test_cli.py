@@ -1013,6 +1013,35 @@ def test_fetch_gives_each_rate_group_its_own_pool(tmp_path, fixture_json, monkey
     assert {pool._max_workers for pool in pools.values()} == {3}
 
 
+def test_a_groups_pool_is_shut_down_once_its_last_board_is_done(tmp_path, monkeypatch):
+    # 200 company-hosted sites, each its own group, and one group of two; each board sends 2
+    # description requests
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n"
+        + "".join(f"  - name: Co{i}\n    ats: radancy\n    slug: jobs.co{i}.com\n" for i in range(200))
+        + "  - name: First\n    ats: workday\n    slug: a/External\n    datacenter: wd5\n"
+        + "  - name: Last\n    ats: workday\n    slug: b/External\n    datacenter: wd5\n"
+    )
+    pools, peak = [], [0]
+    base = threading.active_count()
+
+    def fetch(company, client, **kwargs):
+        pool = kwargs["pool"]
+        assert list(pool.map(lambda n: n, range(2))) == [0, 1]
+        peak[0] = max(peak[0], threading.active_count())
+        pools.append((company.name, pool))
+        return []
+
+    monkeypatch.setenv("JOBHUNT_FETCH_MAX_THREADS", "4")
+    monkeypatch.setattr(cli, "fetch_company", fetch)
+    assert _fetch(tmp_path, companies, "--dry-run", "--per-host", "6") == 0
+    assert peak[0] <= base + 4 + 4 * 2  # board threads, and the pools of the boards running
+    by_name = dict(pools)
+    assert by_name["First"] is by_name["Last"]  # a group's pool lasts until its last board
+    assert all(pool._shutdown for _, pool in pools)
+
+
 def _throttled_transport(handler):
     """Stands in for cli._transport: the real throttling, over a fake network."""
     return lambda fetch, workers=32, per_host=6: throttle.ThrottledTransport(
