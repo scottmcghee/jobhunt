@@ -148,15 +148,18 @@ def test_no_group_skipped_when_nothing_refuses():
 
 def test_a_refusal_that_finishes_after_the_stop_does_not_trip_the_breaker(caplog):
     caplog.set_level(logging.WARNING)
-    fifth_started, g_done = threading.Event(), threading.Event()
+    fifth_started, workers_done = threading.Event(), threading.Event()
+    exited, exited_lock = [0], threading.Lock()
 
     class Runner(BoardRunner):
-        def _worker(self, group):
+        def _worker(self):
             try:
-                super()._worker(group)
+                super()._worker()
             finally:
-                if group == "g":
-                    g_done.set()
+                with exited_lock:
+                    exited[0] += 1
+                    if exited[0] == self._threads:  # the 5th refusal has been dealt with
+                        workers_done.set()
 
     def work(item):
         group, n = item
@@ -179,7 +182,7 @@ def test_a_refusal_that_finishes_after_the_stop_does_not_trip_the_breaker(caplog
     )
     with pytest.raises(KeyboardInterrupt):
         list(runner)
-    assert g_done.wait(WAIT)
+    assert workers_done.wait(WAIT)
     assert "boards in a row refused" not in caplog.text
 
 
@@ -249,9 +252,9 @@ def test_the_skip_count_in_the_log_matches_the_boards_skipped(caplog):
     g1_popped = threading.Event()
 
     class Runner(BoardRunner):
-        def _next(self, group):
-            job = super()._next(group)
-            if job and job[1] == "g1":
+        def _take(self):
+            job = super()._take()
+            if job and job[2] == "g1":
                 g1_popped.set()
                 assert tripped.wait(WAIT)  # the breaker trips between g1's pop and its work
             return job
@@ -285,6 +288,83 @@ def test_the_skip_count_in_the_log_matches_the_boards_skipped(caplog):
     results = list(runner)
     assert results.count("skipped") == 2
     assert "skipping its other 2" in caplog.text
+
+
+@pytest.mark.parametrize("max_threads, started_count", [(3, 3), (None, 200)])
+def test_max_threads_caps_the_workers_however_many_groups(monkeypatch, max_threads, started_count):
+    # 3,670 groups once meant ~3,800 threads, near macOS's 4,096 per process
+    started = []
+
+    class Counting(threading.Thread):
+        def start(self):
+            started.append(self)
+            super().start()
+
+    monkeypatch.setattr(runner_module.threading, "Thread", Counting)
+    items = [f"g{i}" for i in range(200)]  # 200 groups of one
+    runner = _run(items, lambda item: item, group_of=lambda item: item, per_group=6, max_threads=max_threads)
+    assert list(runner) == items
+    assert len(started) == started_count  # uncapped, every group of one gets its own thread
+
+
+def test_with_capped_threads_a_busy_group_does_not_hold_up_another():
+    b_done = threading.Event()
+
+    def work(item):
+        if item == "a1":
+            assert b_done.wait(WAIT)  # a1 finishes only once b, behind a's other items, has run
+        if item == "b1":
+            b_done.set()
+        return item
+
+    items = ["a1", "a2", "a3", "a4", "b1"]
+    assert list(_run(items, work, per_group=1, max_threads=2)) == items
+
+
+def test_with_capped_threads_each_group_still_runs_at_most_per_group_at_once():
+    lock, running, peak = threading.Lock(), [0], [0]
+    looked = threading.Event()  # a free thread found nothing to take, or a 3rd g started
+
+    def work(item):
+        if item[0] == "g":
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+                if running[0] > 2:
+                    looked.set()
+            assert looked.wait(WAIT)  # g0 and g1 stay in flight while free threads look for work
+            with lock:
+                running[0] -= 1
+        return item
+
+    # g has more items than per_group, and the one-item h groups leave threads free afterwards
+    items = [f"g{i}" for i in range(4)] + [f"h{i}" for i in range(6)]
+    runner = _run(items, work, lambda item: "g" if item[0] == "g" else item, per_group=2, max_threads=8)
+    wait = runner._freed.wait
+
+    def waiting(timeout=None):
+        looked.set()
+        return wait(timeout)
+
+    runner._freed.wait = waiting
+    assert list(runner) == items
+    assert peak[0] == 2
+
+
+def test_with_capped_threads_the_breaker_still_skips_a_refusing_group(caplog):
+    items = [f"g{i}" for i in range(8)] + ["h0"]
+    runner = _run(
+        items,
+        lambda item: ("refused", item) if item[0] == "g" else ("ok", item),
+        per_group=1,
+        refused=lambda r: r[0] == "refused",
+        skip=lambda item: ("skipped", item),
+        breaker=5,
+        max_threads=2,
+    )
+    results = [r[0] for r in runner]
+    assert results == ["refused"] * 5 + ["skipped"] * 3 + ["ok"]
+    assert runner.skipped_by_group() == {"g": 3}
 
 
 def test_no_items_no_results():

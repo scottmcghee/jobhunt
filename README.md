@@ -344,10 +344,10 @@ layout.
 comment saying what it does. The sections are:
 
 - `llm`: backend, model, token budgets, and how much of a posting the model sees.
-- `fetch`: concurrency, timeouts, retries, the circuit breaker, dead-board pruning, per-host rate
-  caps, and how many postings each search term may bring in.
+- `fetch`: concurrency (requests in flight, and threads), timeouts, retries, the circuit breaker,
+  dead-board pruning, per-host rate caps, and how many postings each search term may bring in.
 - `paths`: where `data/` and `output/` live.
-- `slugs`: threads per rate group for `--check`.
+- `slugs`: boards checked at once per rate group for `--check`.
 
 Any setting can be overridden for one run with an environment variable named
 `JOBHUNT_<SECTION>_<KEY>`, for example `JOBHUNT_FETCH_WORKERS=16 jobhunt fetch`. Map-valued

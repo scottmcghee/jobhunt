@@ -544,6 +544,7 @@ def _discover(
                     found, client, tunables.slugs.check_workers,
                     tunables.slugs.check_progress_every,
                     breaker=tunables.fetch.breaker, max_rate=tunables.fetch.max_rate,
+                    max_threads=tunables.fetch.max_threads,
                 )
             except KeyboardInterrupt:
                 log.error("interrupted: the unchecked boards are in %s", out)

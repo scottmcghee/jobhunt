@@ -1,9 +1,14 @@
-"""Run per-board work concurrently, one worker pool per rate-limit group, results in input order.
+"""Run per-board work concurrently, at most ``per_group`` at once per rate-limit group, results in
+input order.
 
-Each group (a Workday datacenter or an API host, see ``sources.rate_group``) gets its own queue
-and up to ``per_group`` worker threads. Groups never wait on each other: a datacenter with 1,000
-boards doesn't hold up the API hosts. How many requests are actually in flight is up to the
-transport's limiters (``throttle.py``); the threads only bound it from above.
+Each group (a Workday datacenter or an API host, see ``sources.rate_group``) gets its own queue.
+One pool of up to ``max_threads`` workers serves them all: a worker takes the next item from any
+group that has items and fewer than ``per_group`` running, taking groups in turn, so groups never
+wait on each other (a datacenter with 1,000 boards doesn't hold up the API hosts) and thousands of
+one-board groups (each company-hosted careers site is its own) don't mean thousands of threads.
+Without ``max_threads`` there are as many workers as could ever run at once. How many requests are
+actually in flight is up to the transport's limiters (``throttle.py``); the threads only bound it
+from above.
 
 Results are released in input order as soon as every earlier one is done, so output stays the
 same as a serial run while work finishes in any order. Workers only call ``work``; the caller
@@ -56,6 +61,7 @@ class BoardRunner(Generic[T, R]):
         refused: Callable[[R], bool] = lambda result: False,
         skip: Callable[[T], R] | None = None,
         breaker: int = 5,
+        max_threads: int | None = None,
     ):
         self._items = list(items)
         self._work, self._refused, self._skip = work, refused, skip
@@ -63,10 +69,15 @@ class BoardRunner(Generic[T, R]):
         self._queues: dict[Hashable, deque[tuple[int, T]]] = {}
         for index, item in enumerate(self._items):
             self._queues.setdefault(group_of(item), deque()).append((index, item))
+        wanted = sum(min(self._per_group, len(q)) for q in self._queues.values())
+        self._threads = min(wanted, max(1, max_threads)) if max_threads else wanted
+        self._ready: deque[Hashable] = deque(self._queues)  # groups with items and a free slot
+        self._running: dict[Hashable, int] = dict.fromkeys(self._queues, 0)
         self._results: queue.Queue[tuple[int, object]] = queue.Queue()
         self._pending: dict[int, R] = {}  # finished, waiting for earlier ones
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._freed = threading.Condition(self._lock)  # a group's slot came free
         self._refusals: dict[Hashable, int] = {}
         self._tripped: set[Hashable] = set()
         self._skipped: dict[Hashable, int] = {}
@@ -79,9 +90,8 @@ class BoardRunner(Generic[T, R]):
     def __iter__(self) -> Iterator[R]:
         next_index = 0
         try:
-            for group, work_queue in self._queues.items():
-                for _ in range(min(self._per_group, len(work_queue))):
-                    threading.Thread(target=self._worker, args=(group,), daemon=True).start()
+            for _ in range(self._threads):
+                threading.Thread(target=self._worker, daemon=True).start()
             while next_index < len(self._items):
                 try:
                     index, result = self._results.get(timeout=_POLL)
@@ -114,24 +124,41 @@ class BoardRunner(Generic[T, R]):
                 self._pending[index] = result  # type: ignore[assignment]
         return [self._pending.pop(i) for i in sorted(self._pending)]
 
-    def _next(self, group: Hashable) -> tuple[int, T, bool] | None:
-        """The group's next item, and whether to skip it (decided under the lock with the pop)."""
-        with self._lock:
-            work_queue = self._queues[group]
-            if not work_queue or self._stop.is_set():
-                return None
-            index, item = work_queue.popleft()
-            skip = group in self._tripped and self._skip is not None
-            if skip:
-                self._skipped[group] = self._skipped.get(group, 0) + 1
-            return index, item, skip
+    def _take(self) -> tuple[Hashable, int, T, bool] | None:
+        """The next item from the next group with a free slot, and whether to skip it (decided
+        under the lock with the pop); waits for a slot while items remain, None when none do."""
+        with self._freed:
+            while not self._stop.is_set():
+                if self._ready:
+                    group = self._ready.popleft()
+                    index, item = self._queues[group].popleft()
+                    self._running[group] += 1
+                    if self._queues[group] and self._running[group] < self._per_group:
+                        self._ready.append(group)  # its next turn comes after the others'
+                    skip = group in self._tripped and self._skip is not None
+                    if skip:
+                        self._skipped[group] = self._skipped.get(group, 0) + 1
+                    return group, index, item, skip
+                if not any(self._queues.values()):
+                    return None
+                self._freed.wait(_POLL)  # every group with items is at per_group
+            return None
 
-    def _worker(self, group: Hashable) -> None:
-        while (job := self._next(group)) is not None:
-            index, item, skip = job
+    def _release(self, group: Hashable) -> None:
+        """An item of the group is done: its slot is free for the group's next item."""
+        with self._freed:
+            self._running[group] -= 1
+            if self._queues[group] and group not in self._ready:
+                self._ready.append(group)
+            self._freed.notify()
+
+    def _worker(self) -> None:
+        while (job := self._take()) is not None:
+            group, index, item, skip = job
             try:
                 if skip:
                     self._results.put((index, self._skip(item)))  # type: ignore[misc]
+                    self._release(group)
                     continue
                 result = self._work(item)
                 if self._stop.is_set():  # finished after the stop: the run no longer wants it
@@ -141,6 +168,7 @@ class BoardRunner(Generic[T, R]):
                 self._results.put((index, _Failed(e)))
                 return
             self._results.put((index, result))
+            self._release(group)
 
     def _count(self, group: Hashable, result: R) -> None:
         with self._lock:

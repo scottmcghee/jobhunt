@@ -672,9 +672,18 @@ at 2 (`fetch.start_per_host`). It grows by a little after each success, up to `-
 (default 32) caps requests in flight across all groups. Groups never wait on each other: a
 datacenter with a thousand boards doesn't hold up the API hosts.
 
+The boards are worked by one pool of at most `fetch.max_threads` threads (default 256), shared
+by every group: a thread takes the next board from any group that has boards waiting and room
+under its limit, taking groups in turn. Each company-hosted careers site is a group of its own,
+so a config can have thousands of groups (one with 25,000 boards had 3,670), and a thread per
+group would come close to macOS's limit of 4,096 threads a process.
+
 Within a board, Workday's and SmartRecruiters' later listing pages, and the description requests
 of every source that fetches them separately, go out concurrently in that board's group, under
-the same limits. Output still comes out in `companies.yaml` order.
+the same limits, from a pool of up to `--per-host` threads per group. `fetch.max_threads` caps
+the board workers; a group's pool lives only while that group's boards run, and is shut down
+when its last board is done, so the threads alive at once stay near `fetch.max_threads` plus
+the pools of the boards running. Output still comes out in `companies.yaml` order.
 
 ### Rate caps
 
@@ -729,8 +738,8 @@ To get through a strict host, lower its `fetch.max_rate` cap, or `--workers` and
 `--workers 1 --per-host 1` is the gentlest setting.
 
 `--check` (`python -m jobhunt.slugs` and `python -m jobhunt.discover`) checks boards the same
-way: a pool of `slugs.check_workers` threads per group, so a refusing group doesn't hold up the
-others, and the same breaker. Boards it skips are kept, unchecked, and it ends with the same
+way: up to `slugs.check_workers` boards at once per group, from the same kind of shared pool
+(`fetch.max_threads`), so a refusing group doesn't hold up the others, and the same breaker. Boards it skips are kept, unchecked, and it ends with the same
 kind of line.
 
 ### Interrupting

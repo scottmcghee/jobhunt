@@ -34,6 +34,7 @@ import os
 import signal
 import sys
 import threading
+from collections import Counter
 from collections.abc import Callable, Hashable, Iterator, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager
@@ -156,11 +157,14 @@ class _GroupPools:
     """One thread pool per rate group, for boards' later pages and descriptions.
 
     A board's pooled work only queues behind its own host's, as with the runner's board queues.
-    Its threads only send requests, never wait on a pool, so they can't deadlock.
+    Its threads only send requests, never wait on a pool, so they can't deadlock. A group's pool
+    is shut down once its last board is done, so idle pools of thousands of one-board groups
+    don't pile up threads.
     """
 
-    def __init__(self, size: int):
+    def __init__(self, size: int, boards: Counter[str]):
         self._size = size
+        self._left = boards  # boards per group not yet done
         self._pools: dict[str, ThreadPoolExecutor] = {}
         self._lock = threading.Lock()
         self._closed = False
@@ -173,6 +177,14 @@ class _GroupPools:
                     pool.shutdown()
                 self._pools[group] = pool
             return self._pools[group]
+
+    def done(self, group: str) -> None:
+        """A board of the group is done (or skipped); after its last, the group's pool goes."""
+        with self._lock:
+            self._left[group] -= 1
+            pool = self._pools.pop(group, None) if self._left[group] <= 0 else None
+        if pool is not None:  # the board's maps have returned; anything still queued is unwanted
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def shutdown(self) -> None:
         with self._lock:
@@ -456,11 +468,11 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
     # Later pages and descriptions (Workday, SmartRecruiters, BambooHR, Eightfold, Oracle, Apple,
     # Phenom, SuccessFactors) go to their group's pool; the transport's per-host and global limits
     # still decide how many are in flight.
-    pools = _GroupPools(args.per_host)
-    with _client(transport, fetch) as client, _stop_on_exit(transport, pools):
-        boards = BoardRunner(
-            companies,
-            lambda company: _fetch_board(
+    pools = _GroupPools(args.per_host, Counter(rate_group(c) for c in companies))
+
+    def work(company: Company) -> BoardOutcome:
+        try:
+            return _fetch_board(
                 company,
                 client,
                 title_passes(company),
@@ -471,12 +483,24 @@ def _cmd_fetch(args: argparse.Namespace, data_dir: Path) -> int:
                 prefs.title.targets(company.tags),
                 fetch.max_per_term.get(company.ats),
                 usajobs_auth,
-            ),
+            )
+        finally:
+            pools.done(rate_group(company))
+
+    def skip(company: Company) -> BoardOutcome:
+        pools.done(rate_group(company))
+        return BoardOutcome(company, skipped=True)
+
+    with _client(transport, fetch) as client, _stop_on_exit(transport, pools):
+        boards = BoardRunner(
+            companies,
+            work,
             group_of=rate_group,
             per_group=args.per_host,
             refused=_refused,
-            skip=lambda company: BoardOutcome(company, skipped=True),
+            skip=skip,
             breaker=fetch.breaker,
+            max_threads=fetch.max_threads,
         )
         try:
             for outcome in boards:  # in companies.yaml order, whatever order they finish in
